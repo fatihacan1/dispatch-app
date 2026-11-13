@@ -1,0 +1,12 @@
+﻿/myarmy.exe
+/myarmy
+*.exe
+dist/
+.dispatch/
+
+/dispatch.exe
+/dispatch
+
+.myarmy/
+
+.DS_Store

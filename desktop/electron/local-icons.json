@@ -1,0 +1,177 @@
+[
+  {
+    "id": "default",
+    "label": "Default",
+    "src": "./providers/local.svg"
+  },
+  {
+    "id": "qwen",
+    "label": "Qwen",
+    "src": "./providers/local-qwen.ico"
+  },
+  {
+    "id": "ornith",
+    "label": "Ornith",
+    "src": "./providers/local-ornith.ico"
+  },
+  {
+    "id": "claude",
+    "label": "Claude",
+    "src": "./providers/claude.svg"
+  },
+  {
+    "id": "codex",
+    "label": "Codex",
+    "src": "./providers/codex.svg"
+  },
+  {
+    "id": "antigravity",
+    "label": "Antigravity",
+    "src": "./providers/antigravity.svg"
+  },
+  {
+    "id": "opencode",
+    "label": "OpenCode",
+    "src": "./providers/opencode.svg"
+  },
+  {
+    "id": "qoder",
+    "label": "Qoder",
+    "src": "./providers/qoder.svg"
+  },
+  {
+    "id": "gemini",
+    "label": "Gemini",
+    "src": "./providers/gemini.svg"
+  },
+  {
+    "id": "lib-deepseek",
+    "label": "DeepSeek",
+    "src": "./providers/library/deepseek.svg"
+  },
+  {
+    "id": "lib-grok",
+    "label": "Grok",
+    "src": "./providers/library/grok.svg"
+  },
+  {
+    "id": "lib-xai",
+    "label": "xAI",
+    "src": "./providers/library/xai.svg"
+  },
+  {
+    "id": "lib-openai",
+    "label": "OpenAI",
+    "src": "./providers/library/openai.svg"
+  },
+  {
+    "id": "lib-anthropic",
+    "label": "Anthropic",
+    "src": "./providers/library/anthropic.svg"
+  },
+  {
+    "id": "lib-meta",
+    "label": "Meta",
+    "src": "./providers/library/meta.svg"
+  },
+  {
+    "id": "lib-mistral",
+    "label": "Mistral",
+    "src": "./providers/library/mistral.svg"
+  },
+  {
+    "id": "lib-google",
+    "label": "Google",
+    "src": "./providers/library/google.svg"
+  },
+  {
+    "id": "lib-ollama",
+    "label": "Ollama",
+    "src": "./providers/library/ollama.svg"
+  },
+  {
+    "id": "lib-huggingface",
+    "label": "Hugging Face",
+    "src": "./providers/library/huggingface.svg"
+  },
+  {
+    "id": "lib-perplexity",
+    "label": "Perplexity",
+    "src": "./providers/library/perplexity.svg"
+  },
+  {
+    "id": "lib-cohere",
+    "label": "Cohere",
+    "src": "./providers/library/cohere.svg"
+  },
+  {
+    "id": "lib-nvidia",
+    "label": "NVIDIA",
+    "src": "./providers/library/nvidia.svg"
+  },
+  {
+    "id": "lib-openrouter",
+    "label": "OpenRouter",
+    "src": "./providers/library/openrouter.svg"
+  },
+  {
+    "id": "lib-deepmind",
+    "label": "DeepMind",
+    "src": "./providers/library/deepmind.svg"
+  },
+  {
+    "id": "lib-zhipu",
+    "label": "Zhipu",
+    "src": "./providers/library/zhipu.svg"
+  },
+  {
+    "id": "lib-zai",
+    "label": "Z.ai",
+    "src": "./providers/library/zai.svg"
+  },
+  {
+    "id": "lib-moonshot",
+    "label": "Moonshot",
+    "src": "./providers/library/moonshot.svg"
+  },
+  {
+    "id": "lib-minimax",
+    "label": "MiniMax",
+    "src": "./providers/library/minimax.svg"
+  },
+  {
+    "id": "lib-alibaba",
+    "label": "Alibaba",
+    "src": "./providers/library/alibaba.svg"
+  },
+  {
+    "id": "lib-microsoft",
+    "label": "Microsoft",
+    "src": "./providers/library/microsoft.svg"
+  },
+  {
+    "id": "lib-azure",
+    "label": "Azure",
+    "src": "./providers/library/azure.svg"
+  },
+  {
+    "id": "lib-together",
+    "label": "Together AI",
+    "src": "./providers/library/together.svg"
+  },
+  {
+    "id": "lib-groq",
+    "label": "Groq",
+    "src": "./providers/library/groq.svg"
+  },
+  {
+    "id": "lib-fireworks",
+    "label": "Fireworks",
+    "src": "./providers/library/fireworks.svg"
+  },
+  {
+    "id": "lib-kimi",
+    "label": "Kimi",
+    "src": "./providers/library/kimi.svg"
+  }
+]

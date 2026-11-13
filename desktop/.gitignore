@@ -1,0 +1,8 @@
+﻿node_modules/
+dist/
+release/
+test-results/
+resources/bin/
+e2e/screens/qa-*.png
+
+resources/whisper-vulkan/whisper-server.exe

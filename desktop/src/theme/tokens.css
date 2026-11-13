@@ -1,0 +1,119 @@
+/*
+  Dispatch design tokens. The ONLY place colors, fonts, sizes and motion are defined.
+  Every other stylesheet and the xterm theme read these variables.
+*/
+:root {
+  /* Fonts */
+  --font-ui: "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+
+  /* Type scale */
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-md: 13px;
+  --text-lg: 15px;
+  --text-xl: 20px;
+  --leading: 1.5;
+  --tracking-label: 0.06em;
+
+  /* Surfaces (dark graphite, 4 steps) */
+  --bg: #0d0e10;
+  --surface: #131417;
+  --raised: #1a1c20;
+  --overlay: #1f2126;
+  --hover: #22252a;
+  --selected: #2c3037;
+  --selected-line: #454a53;
+  --line: #24262b;
+  --line-strong: #30333a;
+
+  /* Text (neutral steps; never tinted accent text) */
+  --text: #ebecee;
+  --text-2: #a3a6ad;
+  --text-3: #6b6f78;
+  --text-on-primary: #101114;
+
+  /* Actions */
+  --primary: #ebe7dc;
+  --primary-hover: #ffffff;
+  --danger: #e5484d;
+  --danger-hover: #f2555a;
+  --focus: #7aa2ff;
+
+  /* Switches */
+  --switch-on: #34c26b;
+  --switch-knob: #ffffff;
+
+  /* Status (dots and terminal prefixes only) */
+  --status-working: #4cc38a;
+  --status-waiting: #e2a336;
+  --status-needs: #ff7847;
+  --status-idle: #6b6f78;
+  --status-error: #e5484d;
+
+  /* Agent name colors (feed, chat author) */
+  --agent-0: #e9a46a;
+  --agent-1: #7fb4ff;
+  --agent-2: #c79cf2;
+  --agent-3: #6fd0b0;
+  --agent-4: #f08fb0;
+  --agent-5: #d6c66a;
+  --agent-you: #ebecee;
+
+  /* Provider brand fills (terminal tags) */
+  --provider-claude: #d97757;
+  --provider-codex: #ebecee;
+  --provider-antigravity: #4c8df6;
+  --provider-gemini: #4c8df6;
+  --provider-other: #454a53;
+  --provider-ink: #101114;
+
+  /* Voice */
+  --voice-bar: #ebe7dc;
+  --voice-pill: #000000;
+  --voice-pill-line: #262626;
+
+  /* Diff */
+  --diff-add: #4cc38a;
+  --diff-del: #e5484d;
+
+  /* Terminal */
+  --term-bg: #0b0c0e;
+  --term-fg: #d6d8dc;
+  --term-cursor: #ebe7dc;
+  --term-selection: #2c3038;
+
+  /* Shape */
+  --radius-sm: 4px;
+  --radius: 6px;
+  --radius-lg: 10px;
+  --border: 1px solid var(--line);
+  --border-strong: 1px solid var(--line-strong);
+  --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.45), 0 0 0 1px var(--line-strong);
+
+  /* Spacing (4px grid) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* Layout */
+  --topbar-h: 44px;
+  --rail-w: 68px;
+  --sidebar-w: 300px;
+  --row-h: 30px;
+  --control-h: 30px;
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-fast: 120ms;
+  --dur: 180ms;
+  --dur-slow: 260ms;
+}
+@media (prefers-reduced-motion: reduce) {
+  :root { --dur-fast: 0ms; --dur: 0ms; --dur-slow: 0ms; }
+}

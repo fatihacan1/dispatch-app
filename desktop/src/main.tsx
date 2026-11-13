@@ -1,0 +1,17 @@
+import React from "react";
+import { createRoot } from "react-dom/client";
+import "@xterm/xterm/css/xterm.css";
+import "@fontsource/geist/400.css";
+import "@fontsource/geist/500.css";
+import "@fontsource/geist/600.css";
+import "@fontsource/geist-mono/400.css";
+import "./theme/tokens.css";
+import "./style.css";
+import { App } from "./views/App";
+import { DictationOverlay } from "./voice/DictationOverlay";
+import { RemoteGate } from "./views/Remote";
+
+// The same bundle serves the voice overlay window (#overlay) opened by the global shortcut.
+const overlay = window.location.hash === "#overlay";
+if (overlay) document.documentElement.classList.add("overlay-window");
+createRoot(document.getElementById("root")!).render(overlay ? <DictationOverlay /> : <RemoteGate><App /></RemoteGate>);

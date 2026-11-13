@@ -1,0 +1,23 @@
+﻿const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const { parseClaude, parseCodex } = require('./activity.cjs');
+const line = (content, stop_reason, extra = {}) => ({ type: 'assistant', message: { content, stop_reason }, ...extra });
+test('claude: text between tools is a step, the closing text is the reply', () => {
+ assert.deepEqual(parseClaude(line([{ type: 'text', text: 'Looking at the tests.' }], 'tool_use')), { steps: [{ kind: 'text', text: 'Looking at the tests.' }] });
+ const end = parseClaude(line([{ type: 'text', text: '## Done\n\n- a\n- b' }], 'end_turn'));
+ assert.equal(end.turn, false); assert.equal(end.final, '## Done\n\n- a\n- b'); assert.deepEqual(end.steps, []);
+ assert.deepEqual(parseClaude(line([{ type: 'tool_use', name: 'Bash', input: { command: 'npm test' } }], 'tool_use')).steps, [{ kind: 'tool', text: 'Bash · npm test' }]);
+});
+test('claude: slash commands, skill bodies and sub-agents do not start a turn', () => {
+ assert.equal(parseClaude({ type: 'user', message: { content: '[Dispatch] message from you (id 1): hi' } }).turn, true);
+ assert.equal(parseClaude({ type: 'user', message: { content: '<command-name>/model</command-name>' } }).turn, undefined);
+ assert.equal(parseClaude({ type: 'user', isMeta: true, message: { content: [{ type: 'text', text: 'Base directory for this skill' }] } }).turn, undefined);
+ assert.equal(parseClaude({ type: 'user', isSidechain: true, message: { content: 'sub-agent task' } }).turn, undefined);
+ assert.equal(parseClaude({ type: 'user', message: { content: '[Request interrupted by user]' } }).turn, false);
+});
+test('codex: messages, turn start and the final reply', () => {
+ assert.equal(parseCodex({ type: 'event_msg', payload: { type: 'task_started' } }).turn, true);
+ assert.deepEqual(parseCodex({ type: 'event_msg', payload: { type: 'agent_message', message: 'Checking.' } }).steps, [{ kind: 'text', text: 'Checking.' }]);
+ const end = parseCodex({ type: 'event_msg', payload: { type: 'task_complete', last_agent_message: 'All good.' } });
+ assert.equal(end.turn, false); assert.equal(end.final, 'All good.');
+});

@@ -1,0 +1,46 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src file:; script-src 'unsafe-inline'">
+<style>
+@font-face { font-family: "Geist"; font-weight: 400; src: url("../node_modules/@fontsource/geist/files/geist-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Geist"; font-weight: 500; src: url("../node_modules/@fontsource/geist/files/geist-latin-500-normal.woff2") format("woff2"); }
+:root { --font-ui: "Geist", system-ui, "Segoe UI", sans-serif; --surface: #131417; --overlay: #1f2126; --hover: #22252a; --selected: #2c3037; --line: #24262b; --line-strong: #30333a; --text: #ebecee; --text-2: #a3a6ad; --text-3: #6b6f78; --danger: #e5484d; --focus: #7aa2ff; --status-working: #4cc38a; --status-needs: #ff7847; }
+* { box-sizing: border-box; margin: 0; }
+html, body { background: transparent; overflow: hidden; user-select: none; cursor: default; }
+body { font: 400 13px/1.5 var(--font-ui); color: var(--text); padding: 6px 10px 14px; }
+#menu { background: var(--overlay); border: 1px solid var(--line-strong); border-radius: 12px; padding: 6px; box-shadow: 0 8px 24px rgba(0,0,0,.5); }
+.head { display: flex; align-items: center; gap: 10px; padding: 8px 10px 6px; }
+.head img { width: 22px; height: 22px; border-radius: 5px; }
+.head b { font-weight: 500; font-size: 14px; }
+.info { padding: 0 10px 8px 42px; color: var(--text-2); }
+.info div { display: flex; align-items: center; gap: 6px; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); flex: none; }
+.dot.on { background: var(--status-working); }
+.dot.needs { background: var(--status-needs); }
+.sep { height: 1px; background: var(--line-strong); margin: 4px 6px; }
+.label { padding: 6px 10px 2px; color: var(--text-3); font-size: 12px; }
+button { all: unset; box-sizing: border-box; display: block; width: 100%; padding: 6px 10px; border-radius: 7px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: default; }
+button:hover, button:focus-visible { background: var(--selected); }
+button:focus-visible { outline: 1px solid var(--focus); }
+button.danger:hover, button.danger:focus-visible { background: var(--danger); color: #fff; }
+</style></head>
+<body><div id="menu"></div>
+<script>
+const menu = document.getElementById('menu');
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const item = (text, action, arg, cls) => { const b = el('button', cls, text); if (arg) b.title = arg; b.onclick = () => window.trayMenu.act(action, arg); return b; };
+window.trayMenu.onState(s => {
+  menu.replaceChildren();
+  const head = el('div', 'head'); const img = el('img'); img.src = s.icon; head.append(img, el('b', '', 'Dispatch')); menu.append(head);
+  const info = el('div', 'info');
+  const a = el('div'); a.append(el('span', 'dot'), el('span', '', s.folder)); info.append(a);
+  const b = el('div'); b.append(el('span', 'dot' + (s.running ? ' on' : '')), el('span', '', s.running + (s.running === 1 ? ' agent running' : ' agents running'))); info.append(b);
+  if (s.attention) { const c = el('div'); c.append(el('span', 'dot needs'), el('span', '', s.attention + ' need attention')); info.append(c); }
+  menu.append(info, el('div', 'sep'), item('Show Dispatch', 'show'), item('New operation', 'view', 'home'), item('Settings', 'view', 'settings'));
+  if (s.recent.length) { menu.append(el('div', 'sep'), el('div', 'label', 'Recent workspaces')); for (const r of s.recent) menu.append(item(r.name, 'workspace', r.path)); }
+  menu.append(el('div', 'sep'), item('Quit', 'quit', null, 'danger'));
+  // setTimeout, not requestAnimationFrame: a hidden window gets no frames, so the second right-click never opened the menu.
+  setTimeout(() => window.trayMenu.ready(Math.ceil(document.body.offsetHeight)), 0);
+});
+addEventListener('keydown', e => { if (e.key === 'Escape') window.trayMenu.act('hide'); });
+</script></body></html>
