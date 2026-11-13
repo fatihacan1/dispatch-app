@@ -750,6 +750,7 @@ ipcMain.handle('telegram:set-owner', (_e, name) => setTgOwner(String(name)));
 app.whenReady().then(() => telegram.start());
 app.on('before-quit', () => telegram.stop());
 const updater = require('./updater.cjs').create({ notify, onBeforeInstall: () => { quitting = true; } });
+app.on('browser-window-focus', () => updater.focus());
 ipcMain.handle('update:status', () => updater.status());
 ipcMain.handle('update:check', () => updater.check());
 ipcMain.handle('update:install', () => updater.install());

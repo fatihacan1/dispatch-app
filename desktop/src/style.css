@@ -1052,9 +1052,18 @@ input[type=checkbox]:focus-visible { outline: 2px solid var(--focus); outline-of
 
 /* ── Remote mode (views/Remote.tsx) ── */
 .rail-item.rail-remote { color: var(--focus); margin-top: auto; }
-.rail-item.rail-update { margin-top: auto; background: #2f6fed; color: #fff; }
-.rail-item.rail-update:hover { background: #3b7bff; color: #fff; }
-.rail-item.rail-update + .rail-remote { margin-top: 4px; }
+.bar-grow { flex: 1; }
+.version-text { flex: none; border: 0; background: transparent; color: var(--text-3); font: inherit; font-size: var(--text-xs); font-variant-numeric: tabular-nums; padding: 4px 6px; border-radius: 6px; cursor: pointer; white-space: nowrap; }
+.version-text:hover:not(:disabled) { color: var(--text-2); background: var(--hover); }
+.version-text:disabled { cursor: default; }
+.version-update { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 12px; border: 0; border-radius: 13px; background: #2f6fed; color: #fff; font: inherit; font-size: var(--text-xs); font-weight: 600; cursor: pointer; white-space: nowrap; animation: version-in .35s ease-out, version-pulse 2.4s ease-in-out .35s infinite; }
+.version-update svg { width: 14px; height: 14px; animation: version-spin 2.4s ease-in-out .35s infinite; }
+.version-update:hover { background: #3b7bff; }
+.version-update:active { transform: scale(.96); }
+@keyframes version-in { from { opacity: 0; transform: scale(.85); } to { opacity: 1; transform: none; } }
+@keyframes version-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(47, 111, 237, .55); } 60% { box-shadow: 0 0 0 7px rgba(47, 111, 237, 0); } }
+@keyframes version-spin { 0%, 55% { transform: rotate(0); } 100% { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .version-update, .version-update svg { animation: none; } }
 .rail-item.rail-remote:hover { color: var(--focus); }
 .remote-screen { position: fixed; inset: 0; display: grid; place-items: center; background: var(--bg); padding: 16px; -webkit-app-region: drag; }
 .remote-card { -webkit-app-region: no-drag; max-width: 440px; display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; }

@@ -24,9 +24,7 @@ import { Providers } from "./Providers";
 import { Tools } from "./Tools";
 import { Memory, MemorySettings } from "./Memory";
 import { RemoteRailButton, RemoteSettings } from "./Remote";
-import { Servers, RailServers, ServerApprovals } from "./Servers";
-import { UpdateRailButton } from "./UpdateButton";
-import { Markdown, firstSentence } from "../components/Markdown";
+import { Servers, RailServers, ServerApprovals } from "./Servers";import { Markdown, firstSentence } from "../components/Markdown";
 import { Sidebar, type AgentInfo } from "./Sidebar";
 import { providers, labels } from "../lib/data";
 import type { Message } from "../lib/types";
@@ -644,7 +642,6 @@ export function App() {
           const active = id === "home" ? showHome : !showHome && view === id;
           return <button type="button" key={id} className={"rail-item" + (active ? " active" : "")} aria-current={active ? "page" : undefined} aria-label={label} title={label} disabled={id === "agent" && agents.length === 0} onClick={() => go(id)}><Icon aria-hidden="true" /><span>{short}</span></button>;
         })}
-        <UpdateRailButton />
         <RemoteRailButton />
         {(import.meta as any).env?.DEV &&<button type="button" className={"rail-item rail-dev" + (mock ? " active" : "")} aria-label={mock ? "Mock data is loaded (dev only)" : "Fill with mock data (dev only)"} title="Dev only: a mock workspace with agents, messages, memory, skills, schedules and outputs" onClick={async () => {
           const choice = mock

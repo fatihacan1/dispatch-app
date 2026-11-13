@@ -4,6 +4,7 @@ import { Button, Console } from "../components/common";
 import { Dialog } from "../components/Dialog";
 import { ask } from "../components/ask";
 import type { Server, ServerCall } from "../lib/types";
+import { VersionBadge } from "./UpdateButton";
 
 const army = () => window.army;
 const errText = (e: unknown) => String((e as any)?.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, "");
@@ -41,10 +42,11 @@ function useReorder(list: Server[], setList: (l: Server[]) => void) {
 export function RailServers({ open }: { open: (id: string) => void }) {
   const [list, setList] = useServers();
   const { dragging, props } = useReorder(list, setList);
-  if (!list.length) return null;
-  return <div className="rail-servers" aria-label="Servers">
-    <span className="rail-servers-label">Servers</span>
+  return <div className="rail-servers" aria-label="Servers and version">
+    {list.length > 0 && <span className="rail-servers-label">Servers</span>}
     {list.map(s => <button type="button" key={s.id} className={"rail-server" + (dragging === s.id ? " dragging" : "")} title={`${s.name} · ${s.user ? s.user + "@" : ""}${s.host}`} aria-label={`Open ${s.name}`} onClick={() => open(s.id)} {...props(s.id)}><ServerBadge server={s} size={20} /><span>{s.name}</span></button>)}
+    <span className="bar-grow" />
+    <VersionBadge />
   </div>;
 }
 
