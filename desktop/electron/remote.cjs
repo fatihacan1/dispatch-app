@@ -142,6 +142,8 @@ module.exports = function createRemote(ipcMain, dialog) {
   }
 
   return {
+    /** The tab whose events remote clients see changed (the first tab was closed). */
+    retarget(window) { if (!window?.webContents || window.webContents === win?.webContents) return; win = window; const wc = win.webContents, send = wc.send.bind(wc); wc.send = (channel, ...args) => { send(channel, ...args); broadcast(channel, args[0]); }; },
     /** Called once the main window exists: events it receives are mirrored to remote clients. */
     attach(window, dir, electronModule) {
       win = window; electron = electronModule; file = path.join(dir, 'remote.json');

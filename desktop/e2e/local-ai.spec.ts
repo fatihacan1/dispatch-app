@@ -12,7 +12,7 @@ test('configure local AI and use it for a boss', async () => {
  try {
   const page = await app.firstWindow();
   await page.getByRole('button', { name: 'Providers', exact: true }).first().click();
-  await page.getByRole('button', { name: 'Add local AI' }).click();
+  await page.getByRole('button', { name: 'Add custom AI' }).click();
   await page.getByLabel('Local provider name').fill('Ornith');
   await page.getByLabel('Local server URL').fill(`http://127.0.0.1:${port}/v1`);
   await page.getByRole('button', { name: 'Test connection' }).click();
@@ -24,10 +24,10 @@ test('configure local AI and use it for a boss', async () => {
   await page.getByLabel('Search icons').fill('Qwen');
   await page.getByRole('dialog', { name: 'Choose icon' }).getByRole('button', { name: 'Qwen', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Choose icon' })).toContainText('Qwen');
-  await page.getByRole('button', { name: 'Save local AI' }).click();
+  await page.getByRole('button', { name: 'Save provider' }).click();
   await expect(page.getByRole('status').filter({ hasText: 'Saved globally' })).toBeVisible();
   await expect(page.locator('.local-saved-row').filter({ hasText: 'local-qwen' })).toHaveCount(1);
-  await page.getByRole('button', { name: 'Save local AI' }).click();
+  await page.getByRole('button', { name: 'Save provider' }).click();
   await expect(page.locator('.local-saved-row').filter({ hasText: 'local-qwen' })).toHaveCount(1);
   await expect(page.locator('.local-saved-row').filter({ hasText: 'Ornith' })).toHaveCount(1);
   await page.getByRole('button', { name: 'Agent templates', exact: true }).first().click();
@@ -44,7 +44,7 @@ test('configure local AI and use it for a boss', async () => {
   expect(agent.args).toContain('dispatch-local/local-qwen');
   await page.getByRole('button', { name: 'Providers', exact: true }).first().click();
   await page.getByRole('button', { name: 'Remove local-qwen' }).click();
-  await page.getByRole('dialog', { name: 'Remove local model?' }).getByRole('button', { name: 'Remove', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Remove this provider?' }).getByRole('button', { name: 'Remove', exact: true }).click();
   await expect(page.locator('.local-saved-row')).toHaveCount(0);
  } finally { await app.close(); server.close(); fs.rmSync(workspace, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); }
 });

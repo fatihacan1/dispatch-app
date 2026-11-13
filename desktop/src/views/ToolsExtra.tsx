@@ -122,7 +122,14 @@ export function TelegramTool() {
         {waiting && <small>Waiting for Start in Telegram…</small>}
       </>}
       {s?.linked && <>
-        <small>@{s.bot?.username} · chat with {s.chatName || "you"}. Messages go to the boss of the project open here, and answers start with the project name. In Telegram, /projects lists your projects and /use 2 switches.</small>
+        <small>@{s.bot?.username} · chat with {s.chatName || "you"}. One bot serves every open project tab.</small>
+        <ul className="tg-steps tg-how">
+          <li><b>@project message</b> sends to that tab, e.g. <b>@shop fix the login</b>. It also becomes the default.</li>
+          <li><b>Reply</b> to an answer and yours goes back to the project it came from. Answers start with <b>[project · agent]</b>.</li>
+          <li>Without @ or a reply, the default project answers (blue plane on its tab; at first the tab in front).</li>
+          <li>In each project the boss answers, or the agent it was handed to (<b>Answer Telegram here</b> in the Team menu, or the boss can do it itself).</li>
+          <li><b>/projects</b> lists the open tabs, <b>/use 2</b> changes the default. Only projects open in a tab can answer.</li>
+        </ul>
         <small>The boss can also send files and schedule results with dispatch telegram send.</small>
       </>}
       {s?.error && <small className="tpl-error">{s.error}</small>}

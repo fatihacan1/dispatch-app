@@ -111,23 +111,25 @@ async function search(ws, query, { caseSensitive = false } = {}) {
   return results;
 }
 
-let watcher = null, pending = new Map(), timer = null;
-function watch(ws, send) {
-  unwatch();
+// One watcher per project tab (key), so the Files panels of two open projects do not replace each other.
+const watchers = new Map();
+function watch(ws, send, key = 'default') {
+  unwatch(key);
   if (!ws) return;
-  watcher = chokidar.watch(ws, {
+  const w = { watcher: chokidar.watch(ws, {
     ignoreInitial: true, depth: 12, followSymlinks: false,
     ignored: p => WATCH_SKIP.has(path.basename(p)),
     awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 50 },
-  });
+  }), pending: new Map(), timer: null };
+  watchers.set(key, w);
   const push = kind => p => {
-    pending.set(norm(path.relative(ws, p)), kind);
-    clearTimeout(timer);
-    timer = setTimeout(() => { const batch = [...pending].map(([file, k]) => ({ path: file, kind: k })); pending = new Map(); send(batch); }, 120);
+    w.pending.set(norm(path.relative(ws, p)), kind);
+    clearTimeout(w.timer);
+    w.timer = setTimeout(() => { const batch = [...w.pending].map(([file, k]) => ({ path: file, kind: k })); w.pending = new Map(); send(batch); }, 120);
   };
-  for (const kind of ['add', 'change', 'unlink', 'addDir', 'unlinkDir']) watcher.on(kind, push(kind));
-  watcher.on('error', () => {});
+  for (const kind of ['add', 'change', 'unlink', 'addDir', 'unlinkDir']) w.watcher.on(kind, push(kind));
+  w.watcher.on('error', () => {});
 }
-function unwatch() { if (watcher) { void watcher.close(); watcher = null; } clearTimeout(timer); pending = new Map(); }
+function unwatch(key = 'default') { const w = watchers.get(key); if (!w) return; void w.watcher.close(); clearTimeout(w.timer); watchers.delete(key); }
 
 module.exports = { list, read, write, head, all, search, watch, unwatch, resolve };

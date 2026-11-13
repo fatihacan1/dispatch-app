@@ -3,11 +3,11 @@ import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
 
-test('operations survive restart and workspaces switch independently', async () => {
+test('operations survive restart and project tabs run side by side', async () => {
  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dispatch-resume-'));
  const first = path.join(root, 'first'); const second = path.join(root, 'second');
  fs.mkdirSync(first); fs.mkdirSync(second);
- const launch = () => electron.launch({ args: [path.resolve('electron/main.cjs'), '--demo'], cwd: first, env: { ...process.env, HOME: root, DISPATCH_TEST_HOME: root, DISPATCH_HOME: root } });
+ const launch = () => electron.launch({ args: [path.resolve('electron/main.cjs'), '--demo'], cwd: first, env: { ...process.env, HOME: root, DISPATCH_TEST_HOME: root, DISPATCH_HOME: root, DISPATCH_TEST_TABS: '1' } });
  let app = await launch();
  try {
   let page = await app.firstWindow();
@@ -22,25 +22,31 @@ test('operations survive restart and workspaces switch independently', async () 
   expect(saved.agents[0].sessionId).toBeTruthy();
   await app.close(); app = await launch(); page = await app.firstWindow();
   // Opening the workspace resumes its latest operation automatically.
-  await expect(page.getByText('Received: resume history', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('Received: resume history', { exact: true }).first()).toBeVisible({ timeout: 20000 });
   const debug = await page.evaluate(() => (window.army as any).debugAgent('boss'));
   expect(debug.args).toContain('--resume'); expect(debug.args).toContain(saved.agents[0].sessionId);
+  // A second project opens in its own tab; the first keeps its agents running.
   await app.evaluate(({ dialog }, target) => { (dialog as any).showOpenDialog = async () => ({ canceled: false, filePaths: [target] }); }, second);
-  await page.getByTitle(/Switch workspace/).click();
-  await page.getByRole('button', { name: 'Choose folder' }).click();
-  await page.getByRole('dialog', { name: 'Switch workspace?' }).getByRole('button', { name: 'Switch' }).click();
-  await expect(page.getByText('No operations yet.')).toBeVisible();
+  let opened = app.waitForEvent('window');
+  await page.getByRole('button', { name: 'Open a project in a new tab' }).click();
+  await page.getByRole('menuitem', { name: 'Open folder…' }).click();
+  let page2 = await opened;
+  await expect(page2.getByText('No operations yet.')).toBeVisible({ timeout: 20000 });
+  expect((await page2.evaluate(() => (window as any).army.tabs.list())).tabs.map((t: any) => t.path)).toEqual([first, second]);
+  // Both tabs come back after a restart, each with its own project.
   await app.close(); app = await launch(); page = await app.firstWindow();
-  await expect(page.getByTitle(`Switch workspace (${second})`)).toBeVisible();
-  await page.getByTitle(`Switch workspace (${second})`).click();
-  await expect(page.getByRole('button', { name: first, exact: true })).toBeVisible();
-  await page.getByRole('button', { name: first, exact: true }).click();
-  await expect(page.locator('.team')).toBeVisible();
-  await page.getByRole('button', { name: 'Home', exact: true }).click();
-  await expect(page.getByTitle('Resume this operation')).toBeVisible();
-  await page.getByRole('button', { name: 'Delete operation', exact: true }).click();
-  await page.getByRole('dialog', { name: 'Delete this operation?' }).getByRole('button', { name: 'Delete' }).click();
-  await expect(page.getByText('No operations yet.')).toBeVisible();
+  await expect(page.locator('.ptab')).toHaveCount(2, { timeout: 20000 });
+  const tabs = (await page.evaluate(() => (window as any).army.tabs.list())).tabs;
+  expect(tabs.map((t: any) => t.path)).toEqual([first, second]);
+  const firstPage = app.windows().find(w => !w.url().includes('tray')) && await (async () => { for (const w of app.windows()) { try { if ((await w.evaluate(() => window.army.info())).workspace === first) return w; } catch {} } return null; })();
+  expect(firstPage).toBeTruthy();
+  await page.evaluate(id => (window as any).army.tabs.switch(id), tabs[0].id);
+  await expect(firstPage!.locator('.team')).toBeVisible({ timeout: 20000 });
+  await firstPage!.getByRole('button', { name: 'Home', exact: true }).click();
+  await expect(firstPage!.getByTitle('Resume this operation')).toBeVisible();
+  await firstPage!.getByRole('button', { name: 'Delete operation', exact: true }).click();
+  await firstPage!.getByRole('dialog', { name: 'Delete this operation?' }).getByRole('button', { name: 'Delete' }).click();
+  await expect(firstPage!.getByText('No operations yet.')).toBeVisible();
   expect(fs.existsSync(path.join(opDir, file))).toBe(false);
  } finally { await app.close(); fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); }
 });

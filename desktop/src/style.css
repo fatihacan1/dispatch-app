@@ -1158,3 +1158,36 @@ input[type=checkbox]:focus-visible { outline: 2px solid var(--focus); outline-of
 .folder-gate img { width: 64px; height: 64px; }
 .folder-gate h1 { margin: 0; font-size: 22px; }
 .folder-gate p { margin: 0 0 8px; max-width: 420px; opacity: .7; }
+
+/* Project tabs in the top bar */
+.ptabs { position: relative; display: flex; align-items: center; gap: 4px; min-width: 0; flex: 0 1 auto; }
+.ptab-strip { position: relative; display: flex; align-items: center; gap: 2px; min-width: 0; overflow: hidden; padding: 2px; border-radius: 9px; background: var(--bg); border: var(--border); }
+.ptab-glider { position: absolute; top: 2px; left: 0; height: calc(100% - 4px); width: 0; border-radius: 7px; background: var(--selected); box-shadow: 0 1px 0 rgba(255,255,255,.04) inset, 0 1px 3px rgba(0,0,0,.35); transition: transform 280ms cubic-bezier(.2,.9,.25,1), width 280ms cubic-bezier(.2,.9,.25,1); pointer-events: none; }
+.ptab { position: relative; z-index: 1; display: flex; align-items: center; min-width: 0; height: 26px; border-radius: 7px; animation: ptab-in 260ms cubic-bezier(.2,.9,.25,1); }
+.ptab-main { display: flex; align-items: center; gap: 7px; min-width: 0; height: 100%; padding: 0 10px; border: 0; background: transparent; color: var(--text-3); font: 500 var(--text-md) var(--font-ui); cursor: pointer; border-radius: 7px; transition: color 160ms ease; }
+.ptab:not(.active) .ptab-main:hover { color: var(--text-2); }
+.ptab.active .ptab-main { color: var(--text); }
+.ptab:has(.ptab-close) .ptab-main { padding-right: 4px; }
+.ptab-name { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ptab-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--status-idle); opacity: .55; transition: background 200ms ease, opacity 200ms ease; }
+.ptab-dot.running { background: var(--status-working); opacity: .6; }
+.ptab-dot.working { background: var(--status-working); opacity: 1; animation: ptab-pulse 1.6s ease-in-out infinite; }
+.ptab-dot.needs { background: var(--status-needs); opacity: 1; }
+.ptab-tg { width: 12px; height: 12px; flex: none; color: #4ea4f6; }
+.ptab-close { display: grid; place-items: center; width: 18px; height: 18px; margin-right: 5px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--text-3); cursor: pointer; opacity: 0; transform: scale(.85); transition: opacity 140ms ease, transform 140ms ease, background 140ms ease, color 140ms ease; }
+.ptab-close svg { width: 12px; height: 12px; }
+.ptab:hover .ptab-close, .ptab.active .ptab-close, .ptab-close:focus-visible { opacity: 1; transform: none; }
+.ptab-close:hover { background: var(--hover); color: var(--text); }
+.ptab-add { display: grid; place-items: center; width: 28px; height: 28px; flex: none; padding: 0; border: var(--border); border-radius: 8px; background: transparent; color: var(--text-2); cursor: pointer; transition: background 150ms ease, color 150ms ease, transform 150ms ease; }
+.ptab-add svg { width: 14px; height: 14px; transition: transform 220ms cubic-bezier(.2,.9,.25,1); }
+.ptab-add:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+.ptab-add:hover:not(:disabled) svg, .ptab-add[aria-expanded="true"] svg { transform: rotate(90deg); }
+.ptab-add:active:not(:disabled) { transform: scale(.94); }
+.ptab-add:disabled { opacity: .4; cursor: default; }
+.ptab-menu { left: 0; right: auto; top: calc(100% + 6px); width: 320px; transform-origin: top left; }
+.ptab-menu .menu-item { height: auto; min-height: 30px; padding: 5px 8px; }
+.tab-flash { position: fixed; inset: 0; z-index: 50; pointer-events: none; background: var(--bg); animation: tab-flash 220ms ease-out forwards; }
+@keyframes ptab-in { from { opacity: 0; transform: translateY(3px) scale(.96); } to { opacity: 1; transform: none; } }
+@keyframes ptab-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(76,195,138,.45); } 50% { box-shadow: 0 0 0 4px rgba(76,195,138,0); } }
+@keyframes tab-flash { from { opacity: .55; } to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .ptab-glider, .ptab, .ptab-dot.working, .tab-flash, .ptab-add svg { transition: none; animation: none; } }.tg-how { list-style: disc; }

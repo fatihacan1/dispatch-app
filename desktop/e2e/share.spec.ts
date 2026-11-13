@@ -29,7 +29,7 @@ test('share: export a trained workspace and import it into another', async () =>
 
     // Open it in another workspace, like a double-click would.
     await page.evaluate(t => (window as any).army.workspace(t), other);
-    await app.evaluate(({ BrowserWindow }, file) => BrowserWindow.getAllWindows().find(w => !w.webContents.getURL().includes('tray-menu'))!.webContents.send('pack-open', file), packFile);
+    await app.evaluate(({ webContents }, file) => webContents.getAllWebContents().find(w => /index\.html|localhost/.test(w.getURL()) && !w.getURL().includes('overlay'))!.send('pack-open', file), packFile);
     await expect(page.getByText('Video studio', { exact: true })).toBeVisible();
     await expect(page.getByText('Makes one short video a day.')).toBeVisible();
     await page.screenshot({ path: 'e2e/screens/share-import.png', fullPage: true });

@@ -38,6 +38,9 @@ const TR: Record<string, string> = {
   "Saved globally": "Tüm çalışma alanları için kaydedildi", "Remove this provider?": "Bu sağlayıcı kaldırılsın mı?",
   "Search icons…": "Simge ara…", "No icons found.": "Simge bulunamadı.", "Only for hosted servers": "Yalnızca uzak sunucular için",
   "Saved · leave empty to keep": "Kayıtlı · korumak için boş bırak", "Local": "Yerel", "Remote": "Uzak", "Key": "Anahtar",
+  // Tabs
+  "Open folder…": "Klasör aç…", "New tab": "Yeni sekme", "Close tab": "Sekmeyi kapat", "Open a project in a new tab": "Projeyi yeni sekmede aç",
+  "Open a folder": "Bir klasör aç", "Open folder": "Klasör aç", "Recent workspaces": "Son çalışma alanları", "Projects": "Projeler",
   // Templates
   "Name": "Ad", "Description": "Açıklama", "Provider": "Sağlayıcı", "Model": "Model", "Effort": "Efor", "Role": "Rol",
   "Approvals": "Onaylar", "New template": "Yeni şablon", "Duplicate": "Çoğalt",

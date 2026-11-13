@@ -126,7 +126,7 @@ function create({ dir, onMessage, onCommand = async () => null, log = () => {} }
       return;
     }
     if (m.chat.id !== cfg.chatId) { await api('sendMessage', { chat_id: m.chat.id, text: 'This bot is private.' }).catch(() => {}); return; }
-    if (start) { await api('sendMessage', { chat_id: m.chat.id, text: 'Already connected. Write your message for the boss. /projects lists your projects, /use <number> switches.' }).catch(() => {}); return; }
+    if (start) { await api('sendMessage', { chat_id: m.chat.id, text: 'Already connected. Write your message for the boss. Start with @project to talk to another open project; /projects lists them.' }).catch(() => {}); return; }
     // Photos, files, voice notes, videos: passed on as files the agent can open.
     const files = [];
     if (m.photo?.length) files.push({ id: m.photo.at(-1).file_id, name: `photo-${m.message_id}.jpg` });
@@ -134,7 +134,9 @@ function create({ dir, onMessage, onCommand = async () => null, log = () => {} }
     if (!text && !files.length) { await api('sendMessage', { chat_id: m.chat.id, text: 'That kind of message is not supported. Send text, a photo, a file, a voice note or a video.' }).catch(() => {}); return; }
     const cmd = text.match(/^\/(\w+)(?:@\w+)?\s*([\s\S]*)$/);
     if (cmd) { try { const r = await onCommand(cmd[1].toLowerCase(), cmd[2].trim()); if (r) { await send(r); return; } } catch (e) { await send(e.message).catch(() => {}); return; } }
-    try { await onMessage(text, files); } catch (e) { await send(`Could not reach the boss: ${e.message}`).catch(() => {}); }
+    // A reply to one of the bot's messages carries that message's text: its [project] tag says where the answer goes.
+    const replyTo = m.reply_to_message?.from?.is_bot ? String(m.reply_to_message.text || m.reply_to_message.caption || '') : '';
+    try { await onMessage(text, files, replyTo); } catch (e) { await send(`Could not reach the boss: ${e.message}`).catch(() => {}); }
   }
 
   async function loop() {

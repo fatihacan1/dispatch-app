@@ -6,6 +6,7 @@ import { Terminals, type Shell } from "../ide/Terminals";
 import { Dictation, joinSpoken } from "../voice/dictation";
 import { Visualizer } from "../voice/Visualizer";
 import { VoiceSettings } from "../voice/VoiceSettings";
+import { ProjectTabs } from "./Tabs";
 import { getLang, setLang, type Lang } from "../lib/i18n";
 import {
   ChatBubbleLeftRightIcon, ChevronDownIcon, Cog6ToothIcon, CpuChipIcon, ServerStackIcon, DocumentIcon, DocumentTextIcon, EnvelopeIcon,
@@ -156,6 +157,8 @@ export function App() {
   const [agentTemplates, setAgentTemplates] = useState<Record<string, any>>({});
   const [workspace, setWorkspace] = useState("");
   const [needsFolder, setNeedsFolder] = useState(false);
+  const [tabEnter, setTabEnter] = useState(0);
+  useEffect(() => (window as any).army.on("tab-shown", () => setTabEnter(n => n + 1)), []);
   const [demo, setDemo] = useState(false);
   const [mock, setMock] = useState(false);
   const [agents, setAgents] = useState<string[]>([]);
@@ -624,20 +627,10 @@ export function App() {
   );
   return (
     <div className={"app " + (navigator.userAgent.includes("Mac") ? "os-mac" : "os-win") + (showSidebar && sidebar ? " with-sidebar" : "")}>
+      {tabEnter > 0 && <span key={tabEnter} className="tab-flash" aria-hidden="true" />}
       <header className="topbar">
         <div className="brand"><img src="./logo-dispatch.png" alt="" /><strong>Dispatch</strong></div>
-        <div className="workspace-wrap">
-          <Button className="ghost crumb" onClick={() => setWorkspaceMenu(!workspaceMenu)} title={`Switch workspace (${workspace})`} aria-expanded={workspaceMenu}>
-            <FolderIcon aria-hidden="true" /><span>{workspace.split(/[\\/]/).pop() || "Choose workspace"}</span><ChevronDownIcon aria-hidden="true" className="chev" />
-          </Button>
-          {workspaceMenu && <div className="popover workspace-menu" role="menu">
-            {workspaces.map(w => <Button key={w} className="menu-item" onClick={() => openWorkspace(w)} title={w} aria-label={w}><span className="menu-main">{w.split(/[\\/]/).pop()}</span><small>{w}</small></Button>)}
-            <div className="menu-sep" />
-            <Button className="menu-item" onClick={() => openWorkspace()}><PlusIcon aria-hidden="true" />Choose folder</Button>
-          </div>}
-        </div>
-        <span className="crumb-sep">/</span>
-        <span className="crumb-view">{viewTitle}</span>
+        <ProjectTabs recent={workspaces} onError={setError} />
         <span className="grow" />
         {agents.length > 0 && <div className="live" role="status">
           <StatusDot tone={needs ? "needs" : "working"} />
@@ -697,8 +690,8 @@ export function App() {
                 <section>
                   <h2 className="label">Recent workspaces</h2>
                   <div className="rows">
-                    {workspaces.filter(w => !/[\\/](Temp|tmp)[\\/]/i.test(w)).map(w => { const parts = w.split(/[\\/]/); const nm = parts.pop() || w; return <button type="button" key={w} className="list-row" onClick={() => openWorkspace(w)} title={w}><FolderIcon className="row-glyph" aria-hidden="true" /><span className="row-text"><b>{nm}</b><small>{parts.join("\\")}</small></span></button>; })}
-                    <button type="button" className="list-row add-row" onClick={() => openWorkspace()}><PlusIcon className="row-glyph" aria-hidden="true" /><span className="row-text"><b>Open folder…</b></span></button>
+                    {workspaces.filter(w => !/[\\/](Temp|tmp)[\\/]/i.test(w)).map(w => { const parts = w.split(/[\\/]/); const nm = parts.pop() || w; return <button type="button" key={w} className="list-row" onClick={() => (window as any).army.tabs.open(w).catch((e: unknown) => setError(String(e)))} title={`${w} · opens in a new tab`}><FolderIcon className="row-glyph" aria-hidden="true" /><span className="row-text"><b>{nm}</b><small>{parts.join("\\")}</small></span></button>; })}
+                    <button type="button" className="list-row add-row" onClick={() => (window as any).army.tabs.open().catch((e: unknown) => setError(String(e)))}><PlusIcon className="row-glyph" aria-hidden="true" /><span className="row-text"><b>Open folder…</b></span></button>
                   </div>
                 </section>
               </div>

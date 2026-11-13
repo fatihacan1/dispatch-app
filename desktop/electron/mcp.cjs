@@ -25,7 +25,7 @@ function configure(provider, template, resolve, localConfig, options = {}) {
   for (const id of ids) {
     const preset = PRESETS[id];
     if (preset.remote) { servers[`dispatch_${id}`] = { url: remoteUrl(id) }; continue; }
-    if (preset.builtin) { servers[`dispatch_${id}`] = { command: process.execPath, args: [preset.builtin], env: { ELECTRON_RUN_AS_NODE: '1', ...builtinEnv(id, options) } }; continue; }
+    if (preset.builtin) { servers[`dispatch_${id}`] = { command: process.execPath, args: [preset.builtin], env: { ELECTRON_RUN_AS_NODE: '1', ...(options.builtinEnv || builtinEnv)(id, options) } }; continue; }
     let spec; try { spec = resolve(preset.command); } catch { throw new Error(`${preset.name} MCP is not installed or not in PATH.`); }
     servers[`dispatch_${id}`] = { command: spec.file, args: [...spec.args, ...preset.args] };
   }

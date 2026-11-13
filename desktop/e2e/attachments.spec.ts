@@ -95,7 +95,7 @@ test('project boss shadows the default boss in the operation picker', async () =
  try {
   const page = await app.firstWindow();
   const picker = page.getByLabel('Boss template');
-  await expect(picker.locator('option', { hasText: 'boss · Project' })).toHaveCount(1);
+  await expect(picker.locator('option', { hasText: 'boss · Project' })).toHaveCount(1, { timeout: 20000 });
   await expect(picker.locator('option', { hasText: 'boss (Default)' })).toHaveCount(0);
   await expect(picker.locator('option:checked')).toHaveText('boss · Project');
   await page.getByRole('button', { name: 'Start operation' }).click();
