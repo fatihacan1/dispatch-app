@@ -62,7 +62,7 @@ export function ScheduleTool() {
   </>;
 }
 
-type Tg = { configured: boolean; bot: { username: string; name: string } | null; linked: boolean; chatName: string; polling: boolean; error: string };
+type Tg = { configured: boolean; bot: { username: string; name: string } | null; linked: boolean; chatName: string; polling: boolean; standby?: boolean; error: string };
 
 /** Tools > Telegram: BotFather in one click, paste the token, tap Start in the bot. */
 export function TelegramTool() {
@@ -83,7 +83,7 @@ export function TelegramTool() {
     return () => { off(); window.removeEventListener("focus", onFocus); };
   }, []);
   const run = async (fn: () => Promise<any>) => { setBusy(true); setError(""); setNote(""); try { const r = await fn(); if (r && typeof r === "object" && "configured" in r) setS(r); } catch (e) { setError(clean(e)); } finally { setBusy(false); } };
-  const label = !s ? "Checking…" : s.linked ? (s.error ? "Offline" : "Connected") : s.configured ? "Waiting for your chat" : "Not connected";
+  const label = !s ? "Checking…" : s.linked ? (s.standby ? "Another Dispatch window is answering" : s.error ? "Offline" : "Connected") : s.configured ? "Waiting for your chat" : "Not connected";
   return <div className="prov-row tool-tg">
     <span className="prov-icon tool-mark" aria-hidden="true" dangerouslySetInnerHTML={{ __html: telegramSvg.replace("<svg", '<svg fill="currentColor"') }} />
     <div className="prov-main">
@@ -105,7 +105,7 @@ export function TelegramTool() {
         {waiting && <small>Waiting for Start in Telegram…</small>}
       </>}
       {s?.linked && <>
-        <small>@{s.bot?.username} · chat with {s.chatName || "you"}. Messages there go to the boss and its answers come back.</small>
+        <small>@{s.bot?.username} · chat with {s.chatName || "you"}. Messages go to the boss of the project open here, and answers start with the project name. In Telegram, /projects lists your projects and /use 2 switches.</small>
         <small>The boss can also send files and schedule results with dispatch telegram send.</small>
       </>}
       {s?.error && <small className="tpl-error">{s.error}</small>}

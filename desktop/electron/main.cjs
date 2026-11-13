@@ -484,7 +484,8 @@ app.whenReady().then(() => {
   if (last) workspace = last;
   rememberWorkspace(); watch();
 });
-ipcMain.handle('workspace', async (_e, target) => { if (!target) { const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'] }); if (r.canceled) return workspace; target = r.filePaths[0]; } if (!fs.statSync(target).isDirectory()) throw new Error('Workspace is not a directory'); if (path.resolve(target) !== path.resolve(workspace)) { finishOperation(); stopAgents(); if (isMock(workspace) && !isMock(target)) { demo = process.argv.includes('--demo'); mockPrevious = null; } workspace = path.resolve(target); rememberWorkspace(); watch(); } return workspace; });
+ipcMain.handle('workspace', async (_e, target) => { if (!target) { const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'] }); if (r.canceled) return workspace; target = r.filePaths[0]; } if (!fs.statSync(target).isDirectory()) throw new Error('Workspace is not a directory'); switchWorkspace(target); return workspace; });
+function switchWorkspace(target) { if (path.resolve(target) !== path.resolve(workspace)) { finishOperation(); stopAgents(); if (isMock(workspace) && !isMock(target)) { demo = process.argv.includes('--demo'); mockPrevious = null; } workspace = path.resolve(target); rememberWorkspace(); watch(); } }
 ipcMain.handle('info', () => ({ workspace, demo, mock: isMock(workspace), operations: listOperations(), workspaces: recentWorkspaces() }));
 ipcMain.handle('operations:list', () => listOperations());
 ipcMain.handle('operations:delete', (_e, id) => { if (!/^[\w-]+$/.test(id)) throw new Error('Invalid operation'); if (operation?.id === id) { stopAgents(); operation = null; } fs.unlinkSync(path.join(operationsDir(), id + '.json')); fs.rmSync(path.join(operationsDir(), id), { recursive: true, force: true }); return listOperations(); });
@@ -670,10 +671,27 @@ const telegram = require('./telegram.cjs').create({
   dir: globalDir(),
   log: t => console.log(t),
   onMessage: async text => {
-    if (!operation || !operation.agents.some(a => a.name === 'boss')) throw new Error('No team is open in Dispatch. Open Dispatch and start a chat with the boss.');
+    if (!operation || !operation.agents.some(a => a.name === 'boss')) throw new Error(`No team is open in ${path.basename(workspace)}. Start a chat with the boss in Dispatch, or /use another project.`);
     if (!processes.has('boss')) agentAction('boss', 'restart');
     tgWaiting = Date.now();
     await sendMessage('boss', `[via Telegram, keep the answer short and plain text] ${text}`, 'you');
+  },
+  // /projects and /use <n|name>: one Dispatch shows one project at a time; switch it from the phone.
+  onCommand: async (cmd, arg) => {
+    const list = recentWorkspaces().filter(w => !isMock(w) && fs.existsSync(w)).slice(0, 15);
+    const current = path.resolve(workspace).toLowerCase();
+    if (cmd === 'projects' || cmd === 'where') return list.length ? `Projects (the boss of the open one answers you):\n${list.map((w, i) => `${i + 1}. ${path.basename(w)}${path.resolve(w).toLowerCase() === current ? '  ← open' : ''}`).join('\n')}\n\nSwitch with /use <number>.` : 'No projects yet. Open a folder in Dispatch first.';
+    if (cmd === 'use') {
+      const n = Number(arg);
+      const target = Number.isInteger(n) && n >= 1 ? list[n - 1] : list.find(w => path.basename(w).toLowerCase() === arg.toLowerCase());
+      if (!target) return `No project "${arg}". Send /projects to see the list.`;
+      if (path.resolve(target).toLowerCase() === current) return `${path.basename(target)} is already open.`;
+      switchWorkspace(target);
+      if (win && !win.isDestroyed()) win.webContents.reload();
+      return `Switched to ${path.basename(target)}. Its last chat is opening and the boss is starting; write your message in a few seconds.`;
+    }
+    if (cmd === 'help') return 'Write anything and the boss of the open project answers.\n/projects: list projects\n/use <number>: switch project';
+    return null;
   },
 });
 let tgWaiting = 0;
@@ -682,7 +700,8 @@ telegram.onChange(s => notify('telegram', s));
 function tgForward(msg) {
   if (!telegram.connected()) return;
   const fromPhone = msg.from === 'boss' && Date.now() - tgWaiting < 30 * 60e3;
-  if (fromPhone || msg.from === 'dispatch') void telegram.send(msg.from === 'boss' ? msg.text : `Dispatch: ${msg.text}`).catch(() => {});
+  const where = `[${path.basename(workspace)}]`;
+  if (fromPhone || msg.from === 'dispatch') void telegram.send(msg.from === 'boss' ? `${where} ${msg.text}` : `${where} Dispatch: ${msg.text}`).catch(() => {});
 }
 function telegramHelp() {
   return telegram.connected() ? '\nTelegram: the user is connected on their phone. Messages starting with [via Telegram] come from there and your answer goes back automatically. To send something yourself (a schedule result, a finished file), run dispatch telegram send --text "<message>" [--file <path>]. Use it when the user asks for it or a schedule says so.' : '';
@@ -698,6 +717,10 @@ async function handleTelegram(msg) {
 }
 app.whenReady().then(() => telegram.start());
 app.on('before-quit', () => telegram.stop());
+const updater = require('./updater.cjs').create({ notify, onBeforeInstall: () => { quitting = true; } });
+ipcMain.handle('update:status', () => updater.status());
+ipcMain.handle('update:check', () => updater.check());
+ipcMain.handle('update:install', () => updater.install());
 ipcMain.handle('telegram:status', () => telegram.status());
 ipcMain.handle('telegram:set-token', (_e, token) => telegram.setToken(token));
 ipcMain.handle('telegram:link', () => { const url = telegram.linkUrl(); void shell.openExternal(url); return url; });

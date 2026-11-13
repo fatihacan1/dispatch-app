@@ -8,8 +8,22 @@ const crypto = require('node:crypto');
 const TOKEN_RE = /^\d{5,}:[A-Za-z0-9_-]{30,}$/;
 const IMAGE_EXT = /\.(png|jpe?g|webp|gif)$/i;
 
-function create({ dir, onMessage, log = () => {} }) {
+function create({ dir, onMessage, onCommand = async () => null, log = () => {} }) {
   const file = path.join(dir, 'telegram.json');
+  // Only one Dispatch may poll the bot (Telegram refuses two getUpdates at once and messages would land on either).
+  // The poller holds telegram.lock (pid + heartbeat); another copy waits and takes over when it goes away.
+  const lockFile = path.join(dir, 'telegram.lock');
+  const alive = pid => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+  function takeLock() {
+    try {
+      const l = JSON.parse(fs.readFileSync(lockFile, 'utf8'));
+      if (l.pid !== process.pid && alive(l.pid) && Date.now() - l.beat < 90e3) return false;
+    } catch {}
+    fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(lockFile, JSON.stringify({ pid: process.pid, beat: Date.now() }));
+    return true;
+  }
+  function dropLock() { try { const l = JSON.parse(fs.readFileSync(lockFile, 'utf8')); if (l.pid === process.pid) fs.unlinkSync(lockFile); } catch {} }
+  let standby = false;
   const read = () => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return {}; } };
   const write = v => { fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(file, JSON.stringify(v, null, 2)); };
   let cfg = read();
@@ -25,7 +39,7 @@ function create({ dir, onMessage, log = () => {} }) {
   }
 
   function status() {
-    return { configured: !!cfg.token, bot: cfg.bot || null, linked: !!cfg.chatId, chatName: cfg.chatName || '', polling: running, error: lastError };
+    return { configured: !!cfg.token, bot: cfg.bot || null, linked: !!cfg.chatId, chatName: cfg.chatName || '', polling: running && !standby, standby, error: lastError };
   }
 
   async function setToken(token) {
@@ -79,14 +93,19 @@ function create({ dir, onMessage, log = () => {} }) {
       return;
     }
     if (m.chat.id !== cfg.chatId) { await api('sendMessage', { chat_id: m.chat.id, text: 'This bot is private.' }).catch(() => {}); return; }
-    if (start) { await api('sendMessage', { chat_id: m.chat.id, text: 'Already connected. Write your message for the boss.' }).catch(() => {}); return; }
+    if (start) { await api('sendMessage', { chat_id: m.chat.id, text: 'Already connected. Write your message for the boss. /projects lists your projects, /use <number> switches.' }).catch(() => {}); return; }
     if (!text) { await api('sendMessage', { chat_id: m.chat.id, text: 'Only text messages reach the boss for now.' }).catch(() => {}); return; }
+    const cmd = text.match(/^\/(\w+)(?:@\w+)?\s*([\s\S]*)$/);
+    if (cmd) { try { const r = await onCommand(cmd[1].toLowerCase(), cmd[2].trim()); if (r) { await send(r); return; } } catch (e) { await send(e.message).catch(() => {}); return; } }
     try { await onMessage(text); } catch (e) { await send(`Could not reach the boss: ${e.message}`).catch(() => {}); }
   }
 
   async function loop() {
     let backoff = 1000;
     while (running) {
+      if (!takeLock()) { if (!standby) { standby = true; changed(); } await new Promise(r => setTimeout(r, 15000)); continue; }
+      // Taking over from another copy: it may have linked the chat or moved the offset meanwhile.
+      if (standby) { standby = false; cfg = read(); if (!cfg.token) { running = false; dropLock(); changed(); break; } changed(); }
       abort = new AbortController();
       try {
         const updates = await api('getUpdates', { offset: cfg.offset || 0, timeout: 25, allowed_updates: ['message'] }, cfg.token, abort.signal);
@@ -102,7 +121,7 @@ function create({ dir, onMessage, log = () => {} }) {
     }
   }
   function start() { if (running || !cfg.token) return; running = true; void loop(); changed(); }
-  function stop() { running = false; try { abort?.abort(); } catch {} }
+  function stop() { running = false; try { abort?.abort(); } catch {} dropLock(); }
 
   return { status, setToken, linkUrl, disconnect, unlink, send, sendFile, start, stop, onChange: fn => { listeners.add(fn); return () => listeners.delete(fn); }, connected: () => !!cfg.chatId };
 }

@@ -1048,6 +1048,9 @@ input[type=checkbox]:focus-visible { outline: 2px solid var(--focus); outline-of
 
 /* ── Remote mode (views/Remote.tsx) ── */
 .rail-item.rail-remote { color: var(--focus); margin-top: auto; }
+.rail-item.rail-update { margin-top: auto; background: #2f6fed; color: #fff; }
+.rail-item.rail-update:hover { background: #3b7bff; color: #fff; }
+.rail-item.rail-update + .rail-remote { margin-top: 4px; }
 .rail-item.rail-remote:hover { color: var(--focus); }
 .remote-screen { position: fixed; inset: 0; display: grid; place-items: center; background: var(--bg); padding: 16px; -webkit-app-region: drag; }
 .remote-card { -webkit-app-region: no-drag; max-width: 440px; display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; }

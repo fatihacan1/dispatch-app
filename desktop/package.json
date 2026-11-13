@@ -1,108 +1,122 @@
 {
-    "name": "dispatch-desktop",
-    "version": "0.1.0",
-    "private": true,
-    "main": "electron/main.cjs",
-    "scripts": {
-        "dev": "node scripts/dev.cjs",
-        "build:core": "node scripts/build-core.cjs",
-        "build": "vite build",
-        "typecheck": "tsc --noEmit",
-        "test": "vitest run && node --test electron/*.test.cjs",
-        "e2e": "playwright test",
-        "dist": "npm run build:core && npm run build && electron-builder",
-        "postinstall": "node scripts/postinstall.cjs"
+  "name": "dispatch-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "node scripts/dev.cjs",
+    "build:core": "node scripts/build-core.cjs",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run && node --test electron/*.test.cjs",
+    "e2e": "playwright test",
+    "dist": "npm run build:core && npm run build && electron-builder",
+    "postinstall": "node scripts/postinstall.cjs"
+  },
+  "dependencies": {
+    "@fontsource/courier-prime": "^5.3.0",
+    "@fontsource/geist": "^5.3.0",
+    "@fontsource/geist-mono": "^5.3.0",
+    "@fontsource/jetbrains-mono": "^5.2.8",
+    "@fontsource/oswald": "^5.3.0",
+    "@fontsource/saira-stencil-one": "^5.3.0",
+    "@fontsource/vt323": "^5.2.8",
+    "@heroicons/react": "^2.2.0",
+    "@lobehub/icons-static-svg": "^1.102.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-unicode11": "^0.9.0",
+    "@xterm/addon-web-links": "^0.12.0",
+    "@xterm/xterm": "^6.0.0",
+    "chokidar": "^4.0.3",
+    "electron-updater": "^6.6.2",
+    "ignore": "^7.0.14",
+    "monaco-editor": "^0.57.0",
+    "node-pty": "^1.1.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "simple-icons": "^16.36.0",
+    "three": "^0.183.2",
+    "tree-sitter-wasms": "^0.1.13",
+    "web-tree-sitter": "^0.25.10",
+    "zustand": "^5.0.0"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.0",
+    "@playwright/test": "^1.56.0",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.1.0",
+    "electron": "45.2.3",
+    "electron-builder": "^26.0.0",
+    "typescript": "^5.9.0",
+    "vite": "^7.2.0",
+    "vitest": "^4.0.0"
+  },
+  "build": {
+    "appId": "com.dispatch.desktop",
+    "productName": "Dispatch",
+    "npmRebuild": false,
+    "files": [
+      "dist/**",
+      "electron/**",
+      "node_modules/**"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/bin",
+        "to": "bin"
+      },
+      {
+        "from": "resources/whisper-vulkan",
+        "to": "whisper-vulkan"
+      }
+    ],
+    "fileAssociations": [
+      {
+        "ext": "dispatch",
+        "name": "Dispatch Pack",
+        "description": "Dispatch workspace pack",
+        "icon": "pack",
+        "role": "Editor",
+        "mimeType": "application/x-dispatch-pack"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "build/icon.png"
     },
-    "dependencies": {
-        "@fontsource/courier-prime": "^5.3.0",
-        "@fontsource/geist": "^5.3.0",
-        "@fontsource/geist-mono": "^5.3.0",
-        "@fontsource/jetbrains-mono": "^5.2.8",
-        "@fontsource/oswald": "^5.3.0",
-        "@fontsource/saira-stencil-one": "^5.3.0",
-        "@fontsource/vt323": "^5.2.8",
-        "@heroicons/react": "^2.2.0",
-        "@lobehub/icons-static-svg": "^1.102.0",
-        "@xterm/addon-fit": "^0.11.0",
-        "@xterm/addon-unicode11": "^0.9.0",
-        "@xterm/addon-web-links": "^0.12.0",
-        "@xterm/xterm": "^6.0.0",
-        "chokidar": "^4.0.3",
-        "ignore": "^7.0.14",
-        "monaco-editor": "^0.57.0",
-        "node-pty": "^1.1.0",
-        "react": "^19.2.0",
-        "react-dom": "^19.2.0",
-        "simple-icons": "^16.36.0",
-        "three": "^0.183.2",
-        "tree-sitter-wasms": "^0.1.13",
-        "web-tree-sitter": "^0.25.10",
-        "zustand": "^5.0.0"
-    },
-    "devDependencies": {
-        "@electron/rebuild": "^4.0.0",
-        "@playwright/test": "^1.56.0",
-        "@types/node": "^24.0.0",
-        "@types/react": "^19.2.0",
-        "@types/react-dom": "^19.2.0",
-        "@vitejs/plugin-react": "^5.1.0",
-        "electron": "45.2.3",
-        "electron-builder": "^26.0.0",
-        "typescript": "^5.9.0",
-        "vite": "^7.2.0",
-        "vitest": "^4.0.0"
-    },
-    "build": {
-        "appId": "com.dispatch.desktop",
-        "productName": "Dispatch",
-        "npmRebuild": false,
-        "files": [
-            "dist/**",
-            "electron/**",
-            "node_modules/**"
-        ],
-        "extraResources": [
-            {
-                "from": "resources/bin",
-                "to": "bin"
-            },
-            {
-                "from": "resources/whisper-vulkan",
-                "to": "whisper-vulkan"
-            }
-        ],
-        "fileAssociations": [
-            {
-                "ext": "dispatch",
-                "name": "Dispatch Pack",
-                "description": "Dispatch workspace pack",
-                "icon": "pack",
-                "role": "Editor",
-                "mimeType": "application/x-dispatch-pack"
-            }
-        ],
-        "win": {
-            "target": [
-                "nsis",
-                "portable"
-            ],
-            "icon": "build/icon.png"
-        },
-        "mac": {
-            "target": [
-                {
-                    "target": "dmg",
-                    "arch": [
-                        "arm64",
-                        "x64"
-                    ]
-                }
-            ],
-            "icon": "build/icon.png"
-        },
-        "directories": {
-            "buildResources": "build",
-            "output": "release"
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
         }
+      ],
+      "icon": "build/icon.png"
+    },
+    "directories": {
+      "buildResources": "build",
+      "output": "release"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "fatihacan1",
+        "repo": "dispatch-app"
+      }
+    ],
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false
     }
+  },
+  "repository": "https://github.com/fatihacan1/dispatch-app"
 }
