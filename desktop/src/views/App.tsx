@@ -6,6 +6,7 @@ import { Terminals, type Shell } from "../ide/Terminals";
 import { Dictation, joinSpoken } from "../voice/dictation";
 import { Visualizer } from "../voice/Visualizer";
 import { VoiceSettings } from "../voice/VoiceSettings";
+import { getLang, setLang, type Lang } from "../lib/i18n";
 import {
   ChatBubbleLeftRightIcon, ChevronDownIcon, Cog6ToothIcon, CpuChipIcon, ServerStackIcon, DocumentIcon, DocumentTextIcon, EnvelopeIcon,
   CheckIcon, CodeBracketIcon, FolderIcon, MicrophoneIcon, HomeIcon, MagnifyingGlassIcon, PaperAirplaneIcon, PaperClipIcon, PlusIcon, Squares2X2Icon, StopIcon, CubeIcon, WrenchScrewdriverIcon, TrashIcon, XMarkIcon, BookOpenIcon, ArrowsRightLeftIcon, CircleStackIcon, BeakerIcon,
@@ -154,6 +155,7 @@ export function App() {
   const [thread, setThread] = useState("all");
   const [agentTemplates, setAgentTemplates] = useState<Record<string, any>>({});
   const [workspace, setWorkspace] = useState("");
+  const [needsFolder, setNeedsFolder] = useState(false);
   const [demo, setDemo] = useState(false);
   const [mock, setMock] = useState(false);
   const [agents, setAgents] = useState<string[]>([]);
@@ -387,7 +389,7 @@ export function App() {
   const [search, setSearch] = useState(false);
   const [query, setQuery] = useState("");
   useEffect(() => {
-    window.army.info().then(x => { setWorkspace(x.workspace); setDemo(x.demo); setMock(!!(x as any).mock); setOperations(x.operations); setWorkspaces(x.workspaces); if (x.operations[0]) void resume(x.operations[0].id, true); });
+    window.army.info().then(x => { setNeedsFolder(!!(x as any).needsFolder); setWorkspace(x.workspace); setDemo(x.demo); setMock(!!(x as any).mock); setOperations(x.operations); setWorkspaces(x.workspaces); if (x.operations[0]) void resume(x.operations[0].id, true); });
     const off = window.army.on("message", (incoming: Message) => setMessages(v => {
       const m: Timed = { ...incoming, time: Date.now() };
       if (v.some(x => x.id === m.id)) return v;
@@ -470,7 +472,8 @@ export function App() {
     if (agents.length && !(await ask.confirm("Switch workspace?", { description: "Current agents will stop.", action: "Switch", danger: true }))) return;
     const next = await window.army.workspace(target);
     setWorkspaceMenu(false);
-    if (next !== workspace) {
+    const first = needsFolder; if (first && next !== workspace) setNeedsFolder(false);
+    if (first || next !== workspace) {
       setWorkspace(next); setAgents([]); setAttention({}); setMessages([]);
       setView("agent"); setAgentTemplates({}); setEnlistedBy({});
       const info = await window.army.info(); setOperations(info.operations); setWorkspaces(info.workspaces);
@@ -611,6 +614,14 @@ export function App() {
   const pickSearch = (id: string) => { if (id.startsWith("view:")) go(id.slice(5)); else { setSelected(id); setView("agent"); } setSearch(false); setQuery(""); };
   const viewTitle = showHome ? "New operation" : NAV.find(n => n[0] === view)?.[2];
 
+  if (needsFolder) return (
+    <div className="folder-gate">
+      <img src="./logo-dispatch.png" alt="" />
+      <h1>Open a folder</h1>
+      <p>Choose the project folder your agents will work in. You can switch folders later from the top bar.</p>
+      <Button className="primary" onClick={async () => { try { const next = await window.army.workspace(); const info = await window.army.info(); if (!(info as any).needsFolder) { setNeedsFolder(false); setWorkspace(next); setOperations(info.operations); setWorkspaces(info.workspaces); if (info.operations[0]) await resume(info.operations[0].id, true); } } catch (e) { setError(String(e)); } }}>Open folder</Button>
+    </div>
+  );
   return (
     <div className={"app " + (navigator.userAgent.includes("Mac") ? "os-mac" : "os-win") + (showSidebar && sidebar ? " with-sidebar" : "")}>
       <header className="topbar">
@@ -822,6 +833,7 @@ export function App() {
               <section className="settings-group">
                 <h2 className="label">General</h2>
                 <div className="setting-row"><div><b>Workspace</b><p>{workspace}</p></div><Button className="secondary" onClick={() => openWorkspace()}>Change</Button></div>
+                <div className="setting-row"><div><b>Language</b><p>Interface language. Chats and agent replies are not translated.</p></div><select aria-label="Language" value={getLang()} onChange={e => setLang(e.target.value as Lang)}><option value="en">English</option><option value="tr">Türkçe</option></select></div>
               </section>
               <RemoteSettings />
               <VoiceSettings openTools={() => setView("tools")} />

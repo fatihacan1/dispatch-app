@@ -106,10 +106,20 @@ const bossProviderFile = () => path.join(workspace, '.dispatch', 'boss-providers
 function bossProviders() { try { const data = JSON.parse(fs.readFileSync(bossProviderFile(), 'utf8')); return data && typeof data === 'object' && !Array.isArray(data) ? data : {}; } catch { return {}; } }
 const providerEnabled = (id) => bossProviders()[id]?.enabled !== false;
 const visibilityFile = () => path.join(workspace, '.dispatch', 'boss-visible-templates.json');
+// The boss is only offered templates whose CLI is on this computer; a built-in Codex coder on a machine without Codex
+// only ended in "codex" was not found" errors. Cached for a minute so an install is picked up.
+const installedCache = new Map();
+function providerInstalled(provider) {
+  if (demo) return true;
+  const command = provider === 'antigravity' ? 'agy' : provider === 'qoder' ? 'qodercli' : provider === 'local' || String(provider).startsWith('local:') ? 'opencode' : provider;
+  const hit = installedCache.get(command); if (hit && Date.now() - hit.at < 60000) return hit.ok;
+  let ok = true; try { resolveCommand(command); } catch { ok = false; }
+  installedCache.set(command, { ok, at: Date.now() }); return ok;
+}
 function bossVisibleTemplates() {
   let selected = null;
   try { const value = JSON.parse(fs.readFileSync(visibilityFile(), 'utf8')); if (Array.isArray(value)) selected = new Set(value); } catch {}
-  return templates.list(workspace).filter(t => t.extra?.role !== 'boss' && providerEnabled(t.provider) && (selected === null || selected.has(t.file)));
+  return templates.list(workspace).filter(t => t.extra?.role !== 'boss' && providerEnabled(t.provider) && providerInstalled(t.provider) && (selected === null || selected.has(t.file)));
 }
 function watch() {
   watcher?.close();
@@ -481,15 +491,17 @@ app.whenReady().then(() => {
   win.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:\/\//.test(url)) void shell.openExternal(url); return { action: 'deny' }; });
   if (process.env.VITE_DEV_SERVER_URL) win.loadURL(process.env.VITE_DEV_SERVER_URL); else win.loadFile(path.join(__dirname, '../dist/index.html'));
   const last = recentWorkspaces().find(w => { try { return fs.statSync(w).isDirectory(); } catch { return false; } });
-  if (last) workspace = last;
-  rememberWorkspace(); watch();
+  // First start of an installed app: no folder yet. The window asks for one instead of quietly using the install folder.
+  if (last) workspace = last; else if (app.isPackaged && !process.env.DISPATCH_TEST_HOME) needsFolder = true;
+  if (!needsFolder) { rememberWorkspace(); watch(); }
 });
 ipcMain.handle('workspace', async (_e, target) => { if (!target) { const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'] }); if (r.canceled) return workspace; target = r.filePaths[0]; } if (!fs.statSync(target).isDirectory()) throw new Error('Workspace is not a directory'); switchWorkspace(target); return workspace; });
-function switchWorkspace(target) { if (path.resolve(target) !== path.resolve(workspace)) { finishOperation(); stopAgents(); if (isMock(workspace) && !isMock(target)) { demo = process.argv.includes('--demo'); mockPrevious = null; } workspace = path.resolve(target); rememberWorkspace(); watch(); } }
-ipcMain.handle('info', () => ({ workspace, demo, mock: isMock(workspace), operations: listOperations(), workspaces: recentWorkspaces() }));
+let needsFolder = false;
+function switchWorkspace(target) { if (needsFolder || path.resolve(target) !== path.resolve(workspace)) { needsFolder = false; finishOperation(); stopAgents(); if (isMock(workspace) && !isMock(target)) { demo = process.argv.includes('--demo'); mockPrevious = null; } workspace = path.resolve(target); rememberWorkspace(); watch(); } }
+ipcMain.handle('info', () => ({ workspace, needsFolder, demo, mock: isMock(workspace), operations: listOperations(), workspaces: recentWorkspaces() }));
 ipcMain.handle('operations:list', () => listOperations());
 ipcMain.handle('operations:delete', (_e, id) => { if (!/^[\w-]+$/.test(id)) throw new Error('Invalid operation'); if (operation?.id === id) { stopAgents(); operation = null; } fs.unlinkSync(path.join(operationsDir(), id + '.json')); fs.rmSync(path.join(operationsDir(), id), { recursive: true, force: true }); return listOperations(); });
-ipcMain.handle('operations:resume', (_e, id) => { const op = listOperations().find(o => o.id === id); if (!op) throw new Error('Operation not found'); finishOperation(); stopAgents(); const messages = history(op); for (const a of op.agents) { if (a.name !== 'boss' && a.chatId) for (const m of messages) if (m.from === a.name || m.to === a.name) (m.chats ||= {})[a.name] = 'previous'; const dir = path.join(operationsDir(), op.id, 'chats', a.name); try { for (const file of fs.readdirSync(dir)) { if (a.name !== 'boss' && file !== a.chatId + '.json') continue; const chat = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8')); for (const item of chat.messages) { const m = messages.find(x => x.id === item.id); if (m) (m.chats ||= {})[a.name] = chat.id; } } } catch {} } if (op.segments?.length && op.segments.at(-1).end == null) op.segments.at(-1).end = logSize(); op.segments ||= []; op.segments.push({ start: logSize(), end: null }); operation = op; saveOperation(); try { for (const a of op.agents) if (!a.stopped) startAgent(a.name, a.template, a.enlistedBy, a); } catch (e) { stopAgents(); finishOperation(); throw e; } return { operation: op, messages, notes: op.agents.filter(a => !a.stopped && a.provider !== 'claude' && !(a.provider === 'codex' && a.sessionId)).map(a => ({ name: a.name, text: `${a.name}: started a fresh ${a.provider} session; prior conversation is shown in chat.` })) }; });
+ipcMain.handle('operations:resume', (_e, id) => { const op = listOperations().find(o => o.id === id); if (!op) throw new Error('Operation not found'); finishOperation(); stopAgents(); const messages = history(op); for (const a of op.agents) { if (a.name !== 'boss' && a.chatId) for (const m of messages) if (m.from === a.name || m.to === a.name) (m.chats ||= {})[a.name] = 'previous'; const dir = path.join(operationsDir(), op.id, 'chats', a.name); try { for (const file of fs.readdirSync(dir)) { if (a.name !== 'boss' && file !== a.chatId + '.json') continue; const chat = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8')); for (const item of chat.messages) { const m = messages.find(x => x.id === item.id); if (m) (m.chats ||= {})[a.name] = chat.id; } } } catch {} } if (op.segments?.length && op.segments.at(-1).end == null) op.segments.at(-1).end = logSize(); op.segments ||= []; op.segments.push({ start: logSize(), end: null }); operation = op; saveOperation(); const failed = []; for (const a of op.agents) if (!a.stopped) { try { startAgent(a.name, a.template, a.enlistedBy, a); } catch (e) { a.stopped = true; failed.push({ name: a.name, text: `${a.name} could not start: ${e.message}` }); } } saveOperation(); return { operation: op, messages, notes: [...failed, ...op.agents.filter(a => !a.stopped && a.provider !== 'claude' && !(a.provider === 'codex' && a.sessionId)).map(a => ({ name: a.name, text: `${a.name}: started a fresh ${a.provider} session; prior conversation is shown in chat.` }))] }; });
 const templates = require('./templates.cjs');
 ipcMain.handle('chats:list', (_e, name) => chats(name).filter(c => name === 'boss' || c.id === operation?.agents.find(a => a.name === name)?.chatId).map(c => ({ ...c, active: c.id === operation?.agents.find(a => a.name === name)?.chatId })));
 ipcMain.handle('chats:switch', (_e, name, id) => switchChat(name, id));
@@ -699,7 +711,10 @@ const telegram = require('./telegram.cjs').create({
   },
 });
 let tgWaiting = 0;
-telegram.onChange(s => notify('telegram', s));
+// The boss learns the Telegram commands (dispatch telegram owner ...) in its start prompt, but only if Telegram was
+// already connected then. Connected later, it never knew it could hand Telegram over itself: tell it now, once.
+let tgToldBoss = false;
+telegram.onChange(s => { notify('telegram', s); const on = telegram.connected(); if (on && !tgToldBoss && processes.has('boss')) { tgToldBoss = true; void sendMessage('boss', `Telegram is connected now (no reply needed).${telegramHelp('boss')}`, 'dispatch').catch(() => {}); } if (!on) tgToldBoss = false; });
 // Who answers Telegram in this operation: the boss unless the boss or the user handed it to another agent.
 function tgOwner() { const o = operation?.telegramOwner; return o && operation.agents.some(a => a.name === o) ? o : 'boss'; }
 function setTgOwner(name) {
@@ -933,7 +948,7 @@ ipcMain.handle('local-ai:choose-icon', async () => {
 });
 ipcMain.handle('local-ai:check', (_e, config) => localAI.check(config));
 ipcMain.handle('providers:list', () => providersLib.PROVIDERS.map(p => ({ id: p.id, name: p.name }))); 
-ipcMain.handle('providers:check', async (_e, id) => { if (id !== 'local' && !id.startsWith('local:')) return providersLib.check(resolveCommand, id); const config = localAI.read(id.startsWith('local:') ? decodeURIComponent(id.slice(6)) : undefined); let installed = true; try { resolveCommand('opencode'); } catch { installed = false; } const status = config && installed ? await localAI.check(config) : null; return { id, name: 'Local AI', installed, auth: status?.ok && status.matches ? 'signed-in' : 'error', detail: !installed ? 'OpenCode is required.' : !config ? 'Configure a local server in Providers.' : !status.ok ? 'Local server is offline.' : !status.matches ? 'Configured model was not found on the server.' : config.baseURL, models: config ? [config.model] : [] }; });
+ipcMain.handle('providers:check', async (_e, id) => { if (id !== 'local' && !id.startsWith('local:')) return providersLib.check(resolveCommand, id); const config = localAI.read(id.startsWith('local:') ? decodeURIComponent(id.slice(6)) : undefined); let installed = true; try { resolveCommand('opencode'); } catch { installed = false; } const status = config && installed ? await localAI.check(config) : null; return { id, name: config?.name || 'Custom AI', installed, auth: status?.ok && status.matches ? 'signed-in' : 'error', detail: !installed ? 'OpenCode is required.' : !config ? 'Configure a custom AI provider in Providers.' : !status.ok ? status.error || 'Server is offline.' : !status.matches ? 'Configured model was not found on the server.' : config.baseURL, models: config ? [config.model] : [] }; });
 ipcMain.handle('providers:update-info', (_e, id, version) => providersLib.updateInfo(id, version));
 ipcMain.handle('providers:models', (_e, id) => providersLib.refreshModels(resolveCommand, id));
 ipcMain.handle('providers:action', (_e, id, kind) => {
@@ -968,6 +983,7 @@ app.on('before-quit', () => { for (const s of shells.values()) try { s.terminal.
 const serversLib = require('./servers.cjs');
 const { safeStorage } = require('electron');
 const serverVault = { seal: text => { if (!safeStorage.isEncryptionAvailable()) throw new Error('This computer cannot store passwords securely'); return safeStorage.encryptString(text).toString('base64'); }, open: s => safeStorage.decryptString(Buffer.from(s, 'base64')) };
+localAI.setVault(serverVault);
 const serverStore = () => serversLib.create(path.join(globalDir(), 'servers.json'), serverVault);
 const serverPassword = id => { const st = serverStore(), s = st.get(id); return s ? st.password(s) : ''; };
 ipcMain.handle('servers:list', () => serverStore().list());

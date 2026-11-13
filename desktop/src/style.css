@@ -1153,3 +1153,8 @@ input[type=checkbox]:focus-visible { outline: 2px solid var(--focus); outline-of
 
 .ide-keys { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 14px; max-width: 100%; }
 .ide-keys span { white-space: nowrap; }
+
+.folder-gate { height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 16px; text-align: center; background: var(--bg, #0b0b0c); }
+.folder-gate img { width: 64px; height: 64px; }
+.folder-gate h1 { margin: 0; font-size: 22px; }
+.folder-gate p { margin: 0 0 8px; max-width: 420px; opacity: .7; }

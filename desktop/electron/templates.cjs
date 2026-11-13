@@ -4,7 +4,7 @@ const path = require('node:path');
 const os = require('node:os');
 
 const MODELS = {
-  claude: ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'],
+  claude: ['claude-fable-5-2', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'],
   codex: ['gpt-6.1-terra', 'gpt-6.1-sol'],
   antigravity: ['default'],
   opencode: ['default'],

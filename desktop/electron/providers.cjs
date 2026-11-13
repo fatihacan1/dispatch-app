@@ -11,7 +11,7 @@ const CACHE = path.join(process.env.DISPATCH_HOME || os.homedir(), '.dispatch', 
 const PROVIDERS = [
   { id: 'claude', name: 'Claude Code', bin: 'claude', pkg: '@anthropic-ai/claude-code', update: 'claude update', status: ['auth', 'status', '--json'], login: ['auth', 'login'], logout: ['auth', 'logout'],
     install: WIN ? 'irm https://claude.ai/install.ps1 | iex' : 'curl -fsSL https://claude.ai/install.sh | bash', uninstall: 'npm uninstall -g @anthropic-ai/claude-code',
-    known: ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'] },
+    known: ['claude-fable-5-2', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'] },
   { id: 'codex', name: 'Codex', bin: 'codex', status: ['login', 'status'], login: ['login'], logout: ['logout'],
     pkg: '@openai/codex', update: 'npm install -g @openai/codex@latest', install: 'npm install -g @openai/codex', uninstall: 'npm uninstall -g @openai/codex', known: ['gpt-6.1-terra', 'gpt-6.1-sol'] },
   { id: 'antigravity', name: 'Antigravity', bin: 'agy', update: 'agy update', status: ['models'], login: [], logout: null, models: ['models'],
@@ -115,7 +115,7 @@ async function check(resolveCommand, id) {
   const status = p.status ? await run(spec, p.status, 12000) : null;
   const a = parseAuth(p, status || { ok: true, out: '' });
   const cache = readCache();
-  let models = cache[id]?.models?.length ? cache[id].models : (id === 'codex' && codexCachedModels().length ? codexCachedModels() : p.known);
+  let models = withKnown(p, cache[id]?.models?.length ? cache[id].models : (id === 'codex' && codexCachedModels().length ? codexCachedModels() : p.known));
   if (a.auth === 'signed-in' && p.models) models = await refreshModels(resolveCommand, id, id === 'antigravity' ? status : undefined);
   return { id, name: p.name, installed: true, version, path: spec.args.at(-1) || spec.file, ...a, models, canLogout: !!p.logout || (id === 'antigravity' && WIN) };
 }
@@ -168,6 +168,9 @@ function actionSpec(resolveCommand, id, kind) {
   return { file: base.file, args: [...base.args, ...args] };
 }
 
-function allModels() { const c = readCache(); const out = {}; for (const p of PROVIDERS) out[p.id] = c[p.id]?.models?.length ? c[p.id].models : (p.id === 'codex' && codexCachedModels().length ? codexCachedModels() : p.known); return out; }
+// Models a CLI reported earlier are kept, and the known ones always added: a model released after the last refresh
+// (Claude Fable) was missing from the dropdown until the user pressed Refresh models.
+function withKnown(p, models) { return [...new Set([...p.known.filter(m => m !== 'default' || !models.length), ...models])]; }
+function allModels() { const c = readCache(); const out = {}; for (const p of PROVIDERS) out[p.id] = withKnown(p, c[p.id]?.models?.length ? c[p.id].models : (p.id === 'codex' && codexCachedModels().length ? codexCachedModels() : p.known)); return out; }
 
 module.exports = { PROVIDERS, EFFORTS, check, refreshModels, actionSpec, allModels, updateInfo, parseAuth, parseModels };
