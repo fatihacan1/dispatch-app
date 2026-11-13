@@ -3,6 +3,7 @@ import { BookmarkIcon, ChevronRightIcon, CommandLineIcon, EllipsisHorizontalIcon
 import { Button, ProviderIcon, StatusDot, type Tone } from "../components/common";
 import type { Message } from "../lib/types";
 import { UsageChips } from "../components/Usage";
+import { TelegramMark, useTelegramOwner } from "./ToolsExtra";
 
 export type AgentInfo = { name: string; provider: string; model: string; template?: string; enlistedBy?: string; tone: Tone; status: string };
 type Props = {
@@ -68,6 +69,7 @@ export function Sidebar(p: Props) {
   const active = outputs.filter(o => o.kind === "download" && !o.done || o.kind === "job" && o.status === "queued").length;
   // Fixed position: the Team section clips overflow, so an absolute menu would be cut off.
   const [menuPos, setMenuPos] = useState<React.CSSProperties>({});
+  const [tgOwner, setTgOwner] = useTelegramOwner();
   const openMenu = (name: string, el: HTMLElement) => {
     const r = el.getBoundingClientRect(); const right = window.innerWidth - r.right;
     setMenuPos(r.bottom + 175 > window.innerHeight ? { position: "fixed", top: "auto", bottom: window.innerHeight - r.top + 4, right, transformOrigin: "bottom right" } : { position: "fixed", top: r.bottom + 4, right });
@@ -82,7 +84,7 @@ export function Sidebar(p: Props) {
           <div className="team-row" key={a.name} onContextMenu={e => { e.preventDefault(); openMenu(a.name, e.currentTarget.querySelector(".row-more") || e.currentTarget); }} onKeyDown={e => { if (e.key === "Delete" && a.name !== "boss") { e.preventDefault(); p.act(a.name, "dismiss"); } }}>
             <Button className={"list-row agent " + (p.activeView && p.selected === a.name ? "selected" : "")} onClick={() => p.select(a.name)} aria-label={`${a.name} · ${a.model} · ${a.status.toLowerCase()}`} title={a.status}>
               <ProviderIcon className="provider-icon row-icon" provider={a.provider} alt="" />
-              <span className="row-text"><b>{a.name}</b><small>{a.enlistedBy ? `by ${a.enlistedBy} · ` : ""}{a.model}</small></span>
+              <span className="row-text"><b>{a.name}{tgOwner === a.name && <TelegramMark title="Answers Telegram" />}</b><small>{a.enlistedBy ? `by ${a.enlistedBy} · ` : ""}{a.model}</small></span>
               <StatusDot tone={a.tone} label={a.status} />
             </Button>
             <button type="button" className="icon-button row-more" aria-label={`Actions for ${a.name}`} aria-expanded={p.menu === a.name} onClick={e => p.menu === a.name ? p.setMenu(null) : openMenu(a.name, e.currentTarget)}><EllipsisHorizontalIcon /></button>
@@ -90,6 +92,7 @@ export function Sidebar(p: Props) {
               <Button className="menu-item" onClick={() => p.openTerminal(a.name)}>Open terminal</Button>
               <Button className="menu-item" onClick={() => p.act(a.name, "model")}>Change model…</Button>
               <Button className="menu-item" onClick={() => p.act(a.name, "template")}>Save as template…</Button>
+              {tgOwner !== null && tgOwner !== a.name && <Button className="menu-item" onClick={() => { p.setMenu(null); void setTgOwner(a.name); }}><TelegramMark />Answer Telegram here</Button>}
               <Button className="menu-item" onClick={() => p.act(a.name, a.status === "Stopped" ? "restart" : "stop")}>{a.status === "Stopped" ? "Restart" : "Stop"}</Button>
               {a.name !== "boss" ? <Button className="menu-item danger" onClick={() => p.act(a.name, "dismiss")}>Dismiss</Button> : <Button className="menu-item" onClick={p.changeBoss}>Change boss…</Button>}
             </div>}

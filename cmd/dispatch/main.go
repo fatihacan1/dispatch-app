@@ -376,24 +376,45 @@ func main() {
 		fatal(fmt.Errorf("Dispatch did not answer; schedules need the Dispatch app to be running"))
 	case "telegram":
 		// Boss only: send a message or a file to the user's Telegram chat (Dispatch checks access).
-		if len(args) < 2 || args[1] != "send" {
-			fatal(fmt.Errorf("usage: dispatch telegram send --text <message> [--file <path>]"))
+		usage := fmt.Errorf("usage: dispatch telegram send --text <message> [--file <path>] | owner <agent> | profile [--photo <path>] [--name <name>] [--description <text>] [--about <text>]")
+		if len(args) < 2 {
+			fatal(usage)
 		}
-		f := flag.NewFlagSet("telegram send", flag.ExitOnError)
-		text := f.String("text", "", "message text (caption when --file is given)")
-		file := f.String("file", "", "image or file to send")
-		_ = f.Parse(args[2:])
-		if *text == "" && f.NArg() > 0 {
-			*text = strings.Join(f.Args(), " ")
-		}
-		if *text == "" && *file == "" {
-			fatal(fmt.Errorf("give --text and/or --file"))
+		req := map[string]any{"action": args[1]}
+		switch args[1] {
+		case "send":
+			f := flag.NewFlagSet("telegram send", flag.ExitOnError)
+			text := f.String("text", "", "message text (caption when --file is given)")
+			file := f.String("file", "", "image, video, audio or any file to send")
+			_ = f.Parse(args[2:])
+			if *text == "" && f.NArg() > 0 {
+				*text = strings.Join(f.Args(), " ")
+			}
+			if *text == "" && *file == "" {
+				fatal(fmt.Errorf("give --text and/or --file"))
+			}
+			req["text"], req["file"] = *text, *file
+		case "owner":
+			if len(args) < 3 {
+				fatal(fmt.Errorf("usage: dispatch telegram owner <agent>  (boss to take it back)"))
+			}
+			req["agent"] = args[2]
+		case "profile":
+			f := flag.NewFlagSet("telegram profile", flag.ExitOnError)
+			photo := f.String("photo", "", "new profile photo (jpg or png)")
+			name := f.String("name", "", "bot display name")
+			desc := f.String("description", "", "text shown in an empty chat")
+			about := f.String("about", "", "short text on the bot's profile")
+			_ = f.Parse(args[2:])
+			req["photo"], req["name"], req["description"], req["about"] = *photo, *name, *desc, *about
+		default:
+			fatal(usage)
 		}
 		from := envName("DISPATCH_AGENT", "MYARMY_AGENT")
 		if from == "" {
 			from = "user"
 		}
-		data, e := json.Marshal(map[string]any{"action": "send", "text": *text, "file": *file})
+		data, e := json.Marshal(req)
 		fatal(e)
 		id := bus.NewID()
 		fatal(b.Send(bus.Message{ID: id, From: from, To: "orchestrator", Kind: "telegram", Text: string(data)}))

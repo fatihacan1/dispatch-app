@@ -161,7 +161,7 @@ function watch() {
       const recorded = recordMessage(msg); notify('message', recorded);
       if (msg.kind === 'ask-wait') pendingAsks.add(msg.id);
       if (msg.reply_to && pendingAsks.delete(msg.reply_to)) return;
-      if (msg.to === 'you' || msg.to === 'user') { const from = processes.get(msg.from); if (from) from.toldYou = true; fs.unlinkSync(file); return; }
+      if (msg.to === 'you' || msg.to === 'user') { const from = processes.get(msg.from); if (from) from.toldYou = true; tgForward(msg); fs.unlinkSync(file); return; }
       const agent = processes.get(msg.to);
       if (!agent) {
         // Without a loaded roster (launch) agents are not started yet: keep the file and stay quiet.
@@ -281,7 +281,7 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
   const catalogue = bossVisibleTemplates().map(t => `${t.name}: ${t.description} (${t.provider}, ${t.model || 'default'}; Dispatch tools: ${mcp.selected(t).join(', ') || 'none'})`).join('\n');
   const prompt = `${template.body || ''}\nA workspace symbol index is available: run dispatch index search <name> to locate functions and types with file paths and line numbers before opening targeted code. The index may lag recent edits; verify source files.\nYou are ${name}. You report to ${name === 'boss' ? 'you (the user)' : enlistedBy && enlistedBy !== 'user' ? enlistedBy : 'boss'}. Squad: ${[...new Set([...operation.agents.map(a => a.name), ...rosterHint, name])].map(n => `${n} (${operation.agents.find(a => a.name === n)?.stopped ? 'stopped' : processes.has(n) || n === name ? 'running' : 'starting'})`).join(', ')}. ${direct
     ? `The user reads your replies in the Dispatch chat exactly as you write them here, rendered as Markdown. ${name === 'boss' ? 'To talk to the user' : 'When a message is from you (the user)'}, simply write your answer as your normal final reply: use short paragraphs, headings, lists, tables and code blocks where they help. Never run dispatch send --to you; that would show the user a second, unformatted copy. Use dispatch send only for other agents: when another agent gave you the task or you need its input, report with dispatch send --to <agent> "<report>".`
-    : `When you finish a task or need input, report to the requester using dispatch send --to <requester> "<short report>". For a message from you, run dispatch send --to you "<short report>"; for a message from another agent, use that agent's name.`} A message with line breaks, quotes or backticks gets cut by the shell: write it to a file and send it with dispatch send --to <agent> --file <path> (dispatch spawn takes --task-file <path> the same way). Keep reports to other agents short. Use dispatch list to see the squad.${name === 'boss' ? `\nAvailable providers (plan and notes are supplied by the user):\n${providerInfo}\nTemplate catalogue:\n${catalogue}\nUse dispatch spawn --template <name> --name <id> --task <task> and dispatch template create --name <name> --provider <provider> --description <description> --role <prompt>.\n${SCHEDULE_HELP}${telegramHelp()}` : ''}\nShared outputs: save every finished deliverable (images, video, audio, documents, exports) in ${path.join(workspace, '.dispatch', 'outputs', name)} so the user and the other agents can find it. Run dispatch outputs [agent] to see what the squad has produced and reuse those files by path.${memoryText}`;
+    : `When you finish a task or need input, report to the requester using dispatch send --to <requester> "<short report>". For a message from you, run dispatch send --to you "<short report>"; for a message from another agent, use that agent's name.`} A message with line breaks, quotes or backticks gets cut by the shell: write it to a file and send it with dispatch send --to <agent> --file <path> (dispatch spawn takes --task-file <path> the same way). Keep reports to other agents short. Use dispatch list to see the squad.${name === 'boss' ? `\nAvailable providers (plan and notes are supplied by the user):\n${providerInfo}\nTemplate catalogue:\n${catalogue}\nUse dispatch spawn --template <name> --name <id> --task <task> and dispatch template create --name <name> --provider <provider> --description <description> --role <prompt>.\n${SCHEDULE_HELP}${telegramHelp()}` : (tgOwner() === name ? telegramHelp(name) : '')}\nShared outputs: save every finished deliverable (images, video, audio, documents, exports) in ${path.join(workspace, '.dispatch', 'outputs', name)} so the user and the other agents can find it. Run dispatch outputs [agent] to see what the squad has produced and reuse those files by path.${memoryText}`;
   if (!saved) { saved = { name, template, provider, model: template.model || '', enlistedBy }; operation.agents.push(saved); createChat(saved); resumeSession = false; } else if (!saved.chatId) { const previousSession = saved.sessionId; const chat = createChat(saved); if (previousSession) { chat.sessionId = previousSession; saved.sessionId = previousSession; writeChat(name, chat); saveOperation(); } }
   const session = saved.sessionId;
   // Claude can only resume a session it has written down. An agent that never got a message has none yet
@@ -670,11 +670,15 @@ ipcMain.handle('schedules:run-now', (_e, id) => {
 const telegram = require('./telegram.cjs').create({
   dir: globalDir(),
   log: t => console.log(t),
-  onMessage: async text => {
-    if (!operation || !operation.agents.some(a => a.name === 'boss')) throw new Error(`No team is open in ${path.basename(workspace)}. Start a chat with the boss in Dispatch, or /use another project.`);
-    if (!processes.has('boss')) agentAction('boss', 'restart');
+  onMessage: async (text, files = []) => {
+    const owner = tgOwner();
+    if (!operation || !operation.agents.some(a => a.name === owner)) throw new Error(`No team is open in ${path.basename(workspace)}. Start a chat with the boss in Dispatch, or /use another project.`);
+    if (!processes.has(owner)) agentAction(owner, 'restart');
     tgWaiting = Date.now();
-    await sendMessage('boss', `[via Telegram, keep the answer short and plain text] ${text}`, 'you');
+    const saved = [];
+    for (const f of files) { try { saved.push(await telegram.download(f, path.join(workspace, '.dispatch', 'telegram'))); } catch (e) { saved.push(`(not received: ${e.message})`); } }
+    const body = [text, saved.length ? `Files from the user (open them with your tools): ${saved.join(', ')}` : ''].filter(Boolean).join('\n');
+    await sendMessage(owner, `[via Telegram, keep the answer short and plain text] ${body}`, 'you');
   },
   // /projects and /use <n|name>: one Dispatch shows one project at a time; switch it from the phone.
   onCommand: async (cmd, arg) => {
@@ -696,25 +700,53 @@ const telegram = require('./telegram.cjs').create({
 });
 let tgWaiting = 0;
 telegram.onChange(s => notify('telegram', s));
-// Boss replies go back to Telegram while a Telegram conversation is going (30 min); notices that need the user always go.
+// Who answers Telegram in this operation: the boss unless the boss or the user handed it to another agent.
+function tgOwner() { const o = operation?.telegramOwner; return o && operation.agents.some(a => a.name === o) ? o : 'boss'; }
+function setTgOwner(name) {
+  if (!operation || !operation.agents.some(a => a.name === name)) throw new Error(`No agent ${name} in this operation.`);
+  const before = tgOwner(); operation.telegramOwner = name === 'boss' ? undefined : name; saveOperation(); notify('telegram-owner', tgOwner());
+  if (before !== name) {
+    if (processes.has(name)) void sendMessage(name, `You now answer the user's Telegram messages.${telegramHelp(name)}`, 'dispatch').catch(() => {});
+    if (telegram.connected()) void telegram.send(`[${path.basename(workspace)}] Telegram is now answered by ${name}.`).catch(() => {});
+  }
+  return tgOwner();
+}
+// The owner's replies go back to Telegram while a Telegram conversation is going (30 min); notices that need the user always go.
 function tgForward(msg) {
   if (!telegram.connected()) return;
-  const fromPhone = msg.from === 'boss' && Date.now() - tgWaiting < 30 * 60e3;
-  const where = `[${path.basename(workspace)}]`;
-  if (fromPhone || msg.from === 'dispatch') void telegram.send(msg.from === 'boss' ? `${where} ${msg.text}` : `${where} Dispatch: ${msg.text}`).catch(() => {});
+  const owner = tgOwner();
+  const fromPhone = msg.from === owner && Date.now() - tgWaiting < 30 * 60e3;
+  const where = `[${path.basename(workspace)}${owner !== 'boss' ? ` · ${owner}` : ''}]`;
+  if (fromPhone || msg.from === 'dispatch') void telegram.send(msg.from === owner ? `${where} ${msg.text}` : `${where} Dispatch: ${msg.text}`).catch(() => {});
 }
-function telegramHelp() {
-  return telegram.connected() ? '\nTelegram: the user is connected on their phone. Messages starting with [via Telegram] come from there and your answer goes back automatically. To send something yourself (a schedule result, a finished file), run dispatch telegram send --text "<message>" [--file <path>]. Use it when the user asks for it or a schedule says so.' : '';
+function telegramHelp(name = 'boss') {
+  if (!telegram.connected()) return '';
+  const owner = tgOwner();
+  return `\nTelegram: the user is connected on their phone; ${owner === name ? 'you answer it' : `${owner} answers it now`}. Messages starting with [via Telegram] come from there (files they send are saved and listed with their paths) and your answer goes back automatically. Send text or any file yourself (image, video, audio, document) with dispatch telegram send --text "<message>" [--file <path>]. Change the bot's own profile with dispatch telegram profile [--photo <jpg|png>] [--name "<name>"] [--description "<text>"] [--about "<short text>"].${name === 'boss' ? ' Hand Telegram to another agent (e.g. a cheap one that watches it) with dispatch telegram owner <agent>, and back with dispatch telegram owner boss.' : ''}`;
 }
 async function handleTelegram(msg) {
   let req = {}; try { req = JSON.parse(msg.text); } catch {}
   try {
-    if (!['boss', 'user', 'you'].includes(msg.from)) throw new Error('Only the boss can send to Telegram.');
-    if (req.file) { const f = path.resolve(workspace, String(req.file)); if (!fs.existsSync(f)) throw new Error(`No file ${f}.`); await telegram.sendFile(f, req.text || ''); }
-    else await telegram.send(req.text);
-    replySchedule(msg.id, 'Sent to Telegram.');
+    const boss = ['boss', 'user', 'you'].includes(msg.from), owner = msg.from === tgOwner();
+    let out = 'Sent to Telegram.';
+    if (req.action === 'owner') {
+      if (!boss) throw new Error('Only the boss can hand Telegram to another agent.');
+      out = `Telegram is now answered by ${setTgOwner(String(req.agent || 'boss'))}.`;
+    } else if (req.action === 'profile') {
+      if (!boss && !owner) throw new Error('Only the boss or the Telegram owner can change the bot.');
+      const photo = req.photo ? path.resolve(workspace, String(req.photo)) : '';
+      if (photo && !fs.existsSync(photo)) throw new Error(`No file ${photo}.`);
+      out = await telegram.setProfile({ photo, name: req.name, description: req.description, about: req.about });
+    } else {
+      if (!boss && !owner) throw new Error('Only the boss or the Telegram owner can send to Telegram.');
+      if (req.file) { const f = path.resolve(workspace, String(req.file)); if (!fs.existsSync(f)) throw new Error(`No file ${f}.`); await telegram.sendFile(f, req.text || ''); }
+      else await telegram.send(req.text);
+    }
+    replySchedule(msg.id, out);
   } catch (e) { replySchedule(msg.id, `ERROR: ${e.message}`); }
 }
+ipcMain.handle('telegram:owner', () => tgOwner());
+ipcMain.handle('telegram:set-owner', (_e, name) => setTgOwner(String(name)));
 app.whenReady().then(() => telegram.start());
 app.on('before-quit', () => telegram.stop());
 const updater = require('./updater.cjs').create({ notify, onBeforeInstall: () => { quitting = true; } });

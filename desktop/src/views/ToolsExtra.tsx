@@ -62,6 +62,23 @@ export function ScheduleTool() {
   </>;
 }
 
+/** Telegram brand mark in its blue, for the Team list. */
+export const TelegramMark = ({ title }: { title?: string }) => <span className="tg-mark tg-blue" role={title ? "img" : undefined} aria-label={title} title={title} aria-hidden={title ? undefined : true} dangerouslySetInnerHTML={{ __html: telegramSvg.replace("<svg", '<svg fill="currentColor"').replace(/<title>.*?<\/title>/, "") }} />;
+
+/** Who answers Telegram in the open operation, or null when Telegram is not connected. */
+export function useTelegramOwner(): [string | null, (name: string) => Promise<void>] {
+  const [owner, setOwner] = useState<string | null>(null);
+  useEffect(() => {
+    const load = async () => { try { const s = await army().telegram.status(); setOwner(s.linked ? await army().telegram.owner() : null); } catch { setOwner(null); } };
+    void load();
+    const offA = army().on("telegram", () => void load());
+    const offB = army().on("telegram-owner", (o: string) => setOwner(v => v === null ? v : o));
+    const t = window.setInterval(load, 15000);
+    return () => { offA(); offB(); clearInterval(t); };
+  }, []);
+  return [owner, async (name: string) => { setOwner(await army().telegram.setOwner(name)); }];
+}
+
 type Tg = { configured: boolean; bot: { username: string; name: string } | null; linked: boolean; chatName: string; polling: boolean; standby?: boolean; error: string };
 
 /** Tools > Telegram: BotFather in one click, paste the token, tap Start in the bot. */
@@ -85,7 +102,7 @@ export function TelegramTool() {
   const run = async (fn: () => Promise<any>) => { setBusy(true); setError(""); setNote(""); try { const r = await fn(); if (r && typeof r === "object" && "configured" in r) setS(r); } catch (e) { setError(clean(e)); } finally { setBusy(false); } };
   const label = !s ? "Checking…" : s.linked ? (s.standby ? "Another Dispatch window is answering" : s.error ? "Offline" : "Connected") : s.configured ? "Waiting for your chat" : "Not connected";
   return <div className="prov-row tool-tg">
-    <span className="prov-icon tool-mark" aria-hidden="true" dangerouslySetInnerHTML={{ __html: telegramSvg.replace("<svg", '<svg fill="currentColor"') }} />
+    <span className="prov-icon tool-mark tg-blue" aria-hidden="true" dangerouslySetInnerHTML={{ __html: telegramSvg.replace("<svg", '<svg fill="currentColor"') }} />
     <div className="prov-main">
       <div className="prov-title"><b>Telegram</b><StatusDot tone={s?.linked && !s.error ? "working" : "idle"} label={label} /></div>
       {!s?.configured && <>

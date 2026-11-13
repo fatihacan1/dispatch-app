@@ -72,13 +72,46 @@ function create({ dir, onMessage, onCommand = async () => null, log = () => {} }
     if (!cfg.chatId) throw new Error('Telegram is not connected. Connect it in Dispatch under Tools, Telegram.');
     const data = fs.readFileSync(filePath);
     if (data.length > 50 * 1024 * 1024) throw new Error('Telegram bots can send files up to 50 MB.');
-    const photo = IMAGE_EXT.test(filePath) && data.length < 10 * 1024 * 1024;
+    // Shown inline in the chat when Telegram knows the kind; anything else goes as a file.
+    const kind = IMAGE_EXT.test(filePath) && !/\.gif$/i.test(filePath) && data.length < 10 * 1024 * 1024 ? ['sendPhoto', 'photo']
+      : /\.gif$/i.test(filePath) ? ['sendAnimation', 'animation']
+      : /\.(mp4|mov|webm)$/i.test(filePath) ? ['sendVideo', 'video']
+      : /\.ogg$/i.test(filePath) ? ['sendVoice', 'voice']
+      : /\.(mp3|m4a|wav|flac)$/i.test(filePath) ? ['sendAudio', 'audio'] : ['sendDocument', 'document'];
     const form = new FormData();
     form.append('chat_id', String(cfg.chatId));
     if (caption) form.append('caption', String(caption).slice(0, 1000));
-    form.append(photo ? 'photo' : 'document', new Blob([data]), path.basename(filePath));
-    await api(photo ? 'sendPhoto' : 'sendDocument', form);
+    form.append(kind[1], new Blob([data]), path.basename(filePath));
+    await api(kind[0], form);
     return true;
+  }
+
+  /** Saves a file the user sent into `dir`; returns the path. Bots can download up to 20 MB. */
+  async function download(f, dir) {
+    if (f.size > 20 * 1024 * 1024) throw new Error(`${f.name} is larger than 20 MB, the limit for bots.`);
+    const info = await api('getFile', { file_id: f.id });
+    const res = await fetch(`https://api.telegram.org/file/bot${cfg.token}/${info.file_path}`);
+    if (!res.ok) throw new Error(`Download failed (${res.status}).`);
+    const ext = path.extname(info.file_path || ''), base = path.basename(f.name).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
+    const out = path.join(dir, `${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}-${path.extname(base) ? base : base + ext}`);
+    fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(out, Buffer.from(await res.arrayBuffer()));
+    return out;
+  }
+  /** The bot's own profile: photo (jpg/png), name, description. */
+  async function setProfile({ photo, name, description, about }) {
+    if (!cfg.token) throw new Error('Telegram is not connected.');
+    const done = [];
+    if (photo) {
+      const form = new FormData();
+      form.append('photo', JSON.stringify({ type: 'static', photo: 'attach://pic' }));
+      form.append('pic', new Blob([fs.readFileSync(photo)]), path.basename(photo));
+      await api('setMyProfilePhoto', form); done.push('photo');
+    }
+    if (name) { await api('setMyName', { name: String(name).slice(0, 64) }); cfg.bot = { ...cfg.bot, name }; write(cfg); done.push('name'); }
+    if (description) { await api('setMyDescription', { description: String(description).slice(0, 512) }); done.push('description'); }
+    if (about) { await api('setMyShortDescription', { short_description: String(about).slice(0, 120) }); done.push('about text'); }
+    if (!done.length) throw new Error('Give --photo, --name, --description and/or --about.');
+    return `Updated the bot's ${done.join(', ')}.`;
   }
 
   async function handle(update) {
@@ -94,10 +127,14 @@ function create({ dir, onMessage, onCommand = async () => null, log = () => {} }
     }
     if (m.chat.id !== cfg.chatId) { await api('sendMessage', { chat_id: m.chat.id, text: 'This bot is private.' }).catch(() => {}); return; }
     if (start) { await api('sendMessage', { chat_id: m.chat.id, text: 'Already connected. Write your message for the boss. /projects lists your projects, /use <number> switches.' }).catch(() => {}); return; }
-    if (!text) { await api('sendMessage', { chat_id: m.chat.id, text: 'Only text messages reach the boss for now.' }).catch(() => {}); return; }
+    // Photos, files, voice notes, videos: passed on as files the agent can open.
+    const files = [];
+    if (m.photo?.length) files.push({ id: m.photo.at(-1).file_id, name: `photo-${m.message_id}.jpg` });
+    for (const [k, ext] of [['document', ''], ['video', '.mp4'], ['voice', '.ogg'], ['audio', '.mp3'], ['video_note', '.mp4'], ['animation', '.mp4']]) if (m[k]) files.push({ id: m[k].file_id, name: m[k].file_name || `${k}-${m.message_id}${ext}`, size: m[k].file_size });
+    if (!text && !files.length) { await api('sendMessage', { chat_id: m.chat.id, text: 'That kind of message is not supported. Send text, a photo, a file, a voice note or a video.' }).catch(() => {}); return; }
     const cmd = text.match(/^\/(\w+)(?:@\w+)?\s*([\s\S]*)$/);
     if (cmd) { try { const r = await onCommand(cmd[1].toLowerCase(), cmd[2].trim()); if (r) { await send(r); return; } } catch (e) { await send(e.message).catch(() => {}); return; } }
-    try { await onMessage(text); } catch (e) { await send(`Could not reach the boss: ${e.message}`).catch(() => {}); }
+    try { await onMessage(text, files); } catch (e) { await send(`Could not reach the boss: ${e.message}`).catch(() => {}); }
   }
 
   async function loop() {
@@ -123,7 +160,7 @@ function create({ dir, onMessage, onCommand = async () => null, log = () => {} }
   function start() { if (running || !cfg.token) return; running = true; void loop(); changed(); }
   function stop() { running = false; try { abort?.abort(); } catch {} dropLock(); }
 
-  return { status, setToken, linkUrl, disconnect, unlink, send, sendFile, start, stop, onChange: fn => { listeners.add(fn); return () => listeners.delete(fn); }, connected: () => !!cfg.chatId };
+  return { status, setToken, linkUrl, disconnect, unlink, send, sendFile, download, setProfile, start, stop, onChange: fn => { listeners.add(fn); return () => listeners.delete(fn); }, connected: () => !!cfg.chatId };
 }
 
 const looksLikeToken = t => TOKEN_RE.test(String(t || '').trim());
