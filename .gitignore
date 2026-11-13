@@ -1,4 +1,4 @@
-﻿/myarmy.exe
+/myarmy.exe
 /myarmy
 *.exe
 dist/
@@ -10,3 +10,5 @@ dist/
 .myarmy/
 
 .DS_Store
+desktop/e2e/screens/
+ai-api.md
