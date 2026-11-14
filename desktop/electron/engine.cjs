@@ -353,7 +353,7 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
   const providerSettings = bossProviders();
   const providerInfo = [...providersLib.PROVIDERS.map(p => ({ id: p.id, name: p.name })), { id: 'local', name: 'Local AI' }].filter(p => providerEnabled(p.id)).map(p => { const settings = providerSettings[p.id] || {}; return `${p.name} (${p.id})${settings.plan && settings.plan !== 'unknown' ? ' · ' + settings.plan : ''}${settings.note ? ' · ' + settings.note : ''}`; }).join('\n');
   // Claude and Codex keep a transcript Dispatch can read, so their own replies go to the chat as written.
-  const direct = !demo && ['claude', 'codex'].includes(provider);
+  const direct = !demo && ['claude', 'codex', 'antigravity'].includes(provider);
   const catalogue = bossVisibleTemplates().map(t => `${t.name}: ${t.description} (${t.provider}, ${t.model || 'default'}; Dispatch tools: ${mcp.selected(t).join(', ') || 'none'})`).join('\n');
   const prompt = `${template.body || ''}\nCode index (saves tokens): this workspace has a symbol index. Reading whole files and running broad searches costs many tokens, so look things up in the index first: to find a function, class, type or component, run dispatch index search <name>; it returns file paths and line numbers. Then read only those lines (offset/limit), not the whole file. If the command fails, finds nothing, or you need text that is not a symbol name, fall back to your usual way (grep, glob, reading files). The index may lag edits made in the last seconds, so check the lines you open.\nYou are ${name}. You report to ${name === 'boss' ? 'you (the user)' : enlistedBy && enlistedBy !== 'user' ? enlistedBy : 'boss'}. Squad: ${[...new Set([...operation.agents.map(a => a.name), ...rosterHint, name])].map(n => `${n} (${operation.agents.find(a => a.name === n)?.stopped ? 'stopped' : processes.has(n) || n === name ? 'running' : 'starting'})`).join(', ')}. ${direct
     ? `The user reads your replies in the Dispatch chat exactly as you write them here, rendered as Markdown. ${name === 'boss' ? 'To talk to the user' : 'When a message is from you (the user)'}, simply write your answer as your normal final reply: use short paragraphs, headings, lists, tables and code blocks where they help. Never run dispatch send --to you; that would show the user a second, unformatted copy. Use dispatch send only for other agents: when another agent gave you the task or you need its input, report with dispatch send --to <agent> "<report>".`
@@ -407,7 +407,7 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
       // the user; another agent does when the user was the one who wrote to it.
       const forYou = name === 'boss' || ['you', 'user'].includes(agent.lastFrom);
       if (direct && e.final && forYou && !agent.toldYou) { dropLastText = agent.lastText === e.final; emitMessage({ from: name, to: 'you', text: e.final }); }
-      // An agent working for another agent (or Antigravity, always) must report with dispatch send, and often ends the
+      // An agent working for another agent must report with dispatch send, and often ends the
       // turn without doing it (or the send fails). Codex does this a lot. The final reply is in the transcript: pass it
       // on to whoever is waiting, if nothing came. Codex marks every turn end (task_complete), even one with no text.
       const shown = direct && e.final && forYou;
@@ -419,7 +419,7 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
           agent.owes = null;
           const text = `${final}\n\n(Dispatch: ${name} ended its turn without sending this; forwarded from its transcript.)`;
           if (['you', 'user'].includes(owes.to) || !processes.has(owes.to)) emitMessage({ from: name, to: 'you', text }); else void sendMessage(owes.to, text, name).catch(() => {});
-        }, 6000);
+        }, 2500);
       }
     }
     notify('activity', { name, steps: e.steps, turn: e.turn, dropLastText });
@@ -489,7 +489,9 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
     // has settled (or 10 s), so the first message is never pasted while that question is coming up.
     if (!demo && provider === 'claude' && Date.now() - startedAt < 10000 && (!agent.lastOutput || Date.now() - agent.lastOutput < 800 || !agent.sawOutput)) { agent.timer = setTimeout(initialize, 300); return; }
     if (!demo && provider !== 'claude') {
-      terminal.write(`\x1b[200~${prompt.replace(/\n/g, ' ')}\x1b[201~`);
+      // Setup, not a task: without the last sentence the agent answered it ("online, standing by") and started
+      // working on its own, also after every resume.
+      terminal.write(`\x1b[200~${(prompt + '\nThis is your setup message, not a task: do not reply to it, run no commands and send no messages; wait silently for your first task.').replace(/\n/g, ' ')}\x1b[201~`);
       agent.timer = setTimeout(() => { terminal.write('\r'); agent.ready = true; if (agent.queue.length) deliver(agent); }, 200);
     } else { agent.ready = true; if (agent.queue.length) deliver(agent); }
   };
@@ -538,7 +540,7 @@ ipcMain.handle('workspace', async (_e, target) => { if (!target) { const r = awa
 function switchWorkspace(target) { if (needsFolder || path.resolve(target) !== path.resolve(workspace)) { needsFolder = false; finishOperation(); stopAgents(); if (isMock(workspace) && !isMock(target)) { demo = process.argv.includes('--demo'); mockPrevious = null; } workspace = path.resolve(target); rememberWorkspace(); watch(); } }
 ipcMain.handle('info', () => ({ workspace, needsFolder, demo, mock: isMock(workspace), operations: listOperations(), workspaces: recentWorkspaces() }));
 ipcMain.handle('operations:list', () => listOperations());
-ipcMain.handle('operations:delete', (_e, id) => { if (!/^[\w-]+$/.test(id)) throw new Error('Invalid operation'); if (operation?.id === id) { stopAgents(); operation = null; } fs.unlinkSync(path.join(operationsDir(), id + '.json')); fs.rmSync(path.join(operationsDir(), id), { recursive: true, force: true }); return listOperations(); });
+ipcMain.handle('operations:delete', (_e, id) => { if (!/^[\w-]+$/.test(id)) throw new Error('Invalid operation'); if (operation?.id === id) { stopAgents(); operation = null; } fs.rmSync(path.join(operationsDir(), id), { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); fs.rmSync(path.join(operationsDir(), id + '.json'), { force: true }); return listOperations(); });
 ipcMain.handle('operations:resume', (_e, id) => { const op = listOperations().find(o => o.id === id); if (!op) throw new Error('Operation not found'); finishOperation(); stopAgents(); const messages = history(op); for (const a of op.agents) { if (a.name !== 'boss' && a.chatId) for (const m of messages) if (m.from === a.name || m.to === a.name) (m.chats ||= {})[a.name] = 'previous'; const dir = path.join(operationsDir(), op.id, 'chats', a.name); try { for (const file of fs.readdirSync(dir)) { if (a.name !== 'boss' && file !== a.chatId + '.json') continue; const chat = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8')); for (const item of chat.messages) { const m = messages.find(x => x.id === item.id); if (m) (m.chats ||= {})[a.name] = chat.id; } } } catch {} } if (op.segments?.length && op.segments.at(-1).end == null) op.segments.at(-1).end = logSize(); op.segments ||= []; op.segments.push({ start: logSize(), end: null }); operation = op; saveOperation(); const failed = []; for (const a of op.agents) if (!a.stopped) { try { startAgent(a.name, a.template, a.enlistedBy, a); } catch (e) { a.stopped = true; failed.push({ name: a.name, text: `${a.name} could not start: ${e.message}` }); } } saveOperation(); return { operation: op, messages, notes: [...failed, ...op.agents.filter(a => !a.stopped && a.provider !== 'claude' && !(a.provider === 'codex' && a.sessionId)).map(a => ({ name: a.name, text: `${a.name}: started a fresh ${a.provider} session; prior conversation is shown in chat.` }))] }; });
 ipcMain.handle('chats:list', (_e, name) => chats(name).filter(c => name === 'boss' || c.id === operation?.agents.find(a => a.name === name)?.chatId).map(c => ({ ...c, active: c.id === operation?.agents.find(a => a.name === name)?.chatId })));
 ipcMain.handle('chats:switch', (_e, name, id) => switchChat(name, id));

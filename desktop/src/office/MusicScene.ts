@@ -33,6 +33,9 @@ export function createOfficeScene(container: HTMLElement, _options?: SceneOption
   const main = el("div", "music-main", root);
   const art = el("div", "music-art", main);
   const cover = el("img", "", art); cover.alt = ""; cover.hidden = true;
+  // Shown while there is no cover: a record instead of the browser's broken-image icon.
+  art.insertAdjacentHTML("beforeend", '<svg class="music-art-empty" viewBox="0 0 100 100" aria-hidden="true"><circle cx="50" cy="50" r="38" fill="#141518"/><circle cx="50" cy="50" r="30" fill="none" stroke="rgba(255,255,255,0.06)"/><circle cx="50" cy="50" r="22" fill="none" stroke="rgba(255,255,255,0.06)"/><circle cx="50" cy="50" r="11" fill="rgba(255,255,255,0.14)"/><circle cx="50" cy="50" r="2.5" fill="#0d0e10"/></svg>');
+  cover.onerror = () => { cover.hidden = true; cover.removeAttribute("src"); };
   const info = el("div", "music-info", main);
   const source = el("p", "music-source", info);
   const title = el("p", "music-title", info);

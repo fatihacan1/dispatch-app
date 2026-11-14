@@ -77,7 +77,11 @@ async function download(src, workDir) {
   if (buf.length > 200 * 1024 * 1024) throw new Error('That repository is larger than 200 MB.');
   const archive = path.join(workDir, 'src.tar.gz'), out = path.join(workDir, 'x');
   fs.writeFileSync(archive, buf); fs.mkdirSync(out);
-  await run(process.platform === 'win32' ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe') : 'tar', ['-xzf', archive, '-C', out]);
+  // A link to a folder unpacks only that folder: security repos carry exploit samples elsewhere in the tree, and
+  // unpacking the whole repo made the antivirus raise a virus warning for files that were never installed.
+  const only = src.sub ? [`*/${src.sub.replace(/\/+$/, '')}/*`] : [];
+  await run(process.platform === 'win32' ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe') : 'tar', ['-xzf', archive, '-C', out, ...(only.length ? ['--wildcards', ...only] : [])].filter(a => !(process.platform === 'win32' && a === '--wildcards')));
+  fs.rmSync(archive, { force: true });
   const top = fs.readdirSync(out).find(n => fs.statSync(path.join(out, n)).isDirectory());
   if (!top) throw new Error('The download was empty.');
   return { root: path.join(out, top), ref };
