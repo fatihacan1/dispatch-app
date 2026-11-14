@@ -63,7 +63,11 @@ export function UsageSwitch() {
     try { await army().ui.set({ usageTracking: next }); await army().usage?.refresh(); } catch { setOn(!next); }
   };
   return <label className="usage-switch">
-    <span className="usage-switch-text"><b>Track my live usage</b><small>Show the session and weekly limits left on Claude Code, Codex and Antigravity. For Claude, Dispatch asks Anthropic with your Claude Code sign-in. Off until you turn it on.</small></span>
+    <span className="usage-switch-text"><b>Track my live usage</b><small>Show the session and weekly limits left on Claude Code, Codex and Antigravity. For Claude, Dispatch asks Anthropic with your Claude Code sign-in. Off until you turn it on.</small>
+      <span className="usage-preview" aria-hidden="true" title="Example: how the limits show next to your agents">
+        {([["claude", 38, "ok"], ["codex", 78, "warn"], ["antigravity", 12, "ok"]] as const).map(([id, used, lvl]) => <span key={id} className={`usage-chip ${lvl}`}><ProviderIcon className="usage-icon" provider={id} alt="" /><span>{used}%</span></span>)}
+        <small>Example</small>
+      </span></span>
     <input type="checkbox" role="switch" aria-checked={on} checked={on} onChange={e => void flip(e.target.checked)} />
   </label>;
 }

@@ -32,3 +32,5 @@
 .usage-switch input:checked { background: var(--status-working); border-color: transparent; }
 .usage-switch input:checked::after { transform: translateX(14px); background: #fff; }
 .usage-switch input:focus-visible { outline: 2px solid var(--status-working); outline-offset: 2px; }
+.usage-preview { display: flex; align-items: center; gap: 6px; margin-top: 6px; pointer-events: none; }
+.usage-preview .usage-chip { cursor: default; }
