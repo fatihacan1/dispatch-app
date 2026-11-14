@@ -1241,6 +1241,12 @@ ipcMain.handle('files:import', (_e, dir, items) => {
   return out.length;
 });
 ipcMain.handle('files:head', (_e, rel) => filesLib.head(workspace, rel));
+let lspHub = null; const lsp = () => lspHub ||= require('./lsp.cjs').create(d => notify('lsp-diagnostics', d));
+process.on('exit', () => lspHub?.stopAll());
+ipcMain.handle('lsp:open', (_e, lang, rel, text) => lsp().open(String(lang), workspace, String(rel), String(text ?? '')));
+ipcMain.handle('lsp:change', (_e, lang, rel, version, text) => lsp().change(String(lang), workspace, String(rel), Number(version) || 1, String(text ?? '')));
+ipcMain.handle('lsp:close', (_e, lang, rel) => lsp().close(String(lang), workspace, String(rel)));
+ipcMain.handle('lsp:request', (_e, lang, method, rel, position) => { if (!/^textDocument\/(completion|hover|signatureHelp)$/.test(method)) throw new Error('Not allowed'); return lsp().request(String(lang), workspace, method, String(rel), position); });
 ipcMain.handle('files:lint', (_e, rel, text) => require('./lint.cjs').lint(workspace, String(rel), String(text ?? '')).catch(() => []));
 ipcMain.handle('files:all', () => filesLib.all(workspace));
 ipcMain.handle('files:search', (_e, query, opts) => filesLib.search(workspace, query, opts));

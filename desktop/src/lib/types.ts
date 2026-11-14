@@ -39,6 +39,7 @@ declare global {
         read(rel: string): Promise<{ text?: string; mtime?: number; binary?: boolean; tooLarge?: boolean; size?: number }>;
         write(rel: string, text: string): Promise<number>;
         head(rel: string): Promise<string | null>;
+        lsp: { open(lang: string, rel: string, text: string): Promise<boolean>; change(lang: string, rel: string, version: number, text: string): Promise<boolean>; close(lang: string, rel: string): Promise<boolean>; request(lang: string, method: string, rel: string, position: { line: number; character: number }): Promise<any> };
         lint(rel: string, text: string): Promise<{ line: number; col: number; endLine: number; endCol: number; message: string; severity: string }[]>;
         all(): Promise<string[]>;
         search(query: string, opts?: { caseSensitive?: boolean }): Promise<{ path: string; line: number; col: number; text: string }[]>;

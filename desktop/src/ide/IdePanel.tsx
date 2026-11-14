@@ -9,6 +9,38 @@ type GitFile = { path: string; status?: string };
 
 const uriFor = (rel: string) => monaco.Uri.from({ scheme: "file", path: "/ws/" + rel });
 const base = (p: string) => p.split("/").pop() || p;
+// Go: gopls behind the main process gives suggestions, hovers, signature help and problems. Registered once.
+const relOf = (uri: monaco.Uri) => uri.path.replace(/^\/ws\//, "");
+const lspPos = (p: monaco.Position) => ({ line: p.lineNumber - 1, character: p.column - 1 });
+const KIND: Record<number, monaco.languages.CompletionItemKind> = { 2: 0, 3: 1, 4: 2, 5: 3, 6: 4, 7: 5, 8: 7, 9: 8, 10: 9, 13: 15, 14: 17, 21: 14, 22: 6, 25: 24 } as any;
+const mdText = (c: any) => typeof c === "string" ? c : c?.value || "";
+let goReady = false;
+function registerGo() {
+  if (goReady) return; goReady = true;
+  monaco.languages.registerCompletionItemProvider("go", { triggerCharacters: ["."], async provideCompletionItems(model, position) {
+    const res = await window.army.files.lsp.request("go", "textDocument/completion", relOf(model.uri), lspPos(position)).catch(() => null);
+    const items: any[] = Array.isArray(res) ? res : res?.items || [];
+    const word = model.getWordUntilPosition(position);
+    const range = new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn);
+    return { suggestions: items.map(it => ({ label: it.label, kind: KIND[it.kind] ?? monaco.languages.CompletionItemKind.Text, detail: it.detail, documentation: it.documentation ? { value: mdText(it.documentation) } : undefined,
+      insertText: (it.textEdit?.newText ?? it.insertText ?? it.label), insertTextRules: it.insertTextFormat === 2 ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet : undefined, sortText: it.sortText, filterText: it.filterText, range })) };
+  } });
+  monaco.languages.registerHoverProvider("go", { async provideHover(model, position) {
+    const res = await window.army.files.lsp.request("go", "textDocument/hover", relOf(model.uri), lspPos(position)).catch(() => null);
+    if (!res?.contents) return null;
+    const parts = Array.isArray(res.contents) ? res.contents : [res.contents];
+    return { contents: parts.map((c: any) => ({ value: typeof c === "string" ? c : c.language ? "```" + c.language + "\n" + c.value + "\n```" : c.value })) };
+  } });
+  monaco.languages.registerSignatureHelpProvider("go", { signatureHelpTriggerCharacters: ["(", ","], async provideSignatureHelp(model, position) {
+    const res = await window.army.files.lsp.request("go", "textDocument/signatureHelp", relOf(model.uri), lspPos(position)).catch(() => null);
+    if (!res?.signatures?.length) return null;
+    return { value: { signatures: res.signatures.map((s: any) => ({ label: s.label, documentation: s.documentation ? { value: mdText(s.documentation) } : undefined, parameters: (s.parameters || []).map((p: any) => ({ label: p.label, documentation: p.documentation ? { value: mdText(p.documentation) } : undefined })) })), activeSignature: res.activeSignature || 0, activeParameter: res.activeParameter || 0 }, dispose() {} };
+  } });
+  window.army.on("lsp-diagnostics", (d: { rel: string; diagnostics: any[] }) => {
+    const model = monaco.editor.getModel(uriFor(d.rel)); if (!model) return;
+    monaco.editor.setModelMarkers(model, "gopls", d.diagnostics.map(x => ({ startLineNumber: x.range.start.line + 1, startColumn: x.range.start.character + 1, endLineNumber: x.range.end.line + 1, endColumn: x.range.end.character + 1, message: x.message, severity: x.severity === 1 ? monaco.MarkerSeverity.Error : x.severity === 2 ? monaco.MarkerSeverity.Warning : monaco.MarkerSeverity.Info, source: "gopls" })));
+  });
+}
 const parent = (p: string) => p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
 
 // editorOnFile (Settings > Appearance): with no file open the panel is only the tree, the editor appears with the first file.
@@ -135,6 +167,12 @@ export function IdePanel({ workspace, open, request, gitFiles, terminal, termina
       const model = monaco.editor.getModel(uriFor(rel)) || monaco.editor.createModel(file.text, undefined, uriFor(rel));
       tab = { path: rel, model, dirty: false, diff: !!opts.diff, saved: file.text };
       model.onDidChangeContent(() => setTabs(ts => ts.map(t => t.path === rel ? { ...t, dirty: model.getValue() !== t.saved } : t)));
+      if (/\.go$/i.test(rel)) {
+        registerGo(); let version = 1, timer = 0;
+        void window.army.files.lsp.open("go", rel, model.getValue()).catch(() => {});
+        model.onDidChangeContent(() => { window.clearTimeout(timer); timer = window.setTimeout(() => void window.army.files.lsp.change("go", rel, ++version, model.getValue()).catch(() => {}), 200); });
+        model.onWillDispose(() => void window.army.files.lsp.close("go", rel).catch(() => {}));
+      }
       // Python: Ruff checks the text as it is typed (half a second after the last key), problems show as squiggles.
       if (/\.pyi?$/i.test(rel)) {
         let timer = 0;

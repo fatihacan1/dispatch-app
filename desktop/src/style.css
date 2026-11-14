@@ -1353,37 +1353,38 @@ input[type=checkbox]:focus-visible { outline: 2px solid var(--focus); outline-of
 .out-live-big img { display: block; width: 100%; border-radius: var(--radius); border: var(--border); }
 .tab-spin { display: inline-block; width: 10px; height: 10px; margin-left: 6px; vertical-align: -1px; border-radius: 50%; border: 2px solid rgba(59, 130, 246, 0.25); border-top-color: #3b82f6; animation: out-spin 0.9s linear infinite; }
 
-/* Skill board: groups as panels on a dotted board, skills as chips that drag between them. */
+/* Skill board: Ungrouped across the top, groups in a grid that fills the page, chips that drag between them. */
 .skills-view { margin-left: 12px; }
-.sb { margin: 8px 0 20px; }
-.sb-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
-.sb-bar .field-search { width: 260px; }
-.sb-filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.sb { margin: 8px 0 20px; display: flex; flex-direction: column; gap: 12px; }
+.sb-bar { display: flex; align-items: center; gap: 8px; }
+.sb-bar .field-search { width: 280px; }
+.sb-filters { display: flex; flex-wrap: wrap; gap: 6px; }
 .sb-filters button { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border: var(--border); border-radius: 999px; background: transparent; color: var(--text-2); font: inherit; font-size: var(--text-sm); cursor: pointer; transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
 .sb-filters button:hover { color: var(--text); background: var(--hover); }
 .sb-filters button[aria-selected="true"] { background: var(--text); border-color: var(--text); color: var(--text-on-primary); }
 .sb-filters small { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-3); }
 .sb-filters button[aria-selected="true"] small { color: var(--text-on-primary); opacity: .6; }
-.sb-board { display: flex; gap: 14px; align-items: flex-start; }
-.sb-canvas { position: relative; flex: 1; min-width: 0; border: var(--border); border-radius: var(--radius-lg); background-color: var(--bg); background-image: radial-gradient(var(--line) 1px, transparent 1px); background-size: 20px 20px; overflow: auto; }
-.sb-canvas .sb-group { position: absolute; width: 300px; }
-.sb-loose { width: 240px; flex: none; position: sticky; top: 0; }
-.sb-single { display: grid; gap: 14px; max-width: 900px; }
-.sb-group { border: var(--border-strong); border-radius: var(--radius-lg); background: var(--surface); padding: 8px 10px 10px; transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out); }
-.sb-group.over { border-color: var(--focus); background: var(--raised); }
-.sb-group.moving { box-shadow: var(--shadow-pop); z-index: 2; }
-.sb-group header { display: flex; align-items: center; gap: 8px; height: 28px; margin-bottom: 6px; cursor: grab; user-select: none; }
-.sb-loose .sb-group header, .sb-single .sb-group header { cursor: default; }
+.sb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; align-items: start; }
+.sb-group { border: var(--border-strong); border-radius: var(--radius-lg); background: var(--surface); padding: 8px 10px 12px; min-height: 96px; transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out); }
+.sb-group.target { background: var(--raised); }
+.sb-group.over { border-color: var(--focus); background: var(--hover); }
+.sb-group header { display: flex; align-items: center; gap: 8px; height: 28px; margin-bottom: 8px; user-select: none; }
+.sb-group header[draggable="true"] { cursor: grab; }
 .sb-group header b { font-size: var(--text-md); font-weight: 600; }
 .sb-group header small { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-3); }
 .sb-group header .icon-button { margin-left: auto; opacity: 0; transition: opacity var(--dur-fast) var(--ease-out); }
 .sb-group:hover header .icon-button, .sb-group header .icon-button:focus-visible { opacity: 1; }
 .sb-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.sb-chip { padding: 4px 9px; border: var(--border); border-radius: var(--radius); background: var(--raised); font-size: var(--text-sm); color: var(--text); cursor: grab; user-select: none; }
+.sb-chip { padding: 4px 9px; border: var(--border); border-radius: var(--radius); background: var(--raised); font: inherit; font-size: var(--text-sm); color: var(--text); cursor: grab; user-select: none; transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out); }
 .sb-chip:hover { border-color: var(--line-strong); background: var(--hover); }
 .sb-chip:active { cursor: grabbing; }
 .sb-chip.off { color: var(--text-3); }
 .sb-empty { color: var(--text-3); font-size: var(--text-sm); padding: 4px 0; }
+.sb-tip { margin: 0; }
+.sb-detail { display: flex; flex-direction: column; gap: 12px; }
+.sb-desc { margin: 0; color: var(--text-2); }
+.sb-md { max-height: 55vh; overflow: auto; padding: 12px 14px; border: var(--border); border-radius: var(--radius); background: var(--bg); }
+.sb-move { min-width: 220px; }
 
-/* The terminal's own elements use the mono font too (the GPU renderer reads it from there). */
+/* The terminal's own elements use the mono font too. */
 .terminal .xterm { font-family: var(--font-mono); }

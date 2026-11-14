@@ -101,8 +101,8 @@ export function Skills() {
   const [claude, setClaude] = useState<ClaudeSkill[]>([]);
   useEffect(() => { if (layoutMode === "board") army().skills.claude().then(setClaude).catch(() => {}); }, [layoutMode]);
   const boardSkills: BoardSkill[] = [
-    ...(items || []).map(s => ({ key: `d:${s.scope}:${s.name}`, name: s.name, description: s.description, enabled: s.enabled, where: `Dispatch · ${s.scope === "global" ? "every workspace" : "this workspace"}` })),
-    ...claude.map(s => ({ key: `c:${s.id}`, name: s.name, description: s.description, enabled: true, where: `${s.provider === "codex" ? "Codex" : "Claude Code"} · ${s.kind === "plugin" ? `plugin ${s.plugin}` : KIND[s.kind]}` })),
+    ...(items || []).map(s => ({ key: `d:${s.scope}:${s.name}`, name: s.name, description: s.description, enabled: s.enabled, where: `Installed with Dispatch · ${s.scope === "global" ? "every workspace" : "this workspace"}`, read: () => army().skills.read(s.name, s.scope) })),
+    ...claude.map(s => ({ key: `c:${s.id}`, name: s.name, description: s.description, enabled: true, where: `${s.provider === "codex" ? "Codex" : "Claude Code"} · ${s.kind === "plugin" ? `plugin ${s.plugin}` : KIND[s.kind]}`, read: () => army().skills.claudeRead(s.id) })),
   ];
   const load = useCallback(() => army().skills.list().then((r: any) => { setItems(r.skills); setClaudeAgents(!!r.settings.claudeAgents); }).catch((e: unknown) => setError(clean(e))), []);
   useEffect(() => { void load(); }, [load]);
