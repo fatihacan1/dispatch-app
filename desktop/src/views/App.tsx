@@ -17,6 +17,7 @@ import { ArrowDownIcon } from "@heroicons/react/20/solid";
 import { Skills } from "./Skills";
 import { Share } from "./Share";
 import { Schedules } from "../components/Schedules";
+import { UsageSwitch } from "../components/Usage";
 import { Button, Console, ProviderIcon, StatusDot, models, type Tone } from "../components/common";
 import { EnlistDialog } from "../components/EnlistDialog";
 import { Dialog } from "../components/Dialog";
@@ -696,6 +697,7 @@ export function App() {
                   {homeTeam ? <p className="team-summary">{(() => { const t: any = teams.find(x => x.file === homeTeam); return t ? `Boss (${t.boss?.template}) with ${t.members.map((m: any) => m.name).join(", ") || "no members"}. Edit it in Agent templates > Teams.` : ""; })()}</p> : bossPicker}
                   <Button className="primary" disabled={!homeTeam && (!bossFile || !bossModel)} onClick={() => start(homeTeam || undefined)}>{homeTeam ? "Start team" : "Start operation"}</Button>
                 </div>
+                <UsageSwitch />
               </section>
               <div className="home-lists">
                 <section>

@@ -586,6 +586,8 @@ ipcMain.handle('ui:set', (_e, patch) => {
   if (patch && ['studio', 'pixel', 'office'].includes(patch.scene)) next.scene = patch.scene;
   if (patch && typeof patch.hintSeen === 'boolean') next.hintSeen = patch.hintSeen;
   if (patch && typeof patch.ideOpen === 'boolean') next.ideOpen = patch.ideOpen;
+  // Home > live usage switch. Off by default: nothing reads limits (or the Claude sign-in) until the user turns it on.
+  if (patch && typeof patch.usageTracking === 'boolean') next.usageTracking = patch.usageTracking;
   if (patch && ['tr', 'en', 'auto'].includes(patch.voiceLang)) { if (next.voiceLang !== patch.voiceLang) whisper.stop(); next.voiceLang = patch.voiceLang; }
   if (patch && typeof patch.voiceMic === 'string' && patch.voiceMic.length <= 300) next.voiceMic = patch.voiceMic;
   if (patch && VOICE_KEYS.includes(patch.voiceShortcut)) { next.voiceShortcut = patch.voiceShortcut; setImmediate(host.registerVoiceKey); }
@@ -1066,7 +1068,7 @@ if (!demo) usageLib.setCacheFile(path.join(globalDir(), 'usage.json'));
 // A failed reading (rate limit, timeout, token being refreshed) is retried soon instead of waiting for the next 3-minute poll.
 let usageRetry = null;
 function retryUsageSoon(all) {
-  const failed = Object.values(all || {}).filter(u => u.error && u.errorCode !== 'unsupported' && u.errorCode !== 'not-installed');
+  const failed = Object.values(all || {}).filter(u => u.error && !['unsupported', 'not-installed', 'off'].includes(u.errorCode));
   if (!failed.length || usageRetry) return;
   const wait = Math.min(300, Math.max(30, ...failed.map(u => u.retryAfter || 30)));
   usageRetry = setTimeout(() => { usageRetry = null; if (!host.isActive()) return; usageLib.getAll({ providers: failed.map(u => u.provider), resolveCommand, force: true }).then(shareUsage).catch(() => {}); }, wait * 1000);
@@ -1075,10 +1077,13 @@ function retryUsageSoon(all) {
 // has enabled), so two tabs never show different numbers for the same limit.
 const shareUsage = all => (host.usage ? host.usage(all) : onUsage(all));
 function onUsage(all) { if (demo) return; const ids = usageIds(); const mine = Object.fromEntries(Object.entries(all || {}).filter(([id]) => ids.includes(id))); if (Object.keys(mine).length) notify('usage:update', mine); }
-async function usageAll(force) { if (demo) return usageLib.demo(); const all = await usageLib.getAll({ providers: usageIds(), resolveCommand, force }); retryUsageSoon(all); return all; }
+// Off until the user turns it on from Home: then no CLI is asked and the Claude sign-in token is never read.
+const usageTracking = () => readUi().usageTracking === true;
+const usageOff = () => Object.fromEntries(usageIds().map(id => [id, { provider: id, windows: [], updatedAt: new Date().toISOString(), source: 'none', error: 'Live usage is off. Turn it on from Home.', errorCode: 'off' }]));
+async function usageAll(force) { if (demo) return usageLib.demo(); if (!usageTracking()) return usageOff(); const all = await usageLib.getAll({ providers: usageIds(), resolveCommand, force }); retryUsageSoon(all); return all; }
 ipcMain.handle('usage:get', () => usageAll(false));
-ipcMain.handle('usage:refresh', async (_e, id) => { if (demo) { const all = usageLib.demo(); notify('usage:update', all); return all; } const all = id ? await usageLib.getAll({ providers: [id], resolveCommand, force: true }) : await usageAll(true); shareUsage(all); return all; });
-intervals.push(setInterval(() => { if (host.isActive() && win && !win.isDestroyed() && win.isVisible() && !win.isMinimized()) usageAll(true).then(shareUsage).catch(() => {}); }, 180000));
+ipcMain.handle('usage:refresh', async (_e, id) => { if (demo) { const all = usageLib.demo(); notify('usage:update', all); return all; } if (!usageTracking()) { const all = usageOff(); shareUsage(all); return all; } const all = id ? await usageLib.getAll({ providers: [id], resolveCommand, force: true }) : await usageAll(true); shareUsage(all); return all; });
+intervals.push(setInterval(() => { if (usageTracking() && host.isActive() && win && !win.isDestroyed() && win.isVisible() && !win.isMinimized()) usageAll(true).then(shareUsage).catch(() => {}); }, 180000));
 ipcMain.handle('templates:save', (_e, t) => templates.save(workspace, t));
 ipcMain.handle('templates:delete', (_e, file) => templates.remove(file));
 ipcMain.handle('templates:reveal', (_e, file) => { require('electron').shell.showItemInFolder(file); return true; });

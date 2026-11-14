@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { ProviderIcon } from "./common";
 import { ago, levelOf, live, remaining, resetClock, resetIn, tightest, useUsage, type ProviderUsage, type UsageMap } from "../lib/usage";
 import "../usage.css";
@@ -51,5 +51,20 @@ export function UsageDetails({ u, now, loading, refresh }: { u?: ProviderUsage; 
         <button type="button" className="button secondary" disabled={loading} onClick={refresh}>{loading ? "Refreshing…" : "Refresh"}</button></div>
     </>}
   </div>;
+}
+/** Home: live usage is off until the user turns it on (for Claude it uses the Claude Code sign-in to ask Anthropic). */
+export function UsageSwitch() {
+  const [on, setOn] = useState<boolean | null>(null);
+  const army = () => (window as any).army;
+  useEffect(() => { army()?.ui?.get().then((u: any) => setOn(u?.usageTracking === true)).catch(() => setOn(false)); }, []);
+  if (on === null) return null;
+  const flip = async (next: boolean) => {
+    setOn(next);
+    try { await army().ui.set({ usageTracking: next }); await army().usage?.refresh(); } catch { setOn(!next); }
+  };
+  return <label className="usage-switch">
+    <span className="usage-switch-text"><b>Track my live usage</b><small>Show the session and weekly limits left on Claude Code, Codex and Antigravity. For Claude, Dispatch asks Anthropic with your Claude Code sign-in. Off until you turn it on.</small></span>
+    <input type="checkbox" role="switch" aria-checked={on} checked={on} onChange={e => void flip(e.target.checked)} />
+  </label>;
 }
 export type { UsageMap };

@@ -52,6 +52,7 @@ export function Schedules() {
           <button type="button" className="icon-button danger" title="Delete" aria-label={`Delete ${s.title}`} onClick={async () => { if (await ask.confirm(`Delete "${s.title}"?`, { description: "It will not run again.", action: "Delete", danger: true })) void act(() => army().schedules.remove(s.id)); }}><TrashIcon /></button>
         </div>
       </article>)}
+      <p className="sched-note">Schedules run CLI agents on their own, with nobody at the keyboard. Check your providers' terms (Anthropic, OpenAI, Google): for unattended runs they may expect an API key rather than a personal subscription sign-in. Which one you use is up to you.</p>
     </div>}
   </div>;
 }
