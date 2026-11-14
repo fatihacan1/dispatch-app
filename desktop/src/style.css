@@ -119,7 +119,8 @@ input[type=checkbox] { width: 15px; height: 15px; margin: 0; accent-color: var(-
   transform-origin: top right;
 }
 @keyframes pop { from { opacity: 0; transform: translateY(-4px) scale(0.98); } }
-.menu-item { width: 100%; justify-content: flex-start; background: transparent; border-color: transparent; font-weight: 400; height: 30px; padding: 0 8px; gap: 8px; }
+/* Block-level flex: as inline-flex, the menu's width was measured with every item side by side (one 500px wide menu). */
+.menu-item { display: flex; width: 100%; justify-content: flex-start; background: transparent; border-color: transparent; font-weight: 400; height: 30px; padding: 0 8px; gap: 8px; }
 .menu-item small { margin-left: auto; color: var(--text-3); max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
 .menu-item.danger:hover { color: var(--danger); }
 .menu-sep { height: 1px; background: var(--line); margin: 4px 0; }
