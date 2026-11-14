@@ -8,7 +8,9 @@ const gitLib = require('./git.cjs');
 
 const HIDDEN = new Set(['.git', 'node_modules']);
 const SKIP_WALK = new Set(['.git', 'node_modules', 'dist', 'build', 'out', 'release', '.next', '.venv', 'venv', '__pycache__', 'target', '.dispatch']);
-const WATCH_SKIP = new Set(['.git', 'node_modules', '.venv', 'venv', '__pycache__', 'target', '.next']);
+// .dispatch: watching it held its folders open on Windows, so deleting an old chat failed (EPERM) and builds could
+// not move their .asar. Build output folders are skipped for the same reason.
+const WATCH_SKIP = new Set(['.git', 'node_modules', '.venv', 'venv', '__pycache__', 'target', '.next', '.dispatch', '.myarmy', 'win-unpacked', 'win-unpacked.tmp']);
 const MAX_READ = 5 << 20;
 const env = { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' };
 const git = (cwd, args, input) => new Promise(resolve => {

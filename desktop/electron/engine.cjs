@@ -264,7 +264,8 @@ function deliver(agent) {
     agent.atPrompt = false;
     // A note for this agent that must not start a turn of its own (e.g. it now answers Telegram) rides along with the next real message.
     const who = item.msg.to; const note = item.msg.from !== 'dispatch' && quietNotes.get(who); if (note) quietNotes.delete(who);
-    const text = `[Dispatch] message from ${item.msg.from} (id ${item.msg.id})${item.previous ? ' (from previous chat)' : ''}: ${item.msg.text}${note ? `
+    const setup = agent.setup ? `${agent.setup}\n\n` : ''; agent.setup = null;
+    const text = `${setup}[Dispatch] message from ${item.msg.from} (id ${item.msg.id})${item.previous ? ' (from previous chat)' : ''}: ${item.msg.text}${note ? `
 
 (Dispatch note: ${note})` : ''}`;
     agent.submitting = true; agent.lastFrom = item.msg.from;
@@ -489,10 +490,9 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
     // has settled (or 10 s), so the first message is never pasted while that question is coming up.
     if (!demo && provider === 'claude' && Date.now() - startedAt < 10000 && (!agent.lastOutput || Date.now() - agent.lastOutput < 800 || !agent.sawOutput)) { agent.timer = setTimeout(initialize, 300); return; }
     if (!demo && provider !== 'claude') {
-      // Setup, not a task: without the last sentence the agent answered it ("online, standing by") and started
-      // working on its own, also after every resume.
-      terminal.write(`\x1b[200~${(prompt + '\nThis is your setup message, not a task: do not reply to it, run no commands and send no messages; wait silently for your first task.').replace(/\n/g, ' ')}\x1b[201~`);
-      agent.timer = setTimeout(() => { terminal.write('\r'); agent.ready = true; if (agent.queue.length) deliver(agent); }, 200);
+      // The role text rides along with the first real message. Sent alone it was a turn of its own: the agent
+      // answered it and started working by itself on every start and resume, with nobody asking.
+      agent.setup = prompt.replace(/\n/g, ' '); agent.ready = true; if (agent.queue.length) deliver(agent);
     } else { agent.ready = true; if (agent.queue.length) deliver(agent); }
   };
   agent.initialize = initialize;
@@ -540,7 +540,7 @@ ipcMain.handle('workspace', async (_e, target) => { if (!target) { const r = awa
 function switchWorkspace(target) { if (needsFolder || path.resolve(target) !== path.resolve(workspace)) { needsFolder = false; finishOperation(); stopAgents(); if (isMock(workspace) && !isMock(target)) { demo = process.argv.includes('--demo'); mockPrevious = null; } workspace = path.resolve(target); rememberWorkspace(); watch(); } }
 ipcMain.handle('info', () => ({ workspace, needsFolder, demo, mock: isMock(workspace), operations: listOperations(), workspaces: recentWorkspaces() }));
 ipcMain.handle('operations:list', () => listOperations());
-ipcMain.handle('operations:delete', (_e, id) => { if (!/^[\w-]+$/.test(id)) throw new Error('Invalid operation'); if (operation?.id === id) { stopAgents(); operation = null; } fs.rmSync(path.join(operationsDir(), id), { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); fs.rmSync(path.join(operationsDir(), id + '.json'), { force: true }); return listOperations(); });
+ipcMain.handle('operations:delete', (_e, id) => { if (!/^[\w-]+$/.test(id)) throw new Error('Invalid operation'); if (operation?.id === id) { stopAgents(); operation = null; } fs.rmSync(path.join(operationsDir(), id + '.json'), { force: true }); void fs.promises.rm(path.join(operationsDir(), id), { recursive: true, force: true, maxRetries: 20, retryDelay: 250 }).catch(() => {}); return listOperations(); });
 ipcMain.handle('operations:resume', (_e, id) => { const op = listOperations().find(o => o.id === id); if (!op) throw new Error('Operation not found'); finishOperation(); stopAgents(); const messages = history(op); for (const a of op.agents) { if (a.name !== 'boss' && a.chatId) for (const m of messages) if (m.from === a.name || m.to === a.name) (m.chats ||= {})[a.name] = 'previous'; const dir = path.join(operationsDir(), op.id, 'chats', a.name); try { for (const file of fs.readdirSync(dir)) { if (a.name !== 'boss' && file !== a.chatId + '.json') continue; const chat = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8')); for (const item of chat.messages) { const m = messages.find(x => x.id === item.id); if (m) (m.chats ||= {})[a.name] = chat.id; } } } catch {} } if (op.segments?.length && op.segments.at(-1).end == null) op.segments.at(-1).end = logSize(); op.segments ||= []; op.segments.push({ start: logSize(), end: null }); operation = op; saveOperation(); const failed = []; for (const a of op.agents) if (!a.stopped) { try { startAgent(a.name, a.template, a.enlistedBy, a); } catch (e) { a.stopped = true; failed.push({ name: a.name, text: `${a.name} could not start: ${e.message}` }); } } saveOperation(); return { operation: op, messages, notes: [...failed, ...op.agents.filter(a => !a.stopped && a.provider !== 'claude' && !(a.provider === 'codex' && a.sessionId)).map(a => ({ name: a.name, text: `${a.name}: started a fresh ${a.provider} session; prior conversation is shown in chat.` }))] }; });
 ipcMain.handle('chats:list', (_e, name) => chats(name).filter(c => name === 'boss' || c.id === operation?.agents.find(a => a.name === name)?.chatId).map(c => ({ ...c, active: c.id === operation?.agents.find(a => a.name === name)?.chatId })));
 ipcMain.handle('chats:switch', (_e, name, id) => switchChat(name, id));
