@@ -63,4 +63,22 @@ function installScript() {
   ].join('; ');
 }
 
-module.exports = { PORT, exe, status, setExe, start, installScript };
+// Turns the add-on off in Blender's saved preferences, then deletes its file and compiled copy. Blender itself stays.
+function uninstallScript() {
+  const f = exe(), v = f ? version(f) : '';
+  if (!v) throw new Error('Blender was not found.');
+  const target = addonFile(v), cache = path.join(path.dirname(target), '__pycache__');
+  const pyFile = path.join(require('os').tmpdir(), 'dispatch-blender-disable.py');
+  fs.writeFileSync(pyFile, `import addon_utils, bpy\naddon_utils.disable('${MODULE}', default_set=True)\nbpy.ops.wm.save_userpref()\nprint('MCP for Blender disabled')\n`);
+  return [
+    `$ErrorActionPreference='Stop'`,
+    `if (Get-Process blender -ErrorAction SilentlyContinue) { Write-Host 'Close Blender first, then try again.'; exit 1 }`,
+    `Write-Host 'Disabling MCP for Blender in Blender ${v}...'`,
+    `& '${f}' --background --python '${pyFile}'`,
+    `Remove-Item '${target}' -Force -ErrorAction SilentlyContinue`,
+    `Get-ChildItem '${cache}' -Filter '${MODULE}*' -ErrorAction SilentlyContinue | Remove-Item -Force`,
+    `Write-Host 'MCP for Blender removed. Blender itself is untouched.'`,
+  ].join('; ');
+}
+
+module.exports = { PORT, exe, status, setExe, start, installScript, uninstallScript };

@@ -4,6 +4,7 @@ const { spawn } = require('node:child_process');
 
 const PRELUDE = String.raw`
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
 $asTask = ([System.WindowsRuntimeSystemExtensions].GetMethods() | ? { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation` + '`' + String.raw`1' })[0]
 function Await($op, $t) { $task = $asTask.MakeGenericMethod($t).Invoke($null, @($op)); $task.Wait(5000) | Out-Null; $task.Result }
@@ -32,7 +33,6 @@ while ($true) {
           $st = Await ($p.Thumbnail.OpenReadAsync()) ([Windows.Storage.Streams.IRandomAccessStreamWithContentType])
           $ns = $asStream.Invoke($null, @($st)); $ms = New-Object System.IO.MemoryStream; $ns.CopyTo($ms); $b = $ms.ToArray(); $ns.Dispose()
           if ($b.Length -gt 0 -and $b.Length -lt 4000000) { $o.cover = 'data:' + $(if ($st.ContentType) { $st.ContentType } else { 'image/png' }) + ';base64,' + [Convert]::ToBase64String($b) }
-          if ($n -gt 0 -and $n -lt 4000000) { Await ($r.LoadAsync($n)) ([uint32]) | Out-Null; $b = New-Object byte[] $n; $r.ReadBytes($b); $o.cover = 'data:' + $st.ContentType + ';base64,' + [Convert]::ToBase64String($b) }
         } catch {}
       }
       if ($key -ne $lastKey) { $o.track = $true; $lastKey = $key }
@@ -48,22 +48,41 @@ const control = cmd => PRELUDE + `$s = $mgr.GetCurrentSession(); if ($s) { Await
 const encoded = script => Buffer.from(script, 'utf16le').toString('base64');
 const ps = script => spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded(script)], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
 
+// One PowerShell loop for the whole app: every project tab with the Music scene open subscribes to it, and it stops
+// when the last one leaves. The last track (with its cover) is replayed to a tab that joins later.
+const subscribers = new Set();
+let child = null, last = null, restart = null;
+function publish(u) {
+  if (u.track) last = { ...u };
+  else if (last && !u.none && !u.error && `${u.app}|${u.title}|${u.artist}` === `${last.app}|${last.title}|${last.artist}`) last = { ...last, ...u, track: true };
+  else if (u.none) last = null;
+  for (const fn of subscribers) try { fn(u); } catch {}
+}
+function startLoop() {
+  if (child || !subscribers.size) return;
+  let buf = '';
+  const me = child = ps(WATCH);
+  me.stdout.setEncoding('utf8'); // titles like "Gül" or "Şarkı" must not turn into "?"
+  me.stdout.on('data', d => {
+    if (child !== me) return;
+    buf += d; let i;
+    while ((i = buf.indexOf('\n')) >= 0) { const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1); if (!line) continue; try { publish(JSON.parse(line)); } catch {} }
+  });
+  // A loop killed by the last tab leaving is already replaced (or not wanted); only a crash restarts.
+  me.on('exit', () => { if (child !== me) return; child = null; last = null; if (subscribers.size) restart = setTimeout(() => { restart = null; startLoop(); }, 3000); });
+  me.on('error', () => {});
+}
 /** watch(onUpdate) -> stop(). Each update is the current track (cover only when the track changes), { none } or { error }. */
 function watch(onUpdate) {
   if (process.platform !== 'win32') { onUpdate({ unsupported: true }); return () => {}; }
-  let child = null, stopped = false, buf = '';
-  const start = () => {
-    if (stopped) return;
-    child = ps(WATCH); buf = '';
-    child.stdout.on('data', d => {
-      buf += d; let i;
-      while ((i = buf.indexOf('\n')) >= 0) { const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1); if (!line) continue; try { onUpdate(JSON.parse(line)); } catch {} }
-    });
-    child.on('exit', () => { child = null; if (!stopped) setTimeout(start, 3000); });
-    child.on('error', () => {});
+  subscribers.add(onUpdate);
+  if (last) try { onUpdate(last); } catch {}
+  startLoop();
+  return () => {
+    if (!subscribers.delete(onUpdate) || subscribers.size) return;
+    clearTimeout(restart); restart = null; last = null;
+    const c = child; child = null; try { c?.kill(); } catch {}
   };
-  start();
-  return () => { stopped = true; try { child?.kill(); } catch {} };
 }
 function send(cmd) {
   if (process.platform !== 'win32' || !COMMANDS[cmd]) return Promise.resolve(false);

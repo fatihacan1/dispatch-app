@@ -919,16 +919,18 @@ const mediaLib = require('./media.cjs');
 let mediaStop = null;
 ipcMain.handle('media:watch', (_e, on) => {
   mediaStop?.(); mediaStop = null;
-  for (const c of comfyJobs.values()) c.stop(); comfyJobs.clear();
   if (on) mediaStop = mediaLib.watch(u => notify('media:update', u));
   return true;
 });
 ipcMain.handle('media:control', (_e, cmd) => mediaLib.send(String(cmd)));
 ipcMain.handle('outputs:reveal', (_e, file) => { const full = file ? path.resolve(String(file)) : ''; if (full && outputAllowed(full) && fs.existsSync(full)) { shell.showItemInFolder(full); return true; } fs.mkdirSync(outputsDir(), { recursive: true }); void shell.openPath(outputsDir()); return false; });
-ipcMain.handle('tools:install', (_e, id = 'comfyui') => {
-  const script = id === 'comfyui' ? tools.installScript() : tools.TOOL_INSTALL[id]?.();
+ipcMain.handle('tools:can-uninstall', () => Object.fromEntries(['comfyui', 'voicestudio', 'rustxng', 'ddgs', 'whisper', 'blender'].map(id => [id, tools.canUninstall(id)])));
+ipcMain.handle('tools:unreal-disable', () => unreal.disablePlugins());
+ipcMain.handle('tools:install', (_e, id = 'comfyui', mode = 'install') => {
+  const uninstall = mode === 'uninstall';
+  const script = uninstall ? tools.TOOL_UNINSTALL[id]?.() : id === 'comfyui' ? tools.installScript() : tools.TOOL_INSTALL[id]?.();
   if (!script) throw new Error(`Unknown tool: ${id}`);
-  const name = `tool-${id}-install`;
+  const name = `tool-${id}-${uninstall ? 'uninstall' : 'install'}`;
   processes.get(name)?.terminal.kill(); processes.delete(name);
   const terminal = pty.spawn('powershell.exe', ['-NoProfile', '-Command', script], { name: 'xterm-256color', cols: 100, rows: 24, cwd: os.homedir(), env: process.env });
   const entry = { terminal, queue: [], output: '' }; processes.set(name, entry);
@@ -1356,6 +1358,7 @@ function killTrees() {
 // Tab closed or app quitting: every agent goes down with everything it started, and nothing keeps watching.
 function dispose() {
   mediaStop?.(); mediaStop = null;
+  for (const c of comfyJobs.values()) c.stop(); comfyJobs.clear();
   finishOperation(); watcher?.close(); memoryWatcher?.close(); outputsWatcher?.close(); galleryWatcher?.close(); toolDirWatchers.forEach(w => w.close());
   filesLib.unwatch(host.id); codeIndexWorker?.postMessage('close'); killTrees(); stopAgents();
   for (const s of shells.values()) try { s.terminal.kill(); } catch {}

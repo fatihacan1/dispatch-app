@@ -7,6 +7,7 @@ import blenderSvg from "../../public/tools/blender.svg?raw";
 import { ArrowTopRightOnSquareIcon, FolderArrowDownIcon, FolderIcon, MicrophoneIcon, PlusIcon, XMarkIcon } from "@heroicons/react/16/solid";
 import { Button, Console, StatusDot } from "../components/common";
 import { ScheduleTool, TelegramTool } from "./ToolsExtra";
+import { ask } from "../components/ask";
 import { CustomToolForm, CustomToolRows, EMPTY_TOOL, useCustomTools, type ToolDraft } from "./CustomTools";
 
 type Comfy = { installed: boolean; running: boolean; url: string; path: string; version: string; models: number; gpu: string; startedByDispatch: boolean };
@@ -20,14 +21,32 @@ export function Tools({ openMemory }: { openMemory?: () => void }) {
   const [comfy, setComfy] = useState<Comfy | null>(null);
   const [mcp, setMcp] = useState<Record<string, boolean> | null>(null);
   const [busy, setBusy] = useState(false);
-  const [task, setTask] = useState<{ name: string; label: string; done?: boolean; code?: number; terminal?: boolean } | null>(null);
+  const [task, setTask] = useState<{ name: string; label: string; done?: boolean; code?: number; terminal?: boolean; removing?: boolean } | null>(null);
   const custom = useCustomTools();
   const [formOpen, setFormOpen] = useState(false);
   const [draft, setDraft] = useState<ToolDraft>(EMPTY_TOOL);
   const openForm = (d: ToolDraft) => { setDraft(d); setFormOpen(true); };
   const [error, setError] = useState("");
   const [files, setFiles] = useState<Record<string, string | null>>({});
-  const loadFiles = () => Promise.all(["comfyui", "voicestudio", "rustxng", "ddgs", "blender"].map(async id => [id, await army().tools.file?.(id).catch(() => null)] as const)).then(e => setFiles(Object.fromEntries(e)));
+  const [removable, setRemovable] = useState<Record<string, boolean>>({});
+  const loadFiles = () => {
+    army().tools.canUninstall?.().then(setRemovable).catch(() => {});
+    return Promise.all(["comfyui", "voicestudio", "rustxng", "ddgs", "blender", "unreal", "whisper"].map(async id => [id, await army().tools.file?.(id).catch(() => null)] as const)).then(e => setFiles(Object.fromEntries(e)));
+  };
+  // What each Uninstall removes; Dispatch never deletes a tool the user installed on their own.
+  const REMOVES: Record<string, string> = {
+    comfyui: "Deletes the ComfyUI folder Dispatch installed, including every downloaded model.",
+    voicestudio: "Opens VoiceStudio's own uninstaller.",
+    rustxng: "Deletes rustxng.exe from Dispatch's tools folder.",
+    ddgs: "Deletes DDGS and its Python environment.",
+    whisper: "Deletes the whisper.cpp engine and the speech model.",
+    blender: "Turns the MCP add-on off and deletes it. Blender itself stays installed. Close Blender first.",
+  };
+  const uninstall = (id: string, label: string) => run(async () => {
+    if (!(await ask.confirm(`Uninstall ${label}?`, { description: REMOVES[id], action: "Uninstall", danger: true }))) return;
+    setTask({ label, removing: true, name: await army().tools.uninstall(id) });
+  });
+  const remove = (id: string, label: string) => removable[id] ? <Button className="danger-ghost" disabled={busy} onClick={() => uninstall(id, label)}>Uninstall</Button> : null;
   const show = (id: string) => files[id] ? <button type="button" className="icon-button lg" title={`Show ${files[id]} in folder`} aria-label={`Show ${files[id]} in folder`} onClick={() => army().tools.reveal(id)}><FolderArrowDownIcon /></button> : null;
   const [voice, setVoice] = useState<{ installed: boolean; running: boolean; url: string; path: string } | null>(null);
   const [bl, setBl] = useState<{ installed: boolean; running: boolean; addon: boolean; version: string; path: string; port: number } | null>(null);
@@ -65,6 +84,7 @@ export function Tools({ openMemory }: { openMemory?: () => void }) {
             {comfy?.installed && !comfy.running && <Button className="primary" disabled={busy} onClick={() => run(() => army().tools.start())}>Start</Button>}
             {comfy?.running && <Button className="secondary" onClick={() => window.open(comfy.url, "_blank")}><ArrowTopRightOnSquareIcon aria-hidden="true" />Open</Button>}
             {comfy?.running && <Button className="danger-ghost" disabled={busy} onClick={() => run(() => army().tools.stop())}>Stop</Button>}
+            {comfy?.installed && remove("comfyui", "ComfyUI")}
             {show("comfyui")}
             <button type="button" className="icon-button lg" title="Choose ComfyUI folder" aria-label="Choose ComfyUI folder" onClick={() => run(() => army().tools.choosePath())}><FolderIcon /></button>
           </div>
@@ -79,6 +99,8 @@ export function Tools({ openMemory }: { openMemory?: () => void }) {
           <div className="prov-actions">
             {ue?.installed && ue.project && !ue.pluginsEnabled && <Button className="primary" disabled={busy} onClick={() => run(() => army().tools.unrealEnable())}>Enable MCP plugins</Button>}
             {ue?.installed && ue.project && ue.pluginsEnabled && !ue.running && <Button className="primary" disabled={busy} onClick={() => run(() => army().tools.unrealOpen())}>Open editor</Button>}
+            {ue?.installed && ue.project && ue.pluginsEnabled && <Button className="danger-ghost" disabled={busy} onClick={() => run(async () => { if (await ask.confirm("Turn off Unreal MCP?", { description: `Removes the MCP plugins from ${ue.projectName}.uproject and stops the server from starting with the editor. The engine and your project stay; the old file is kept as .uproject.bak. Close the editor first.`, action: "Turn off", danger: true })) await army().tools.unrealDisable(); })}>Uninstall</Button>}
+            {show("unreal")}
             {ue?.installed && <button type="button" className="icon-button lg" title="Choose .uproject" aria-label="Choose Unreal project" onClick={() => run(async () => { await army().tools.unrealChoose(); void loadFiles(); })}><FolderIcon /></button>}
           </div>
         </div>
@@ -92,6 +114,7 @@ export function Tools({ openMemory }: { openMemory?: () => void }) {
           <div className="prov-actions">
             {bl?.installed && !bl.addon && <Button className="primary" disabled={busy} onClick={() => run(async () => setTask({ label: "Blender MCP add-on", name: await army().tools.install("blender") }))}>Install add-on</Button>}
             {bl?.installed && bl.addon && !bl.running && <Button className="primary" disabled={busy} onClick={() => run(() => army().tools.blenderStart())}>Open Blender</Button>}
+            {bl?.addon && remove("blender", "Blender MCP add-on")}
             {show("blender")}
             <button type="button" className="icon-button lg" title="Choose blender.exe" aria-label="Choose blender.exe" onClick={() => run(async () => { await army().tools.blenderChoose(); void loadFiles(); })}><FolderIcon /></button>
           </div>
@@ -106,6 +129,7 @@ export function Tools({ openMemory }: { openMemory?: () => void }) {
           <div className="prov-actions">
             {voice && !voice.installed && <Button className="primary" disabled={busy} onClick={() => run(async () => setTask({ label: "VoiceStudio", name: await army().tools.install("voicestudio") }))}>Install</Button>}
             {voice?.installed && !voice.running && <Button className="primary" disabled={busy} onClick={() => run(() => army().tools.voiceStart())}>Start</Button>}
+            {voice?.installed && remove("voicestudio", "VoiceStudio")}
             {show("voicestudio")}
             <button type="button" className="icon-button lg" title="Choose VoiceStudio.exe" aria-label="Choose VoiceStudio.exe" onClick={() => run(async () => { await army().tools.voiceChoose(); void loadFiles(); })}><FolderIcon /></button>
           </div>
@@ -119,6 +143,7 @@ export function Tools({ openMemory }: { openMemory?: () => void }) {
           </div>
           <div className="prov-actions">
             {stt && !stt.installed && <Button className="primary" disabled={busy} onClick={() => run(async () => setTask({ label: "voice typing", name: await army().tools.install("whisper") }))}>Install</Button>}
+            {stt?.installed && remove("whisper", "voice typing")}
             {stt?.installed && <button type="button" className="icon-button lg" title="Show the voice typing folder" aria-label="Show the voice typing folder" onClick={() => army().tools.reveal("whisper")}><FolderArrowDownIcon /></button>}
           </div>
         </div>
@@ -139,6 +164,7 @@ export function Tools({ openMemory }: { openMemory?: () => void }) {
               <small>{t.desc} · Built in, {mcp?.[t.id] ? "ready for agents" : t.how.toLowerCase()}</small>
             </div>
             <div className="prov-actions">
+              {mcp?.[t.id] && remove(t.id, t.name)}
               {show(t.id)}
               {mcp && !mcp[t.id] && <Button className="primary" disabled={busy} onClick={() => run(async () => setTask({ label: t.name, name: await army().tools.install(t.id) }))}>Install</Button>}
             </div>
@@ -147,7 +173,7 @@ export function Tools({ openMemory }: { openMemory?: () => void }) {
         {error && <p className="tpl-error">{error}</p>}
       </div>
       {task && <div className="prov-task">
-        <div className="prov-task-head"><span>{task.terminal ? `${task.label} · terminal` : task.done ? (task.code === 0 ? "Finished" : `Exited with code ${task.code}`) : `Installing ${task.label}…`}</span>{task.label === "ComfyUI" && <small>Downloads the official Windows portable build (several GB).</small>}<Button className="ghost" onClick={() => setTask(null)}>{task.done || task.terminal ? "Close" : "Hide"}</Button></div>
+        <div className="prov-task-head"><span>{task.terminal ? `${task.label} · terminal` : task.done ? (task.code === 0 ? "Finished" : `Exited with code ${task.code}`) : `${task.removing ? "Uninstalling" : "Installing"} ${task.label}…`}</span>{task.label === "ComfyUI" && !task.removing && <small>Downloads the official Windows portable build (several GB).</small>}<Button className="ghost" onClick={() => setTask(null)}>{task.done || task.terminal ? "Close" : "Hide"}</Button></div>
         <Console key={task.name} name={task.name} />
       </div>}
     </div>

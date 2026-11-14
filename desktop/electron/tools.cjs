@@ -149,6 +149,33 @@ TOOL_INSTALL.voicestudio = () => `$ErrorActionPreference='Stop'; Write-Host 'Run
 TOOL_INSTALL.blender = () => require('./blender.cjs').installScript();
 TOOL_INSTALL.whisper =() => require('./whisper.cjs').installScript();
 
+// Uninstall: PowerShell run in the same console as the install. Only removes what Dispatch put there;
+// a tool the user installed on their own (ComfyUI elsewhere, Blender, Unreal) keeps its files.
+const comfyManaged = () => { const l = comfyConfig().layout; return !!l && path.resolve(l.root).toLowerCase() === path.resolve(DEFAULT_INSTALL()).toLowerCase(); };
+function voiceUninstaller() {
+  const a = voiceApp(); if (!a?.exe) return null;
+  const d = path.dirname(a.exe);
+  try { const f = fs.readdirSync(d).find(n => /^(uninstall.*|unins\d*)\.exe$/i.test(n)); return f ? path.join(d, f) : null; } catch { return null; }
+}
+const removePath = (p, label) => `$ErrorActionPreference='Stop'; $d='${q(p)}'; if (Test-Path $d) { Write-Host 'Removing' $d; Remove-Item $d -Recurse -Force; Write-Host '${label} removed.' } else { Write-Host '${label} was already removed.' }`;
+const TOOL_UNINSTALL = {
+  rustxng: () => removePath(path.join(binDirs()[0], process.platform === 'win32' ? 'rustxng.exe' : 'rustxng'), 'RustXNG'),
+  ddgs: () => removePath(path.join(TOOLS_HOME(), 'ddgs'), 'DDGS'),
+  whisper: () => { const w = require('./whisper.cjs'); w.stop(); return 'Start-Sleep -Seconds 1; ' + removePath(w.HOME(), 'Voice typing'); },
+  blender: () => require('./blender.cjs').uninstallScript(),
+  comfyui: () => {
+    if (!comfyManaged()) throw new Error('This ComfyUI was not installed by Dispatch, so Dispatch leaves its files alone.');
+    const root = comfyConfig().layout.root; comfyStop();
+    // Give python a moment to exit and release its files.
+    return 'Start-Sleep -Seconds 3; ' + removePath(root, 'ComfyUI');
+  },
+  voicestudio: () => {
+    const u = voiceUninstaller(); if (!u) throw new Error('VoiceStudio uninstaller not found. Remove it from Windows Settings, Apps.');
+    return `$ErrorActionPreference='Stop'; Write-Host 'Running the VoiceStudio uninstaller. Finish it in its window.'; Start-Process -FilePath '${q(u)}' -Wait; Write-Host 'Done.'`;
+  },
+};
+const canUninstall = id => id === 'comfyui' ? comfyManaged() : id === 'voicestudio' ? !!voiceUninstaller() : id in TOOL_UNINSTALL;
+
 // The file that matters for each tool: what the user would start or replace by hand.
 function toolFile(id) {
   if (id === 'comfyui') {
@@ -163,4 +190,4 @@ function toolFile(id) {
   const exe = id === 'rustxng' ? path.join(binDirs()[0], process.platform === 'win32' ? 'rustxng.exe' : 'rustxng') : id === 'ddgs' ? path.join(binDirs()[1], process.platform === 'win32' ? 'ddgs.exe' : 'ddgs') : '';
   return exe && fs.existsSync(exe) ? exe : null;
 }
-module.exports = { voiceStatus, voiceStart, voiceUrl, setVoiceExe, toolFile, comfyConfig, comfyStatus, comfyStart, comfyStop, setComfyPath, installScript, comfyLayout, readSettings, writeSettings, binDirs, TOOL_INSTALL };
+module.exports = { TOOL_UNINSTALL, canUninstall, voiceStatus, voiceStart, voiceUrl, setVoiceExe, toolFile, comfyConfig, comfyStatus, comfyStart, comfyStop, setComfyPath, installScript, comfyLayout, readSettings, writeSettings, binDirs, TOOL_INSTALL };

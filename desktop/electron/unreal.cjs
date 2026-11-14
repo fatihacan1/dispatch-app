@@ -103,6 +103,29 @@ function serverAutoStarts(project) {
   try { const t = fs.readFileSync(path.join(path.dirname(project), 'Config', 'DefaultEditorPerProjectUserSettings.ini'), 'utf8'); const i = t.indexOf(SERVER_SECTION); return i >= 0 && /bAutoStartServer=True/i.test(t.slice(i, (t.indexOf('\n[', i + 1) + 1 || t.length + 1) - 1)); } catch { return false; }
 }
 
+// Reverse of enablePlugins: takes the MCP plugins out of the project and the auto-start section out of the ini.
+// The engine and the project's other files stay; the previous .uproject is kept as .uproject.bak.
+function disablePlugins() {
+  const { project } = config();
+  if (!project) throw new Error('Choose a project first.');
+  const raw = fs.readFileSync(project, 'utf8');
+  const p = JSON.parse(raw);
+  if (Array.isArray(p.Plugins)) p.Plugins = p.Plugins.filter(x => !PLUGINS.includes(x.Name));
+  fs.writeFileSync(project + '.bak', raw);
+  fs.writeFileSync(project, JSON.stringify(p, null, '\t') + '\n');
+  const file = path.join(path.dirname(project), 'Config', 'DefaultEditorPerProjectUserSettings.ini');
+  try {
+    let text = fs.readFileSync(file, 'utf8');
+    const start = text.indexOf(SERVER_SECTION);
+    if (start >= 0) {
+      const next = text.indexOf('\n[', start + 1);
+      text = (text.slice(0, start) + (next >= 0 ? text.slice(next + 1) : '')).replace(/\n{3,}/g, '\n\n');
+      fs.writeFileSync(file, text);
+    }
+  } catch {}
+  return true;
+}
+
 function openEditor() {
   const { engine, project } = config();
   if (!engine) throw new Error('Unreal Engine 5.8 or newer was not found.');
@@ -111,4 +134,4 @@ function openEditor() {
   return true;
 }
 
-module.exports = { DEFAULT_URL, PLUGINS, config, url, status, setProject, enablePlugins, openEditor, editorExe };
+module.exports = { DEFAULT_URL, PLUGINS, config, url, status, setProject, enablePlugins, disablePlugins, openEditor, editorExe };
