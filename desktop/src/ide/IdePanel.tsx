@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronRightIcon, DocumentIcon, FolderIcon, FolderOpenIcon, MagnifyingGlassIcon, XMarkIcon, ArrowsRightLeftIcon, ArrowPathIcon, CommandLineIcon, CodeBracketIcon } from "@heroicons/react/16/solid";
+import { ChevronDoubleLeftIcon, ChevronDoubleRightIcon, ChevronRightIcon, DocumentIcon, FolderIcon, FolderOpenIcon, MagnifyingGlassIcon, XMarkIcon, ArrowsRightLeftIcon, ArrowPathIcon, CommandLineIcon, CodeBracketIcon } from "@heroicons/react/16/solid";
 import { monaco, applyTheme } from "./monaco";
 
 type Entry = { name: string; path: string; dir: boolean; ignored?: boolean };
@@ -11,7 +11,9 @@ const uriFor = (rel: string) => monaco.Uri.from({ scheme: "file", path: "/ws/" +
 const base = (p: string) => p.split("/").pop() || p;
 const parent = (p: string) => p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
 
-export function IdePanel({ workspace, open, request, gitFiles, terminal, terminalOpen, toggleTerminal, close }: { close?: () => void; workspace: string; open: boolean; request: OpenRequest | null; gitFiles: GitFile[] | null; terminal?: React.ReactNode; terminalOpen?: boolean; toggleTerminal?: () => void }) {
+// editorOnFile (Settings > Appearance): with no file open the panel is only the tree, the editor appears with the first file.
+// treeToggle: a button that folds the tree away so the editor gets the whole panel.
+export function IdePanel({ workspace, open, request, gitFiles, terminal, terminalOpen, toggleTerminal, close, editorOnFile, treeToggle, onCompact }: { close?: () => void; workspace: string; open: boolean; request: OpenRequest | null; gitFiles: GitFile[] | null; terminal?: React.ReactNode; terminalOpen?: boolean; toggleTerminal?: () => void; editorOnFile?: boolean; treeToggle?: boolean; onCompact?: (compact: boolean) => void }) {
   const [children, setChildren] = useState<Record<string, Entry[]>>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set([""]));
   const [tabs, setTabs] = useState<Tab[]>([]);
@@ -255,8 +257,13 @@ export function IdePanel({ workspace, open, request, gitFiles, terminal, termina
 
   const activeTab = tabs.find(t => t.path === active);
   const rootName = workspace.split(/[\\/]/).pop() || workspace;
+  const compact = !!editorOnFile && tabs.length === 0 && !terminalOpen;
+  const [treeHidden, setTreeHidden] = useState(false);
+  const hideTree = !!treeToggle && treeHidden && !compact;
+  useEffect(() => { onCompact?.(compact); }, [compact]);
+  const closeButton = close && <button type="button" className="button ghost ide-toggle on" aria-pressed="true" aria-label="Hide files" title="Hide files (Ctrl E)" onClick={close}><CodeBracketIcon aria-hidden="true" />Files</button>;
 
-  return <div className="ide" ref={panel} onDragOver={e => { if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); e.stopPropagation(); } }} onDrop={e => { if (e.dataTransfer.types.includes("Files")) e.preventDefault(); }}>
+  return <div className={"ide" + (compact ? " compact" : "") + (hideTree ? " tree-hidden" : "")} ref={panel} onDragOver={e => { if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); e.stopPropagation(); } }} onDrop={e => { if (e.dataTransfer.types.includes("Files")) e.preventDefault(); }}>
     <div className="ide-side">
       <div className="ide-side-head">
         <div className="ide-seg" role="tablist" aria-label="Explorer">
@@ -266,6 +273,8 @@ export function IdePanel({ workspace, open, request, gitFiles, terminal, termina
         <span className="grow" />
         <button type="button" className="icon-button" title="Quick open (Ctrl P)" aria-label="Quick open" onClick={async () => { setQuick({ query: "", files: [], index: 0 }); const files = await window.army.files.all().catch(() => []); setQuick(q => q ? { ...q, files } : q); }}><MagnifyingGlassIcon /></button>
         <button type="button" className="icon-button" title="Refresh" aria-label="Refresh files" onClick={() => { for (const d of Object.keys(children)) void loadDir(d); }}><ArrowPathIcon /></button>
+        {treeToggle && !compact && <button type="button" className="icon-button" title="Hide the file tree" aria-label="Hide the file tree" onClick={() => setTreeHidden(true)}><ChevronDoubleLeftIcon /></button>}
+        {compact && closeButton}
       </div>
       {side === "files" ? <div className={"ide-tree" + (dropDir === "" ? " drop" : "")} role="tree" aria-label={rootName} data-dir="" onDragOver={onTreeDragOver} onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropDir(null); }} onDrop={e => void onTreeDrop(e)}>
         <div className="ide-root" title={workspace}>{rootName}</div>
@@ -285,6 +294,7 @@ export function IdePanel({ workspace, open, request, gitFiles, terminal, termina
     </div>
     <div className="ide-main">
       <div className="ide-tabs" role="tablist" aria-label="Open files">
+        {hideTree && <button type="button" className="icon-button" title="Show the file tree" aria-label="Show the file tree" onClick={() => setTreeHidden(false)}><ChevronDoubleRightIcon /></button>}
         {tabs.map(t => <div key={t.path} role="tab" aria-selected={t.path === active} className={"ide-tab" + (t.path === active ? " active" : "")} title={t.path}
           onMouseDown={e => { if (e.button === 1) { e.preventDefault(); closeTab(t.path); } }} onClick={() => { setActive(t.path); void showTab(t); }}>
           <span>{base(t.path)}</span>
@@ -292,7 +302,7 @@ export function IdePanel({ workspace, open, request, gitFiles, terminal, termina
           <button type="button" className="ide-tab-x" aria-label={`Close ${base(t.path)}`} onClick={e => { e.stopPropagation(); closeTab(t.path); }}><XMarkIcon /></button>
         </div>)}
         <span className="grow" />
-        {close && <button type="button" className="button ghost ide-toggle on" aria-pressed="true" aria-label="Hide files" title="Hide files (Ctrl E)" onClick={close}><CodeBracketIcon aria-hidden="true" />Files</button>}
+        {closeButton}
         {toggleTerminal && <button type="button" className={"icon-button" + (terminalOpen ? " on" : "")} aria-pressed={!!terminalOpen} title="Terminal (Ctrl `)" aria-label="Toggle terminal" onClick={toggleTerminal}><CommandLineIcon /></button>}
         {activeTab?.model && <button type="button" className={"icon-button" + (activeTab.diff ? " on" : "")} aria-pressed={activeTab.diff} title={activeTab.diff ? "Back to editor" : "Compare with last commit"} aria-label="Toggle diff" onClick={() => void openFile(activeTab.path, { diff: !activeTab.diff })}><ArrowsRightLeftIcon /></button>}
       </div>

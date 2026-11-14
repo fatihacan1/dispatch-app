@@ -195,6 +195,7 @@ input[type=checkbox] { width: 15px; height: 15px; margin: 0; accent-color: var(-
   transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 .rail-item svg { width: 18px; height: 18px; }
+.rail-item .rail-color { width: 20px; height: 20px; }
 .rail-item:hover:not(:disabled) { color: var(--text); background: var(--hover); }
 .rail-item.active { color: var(--text-on-primary); background: var(--primary); }
 .rail-item:disabled { opacity: 0.35; cursor: default; }
@@ -361,6 +362,18 @@ input[type=checkbox] { width: 15px; height: 15px; margin: 0; accent-color: var(-
 .older-hint { text-align: center; }
 .composer.dragging { border-color: var(--focus); }
 .composer textarea { min-height: 44px; max-height: 240px; padding: 4px 0; border: 0; background: transparent; resize: none; field-sizing: content; }
+/* Links in the message box: the textarea text turns transparent and a mirror below it draws the same text, links in blue. */
+.composer-input { position: relative; display: grid; }
+.composer-input > * { grid-area: 1 / 1; }
+.composer-mirror { padding: 4px 0; max-height: 240px; overflow: hidden; white-space: pre-wrap; overflow-wrap: break-word; word-break: normal; font: inherit; line-height: var(--leading); color: var(--text); pointer-events: none; }
+.composer-input.has-links textarea { color: transparent; caret-color: var(--text); position: relative; }
+.composer-input.has-links textarea::selection { color: transparent; }
+.composer-link { color: var(--focus); }
+.link-list { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.link-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 280px; height: 26px; padding: 0 8px; border: var(--border); border-radius: var(--radius); color: var(--focus); font-size: var(--text-sm); text-decoration: none; }
+.link-chip:hover { border-color: var(--focus); }
+.link-chip svg { width: 14px; height: 14px; flex: none; }
+.link-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composer textarea:focus { box-shadow: none; }
 .composer-bar { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
 .composer-hint { font-size: var(--text-xs); color: var(--text-3); margin-right: 6px; }
@@ -659,6 +672,12 @@ input[type=checkbox] { width: 15px; height: 15px; margin: 0; accent-color: var(-
 .ide-toggle.on { background: var(--selected); color: var(--text); }
 
 .ide { position: relative; display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 0; height: 100%; background: var(--bg); }
+.ide.compact { grid-template-columns: minmax(0, 1fr); }
+.ide.compact .ide-main { display: none; }
+.ide.compact .ide-side { border-right: 0; }
+.ide.compact .ide-side-head .ide-toggle { margin-left: 2px; }
+.ide.tree-hidden { grid-template-columns: minmax(0, 1fr); }
+.ide.tree-hidden .ide-side { display: none; }
 .ide-side { display: flex; flex-direction: column; min-height: 0; border-right: var(--border); background: var(--surface); }
 .ide-side-head { display: flex; align-items: center; gap: 2px; height: 44px; padding: 0 6px 0 8px; border-bottom: var(--border); flex: none; }
 .ide-seg { display: flex; padding: 2px; border-radius: var(--radius); background: var(--bg); border: var(--border); }

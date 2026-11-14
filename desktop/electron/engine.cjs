@@ -594,6 +594,9 @@ ipcMain.handle('ui:set', (_e, patch) => {
   // Terminal (Settings > Terminal): which shell the side panel opens, and where.
   if (patch && typeof patch.terminalShell === 'string' && /^[\w-]{1,20}$/.test(patch.terminalShell)) next.terminalShell = patch.terminalShell;
   for (const k of ['terminalPath', 'terminalArgs', 'terminalCwd']) if (patch && typeof patch[k] === 'string' && patch[k].length <= 1000) next[k] = patch[k].trim();
+  // Settings > Appearance: menu icon set and how the Files panel behaves.
+  if (patch && ['mono', 'color'].includes(patch.navIcons)) next.navIcons = patch.navIcons;
+  for (const k of ['ideEditorOnFile', 'ideTreeToggle']) if (patch && typeof patch[k] === 'boolean') next[k] = patch[k];
   if (patch && Number.isFinite(patch.ideWidth)) next.ideWidth = Math.max(420, Math.min(3000, Math.round(patch.ideWidth)));
   fs.mkdirSync(globalDir(), { recursive: true }); fs.writeFileSync(uiFile(), JSON.stringify(next, null, 2));
   return next;

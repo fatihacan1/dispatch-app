@@ -11,7 +11,7 @@ import { ProjectTabs } from "./Tabs";
 import { getLang, setLang, type Lang } from "../lib/i18n";
 import {
   ChatBubbleLeftRightIcon, ChevronDownIcon, Cog6ToothIcon, CpuChipIcon, ServerStackIcon, DocumentIcon, DocumentTextIcon, EnvelopeIcon,
-  CheckIcon, CodeBracketIcon, FolderIcon, MicrophoneIcon, HomeIcon, MagnifyingGlassIcon, PaperAirplaneIcon, PaperClipIcon, PlusIcon, Squares2X2Icon, StopIcon, CubeIcon, WrenchScrewdriverIcon, TrashIcon, XMarkIcon, BookOpenIcon, ArrowsRightLeftIcon, CircleStackIcon, BeakerIcon,
+  CheckIcon, CodeBracketIcon, FolderIcon, LinkIcon, MicrophoneIcon, HomeIcon, MagnifyingGlassIcon, PaperAirplaneIcon, PaperClipIcon, PlusIcon, Squares2X2Icon, StopIcon, CubeIcon, WrenchScrewdriverIcon, TrashIcon, XMarkIcon, BookOpenIcon, ArrowsRightLeftIcon, CircleStackIcon, BeakerIcon,
 } from "@heroicons/react/16/solid";
 import { ArrowDownIcon } from "@heroicons/react/20/solid";
 import { Skills } from "./Skills";
@@ -130,6 +130,16 @@ function AgentId({ agent, template }: { agent: AgentInfo; template?: any }) {
 }
 const clean = (e: unknown) => String(e).replace(/^Error: Error invoking remote method '[^']+': (Error: )?/, "");
 const ago = (date: string) => { const s = (Date.now() - new Date(date).getTime()) / 1000; return s < 60 ? "just now" : s < 3600 ? `${Math.floor(s / 60)} min ago` : s < 86400 ? `${Math.floor(s / 3600)} h ago` : new Date(date).toLocaleDateString(); };
+// Links typed or pasted into the message box: shown blue in the text (a mirror layer under the textarea) and as chips.
+const URL_RE = /\bhttps?:\/\/[^\s<>"'`]+[^\s<>"'`.,;:!?)\]}]/gi;
+const findLinks = (text: string) => [...new Set(text.match(URL_RE) || [])].slice(0, 6);
+const linkLabel = (u: string) => { try { const x = new URL(u); return x.hostname.replace(/^www\./, "") + (x.pathname.length > 1 ? x.pathname : ""); } catch { return u; } };
+function splitLinks(text: string) {
+  const out: { text: string; link: boolean }[] = []; let at = 0;
+  for (const m of text.matchAll(URL_RE)) { if (m.index! > at) out.push({ text: text.slice(at, m.index), link: false }); out.push({ text: m[0], link: true }); at = m.index! + m[0].length; }
+  if (at < text.length) out.push({ text: text.slice(at), link: false });
+  return out;
+}
 const DEMO_FILES = [{ path: "src/auth/session.ts", add: 42, del: 8 }, { path: "src/auth/refresh.ts", add: 18, del: 3 }, { path: "test/refresh.test.ts", add: 64, del: 0 }];
 const NAV: [string, string, string, React.ComponentType<React.SVGProps<SVGSVGElement>>][] = [
   ["home", "Home", "Home", HomeIcon],
@@ -186,6 +196,8 @@ export function App() {
   const [mode, setMode] = useState<"chat" | "terminal">("chat");
   const [messages, setMessages] = useState<Timed[]>([]);
   const [text, setText] = useState("");
+  const links = findLinks(text);
+  const mirror = useRef<HTMLDivElement>(null);
   const [attachments, setAttachments] = useState<File[]>([]);
   const [draggingFiles, setDraggingFiles] = useState(false);
   const [sending, setSending] = useState(false);
@@ -313,7 +325,11 @@ export function App() {
     const ro = new ResizeObserver(() => setWbWidth(el.clientWidth)); ro.observe(el);
     return () => ro.disconnect();
   }, [view, agents.length]);
-  useEffect(() => { void window.army.ui?.get().then((u: any) => { if (u?.ideWidth) setIdeW(u.ideWidth); if (u?.ideOpen) { setIdeMounted(true); setIde(true); } }).catch(() => {}); }, []);
+  // Settings > Appearance (stored in ~/.dispatch/ui.json): menu icons and Files panel behaviour.
+  const [prefs, setPrefs] = useState<{ navIcons?: "mono" | "color"; ideEditorOnFile?: boolean; ideTreeToggle?: boolean }>({});
+  const setPref = (patch: Partial<typeof prefs>) => { setPrefs(p => ({ ...p, ...patch })); void window.army.ui?.set(patch).catch(() => {}); };
+  const [ideCompact, setIdeCompact] = useState(false);
+  useEffect(() => { void window.army.ui?.get().then((u: any) => { setPrefs({ navIcons: u?.navIcons, ideEditorOnFile: !!u?.ideEditorOnFile, ideTreeToggle: !!u?.ideTreeToggle }); if (u?.ideWidth) setIdeW(u.ideWidth); if (u?.ideOpen) { setIdeMounted(true); setIde(true); } }).catch(() => {}); }, []);
   const toggleIde = (next?: boolean) => setIde(v => { const on = next ?? !v; if (on) setIdeMounted(true); void window.army.ui?.set({ ideOpen: on }); return on; });
   // User terminals (PowerShell in the workspace), shown under the editor.
   const [shells, setShells] = useState<Shell[]>([]);
@@ -331,8 +347,14 @@ export function App() {
   const startIdeResize = (e: React.PointerEvent<HTMLDivElement>) => {
     const startX = e.clientX, start = ideW, box = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
     let last = start;
-    const move = (ev: PointerEvent) => { last = Math.round(Math.min(box.width * 0.7, Math.max(420, start + ev.clientX - startX))); setIdeW(last); };
-    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); document.body.classList.remove("resizing", "resizing-x"); void window.army.ui?.set({ ideWidth: last }); };
+    // The width goes straight onto the CSS variable while dragging; re-rendering the whole app (chat, office scene) on
+    // every mouse move made the handle lag, worst right after the panel opened. React gets the final width on release.
+    let frame = 0;
+    const move = (ev: PointerEvent) => {
+      last = Math.round(Math.min(box.width * 0.7, Math.max(420, start + ev.clientX - startX)));
+      if (!frame) frame = requestAnimationFrame(() => { frame = 0; workbench.current?.style.setProperty("--ide-w", Math.max(320, Math.min(last, box.width - 407)) + "px"); });
+    };
+    const up = () => { cancelAnimationFrame(frame); window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); document.body.classList.remove("resizing", "resizing-x"); setIdeW(last); void window.army.ui?.set({ ideWidth: last }); };
     document.body.classList.add("resizing", "resizing-x"); window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
   };
   const [working, setWorking] = useState<Record<string, boolean>>({});
@@ -666,7 +688,7 @@ export function App() {
       <nav className="rail" aria-label="Views">
         {NAV.map(([id, short, label, Icon]) => {
           const active = id === "home" ? showHome : !showHome && view === id;
-          return <button type="button" key={id} className={"rail-item" + (active ? " active" : "")} aria-current={active ? "page" : undefined} aria-label={label} title={label} disabled={id === "agent" && agents.length === 0} onClick={() => go(id)}><Icon aria-hidden="true" /><span>{short}</span></button>;
+          return <button type="button" key={id} className={"rail-item" + (active ? " active" : "")} aria-current={active ? "page" : undefined} aria-label={label} title={label} disabled={id === "agent" && agents.length === 0} onClick={() => go(id)}>{prefs.navIcons === "color" ? <img className="rail-color" src={`./nav-color/${id}.svg`} alt="" aria-hidden="true" /> : <Icon aria-hidden="true" />}<span>{short}</span></button>;
         })}
         <RemoteRailButton />
         {(import.meta as any).env?.DEV &&<button type="button" className={"rail-item rail-dev" + (mock ? " active" : "")} aria-label={mock ? "Mock data is loaded (dev only)" : "Fill with mock data (dev only)"} title="Dev only: a mock workspace with agents, messages, memory, skills, schedules and outputs" onClick={async () => {
@@ -775,6 +797,15 @@ export function App() {
                 <div className="setting-row"><div><b>Workspace</b><p>{workspace}</p></div><Button className="secondary" onClick={() => openWorkspace()}>Change</Button></div>
                 <div className="setting-row"><div><b>Language</b><p>Interface language. Chats and agent replies are not translated.</p></div><select aria-label="Language" value={getLang()} onChange={e => setLang(e.target.value as Lang)}><option value="en">English</option><option value="tr">Türkçe</option></select></div>
               </section>
+              <section className="settings-group">
+                <h2 className="label">Appearance</h2>
+                <div className="setting-row"><div><b>Menu icons</b><p>{prefs.navIcons === "color" ? <>Colored icons from Fluent UI System Icons by Microsoft (MIT license, <a href="https://github.com/microsoft/fluentui-system-icons" target="_blank" rel="noreferrer">github.com/microsoft/fluentui-system-icons</a>).</> : "Icons in the left menu. Colored icons are an open-source set by Microsoft, credited here once you pick them."}</p></div>
+                  <select aria-label="Menu icons" value={prefs.navIcons || "mono"} onChange={e => setPref({ navIcons: e.target.value as "mono" | "color" })}><option value="mono">Monochrome</option><option value="color">Colored (Fluent)</option></select></div>
+                <label className="setting-row"><div><b>Open the editor with the first file</b><p>With no file open, Files shows only the tree in a narrow panel. Off: the editor area is always there.</p></div>
+                  <input type="checkbox" aria-label="Open the editor with the first file" checked={!!prefs.ideEditorOnFile} onChange={e => setPref({ ideEditorOnFile: e.target.checked })} /></label>
+                <label className="setting-row"><div><b>Button to hide the file tree</b><p>Adds a button in Files that folds the tree away, so an open file gets the whole panel.</p></div>
+                  <input type="checkbox" aria-label="Button to hide the file tree" checked={!!prefs.ideTreeToggle} onChange={e => setPref({ ideTreeToggle: e.target.checked })} /></label>
+              </section>
               <RemoteSettings />
               <VoiceSettings openTools={() => setView("tools")} />
               <MemorySettings open={() => setView("memory")} />
@@ -788,10 +819,10 @@ export function App() {
         </div>}
         {/* The agent page stays mounted while another page is open: coming back does not rebuild the office scene, the terminal or the chat. */}
         {(agentSeen || onAgentPage) && <div className="view" hidden={!onAgentPage}>
-            <div ref={workbench} className={"workbench" + (ide ? " ide-open" : "")} style={{ "--ide-w": Math.max(320, Math.min(ideW, wbWidth - 407)) + "px" } as React.CSSProperties}>
-            <div className="ide-slot" aria-hidden={!ide} inert={!ide ? true : undefined}>{ideMounted && <Suspense fallback={<div className="ide-loading">Loading editor…</div>}><IdePanel workspace={workspace} open={ide} request={ideReq} gitFiles={demo ? DEMO_FILES : gitFiles} terminalOpen={termOpen} toggleTerminal={toggleTerminal} close={() => toggleIde()}
+            <div ref={workbench} className={"workbench" + (ide ? " ide-open" : "")} style={{ "--ide-w": (ideCompact ? 260 : Math.max(320, Math.min(ideW, wbWidth - 407))) + "px" } as React.CSSProperties}>
+            <div className="ide-slot" aria-hidden={!ide} inert={!ide ? true : undefined}>{ideMounted && <Suspense fallback={<div className="ide-loading">Loading editor…</div>}><IdePanel workspace={workspace} open={ide} request={ideReq} gitFiles={demo ? DEMO_FILES : gitFiles} terminalOpen={termOpen} toggleTerminal={toggleTerminal} close={() => toggleIde()} editorOnFile={prefs.ideEditorOnFile} treeToggle={prefs.ideTreeToggle} onCompact={setIdeCompact}
               terminal={<Terminals shells={shells} active={shellActive} setActive={setShellActive} onClose={() => setTermOpen(false)} height={termH} setHeight={setTermH} />} /></Suspense>}</div>
-            <div className="ide-resizer" role="separator" aria-orientation="vertical" aria-label="Resize files panel" tabIndex={ide ? 0 : -1} onPointerDown={startIdeResize} onKeyDown={e => { if (e.key === "ArrowLeft") setIdeW(w => Math.max(420, w - 32)); if (e.key === "ArrowRight") setIdeW(w => w + 32); }} />
+            <div className="ide-resizer" role="separator" aria-orientation="vertical" aria-label="Resize files panel" tabIndex={ide && !ideCompact ? 0 : -1} onPointerDown={e => { if (!ideCompact) startIdeResize(e); }} onKeyDown={e => { if (e.key === "ArrowLeft") setIdeW(w => Math.max(420, w - 32)); if (e.key === "ArrowRight") setIdeW(w => w + 32); }} />
             <div className="chat">
               {office && <><div className="stage" style={{ height: stageH }}><Suspense fallback={null}><Office agents={team.filter(a => a.name !== "boss").map(a => ({ name: a.name, role: a.model }))} messages={messages} working={working} /></Suspense></div>
               <div className="splitter" role="separator" aria-orientation="horizontal" aria-label="Resize office" tabIndex={0} onPointerDown={startResize} onKeyDown={e => { if (e.key === "ArrowUp") setStageH(h => Math.max(160, h - 24)); if (e.key === "ArrowDown") setStageH(h => h + 24); }} /></>}
@@ -840,12 +871,16 @@ export function App() {
                 {mode === "chat" && !atBottom && <button type="button" className="jump-bottom" aria-label="Scroll to the latest message" title="Latest message" onClick={() => toBottom(true)}><ArrowDownIcon aria-hidden="true" /></button>}
                 {draggingFiles && <div className="drop-hint">Drop files to attach</div>}
                 {attachments.length > 0 && <div className="attachment-list">{attachments.map((file, i) => <div className="attachment-chip" key={`${file.name}-${i}`}><AttachmentPreview file={file} /><span title={file.name}>{file.name}</span><button type="button" className="icon-button" aria-label={`Remove ${file.name}`} onClick={() => setAttachments(v => v.filter((_, index) => index !== i))}><XMarkIcon /></button></div>)}</div>}
-                <textarea ref={textArea}
+                {links.length > 0 && <div className="link-list">{links.map(u => <a key={u} className="link-chip" href={u} target="_blank" rel="noreferrer" title={u}><LinkIcon aria-hidden="true" /><span>{linkLabel(u)}</span></a>)}</div>}
+                <div className={"composer-input" + (links.length ? " has-links" : "")}>
+                {links.length > 0 && <div className="composer-mirror" ref={mirror} aria-hidden="true">{splitLinks(text).map((part, i) => part.link ? <span key={i} className="composer-link">{part.text}</span> : part.text)}{"\n"}</div>}
+                <textarea ref={textArea} onScroll={e => { if (mirror.current) mirror.current.scrollTop = e.currentTarget.scrollTop; }}
                   aria-label="Message" disabled={!!archive || sending} value={text} placeholder={voice === "on" ? "Listening… speak, then Enter to send" : `Message ${selected}…`}
                   onPaste={e => { if (e.clipboardData.files.length) { e.preventDefault(); addFiles(e.clipboardData.files); } }}
                   onChange={e => { if (dict.current) { vBase.current = e.target.value; vPos.current = e.target.selectionStart; vPartial.current = ""; } setText(e.target.value); }}
                   onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); } if (e.key === "Escape" && dict.current) { e.preventDefault(); void stopVoice(); } }}
                 />
+                </div>
                 <div className="composer-bar">
                   <input ref={fileInput} type="file" multiple hidden onChange={e => { if (e.target.files) addFiles(e.target.files); e.target.value = ""; }} />
                   <button type="button" className="icon-button" title="Attach files" aria-label="Attach files" disabled={!!archive || sending} onClick={() => fileInput.current?.click()}><PaperClipIcon /></button>
