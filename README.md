@@ -19,6 +19,8 @@
 - **Skills.** Install Claude Code skills from a GitHub link and choose who gets them.
 - **Built in:** a file editor with diffs, terminals, local voice typing (whisper.cpp), sharing agents and teams as `.dispatch` packs, and running a Dispatch on another computer over your network.
 
+![The boss and its team in the chat, with the 3D office above](docs/images/chat.png)
+
 | | |
 |---|---|
 | ![Teams](docs/images/teams.png) | ![Tools](docs/images/tools.png) |
