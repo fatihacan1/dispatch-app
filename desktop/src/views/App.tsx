@@ -10,6 +10,7 @@ import { TerminalSettings } from "../components/TerminalSettings";
 import { ProjectTabs } from "./Tabs";
 import { getLang, setLang, type Lang } from "../lib/i18n";
 import { CopyButton } from "../components/CopyButton";
+import { Avatar } from "../components/Avatar";
 import {
   ChatBubbleLeftRightIcon, ChevronDownIcon, Cog6ToothIcon, CpuChipIcon, ServerStackIcon, DocumentIcon, DocumentTextIcon, EnvelopeIcon,
   CheckIcon, CodeBracketIcon, FolderIcon, LinkIcon, MicrophoneIcon, HomeIcon, MagnifyingGlassIcon, PaperAirplaneIcon, PaperClipIcon, PlusIcon, Squares2X2Icon, StopIcon, CubeIcon, WrenchScrewdriverIcon, TrashIcon, XMarkIcon, BookOpenIcon, ArrowsRightLeftIcon, CircleStackIcon, BeakerIcon,
@@ -851,12 +852,18 @@ export function App() {
                   {offset > 0 && <p className="empty-line older-hint">Scroll up for older messages</p>}
                   {current.length === 0 && !trailNode && !questions[selected] ? (
                     <div className="empty"><h2>Start a conversation</h2><p>Send an order to {selected}. Live CLI output is in Terminal.</p></div>
-                  ) : visible.map((m, j) => { const i = j + offset; return (
+                  ) : visible.map((m, j) => { const i = j + offset; const prev = visible[j - 1];
+                    // Like a group chat: a run of messages from the same sender to the same reader shows the avatar once.
+                    const cont = !!prev && prev.from === m.from && prev.to === m.to && (!m.time || !prev.time || +new Date(m.time) - +new Date(prev.time) < 5 * 60000);
+                    const from = agentProvider(m.from); return (
                     <React.Fragment key={m.id + i}>
                       {trailAboveLast && i === current.length - 1 && trailNode}
-                      <article className={"message" + (m.from === "you" ? " mine" : "")}>
-                        {m.from !== "you" && <div className="msg-tools"><CopyButton text={m.text} label="Copy message" /></div>}
-                        <ChatMessage message={m}><div className="message-meta"><b className={`who c-${agentColor(m.from)}`}>{m.from}</b><span className="message-recipient">to {m.to}</span>{m.time && <time>{new Date(m.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>}</div></ChatMessage>
+                      <article className={"message" + (m.from === "you" ? " mine" : "") + (cont ? " cont" : "")}>
+                        <div className="msg-who">{!cont && <><Avatar name={m.from} provider={from} color={agentColor(m.from)} /><small>{m.from}</small></>}</div>
+                        <div className="msg-bubble">
+                          {m.from !== "you" && <div className="msg-tools"><CopyButton text={m.text} label="Copy message" /></div>}
+                          <ChatMessage message={m}><div className="message-meta">{m.from !== "you" && <b className={`who c-${agentColor(m.from)}`}>{m.from}</b>}{m.from !== "you" && m.from !== "boss" && <span className="message-provider">{labels[from] || from}</span>}<span className="message-recipient">→ {m.to}</span>{m.time && <time>{new Date(m.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>}</div></ChatMessage>
+                        </div>
                       </article>
                     </React.Fragment>
                   ); })}
