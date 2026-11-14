@@ -2,7 +2,6 @@ import React, { useEffect, useRef } from "react";
 import localIcons from "../../electron/local-icons.json";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import { WebglAddon } from "@xterm/addon-webgl";
 import { labels } from "../lib/data";
 
 export function Button({ children, className = "", ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) {
@@ -39,7 +38,7 @@ export function Console({ name, mini = false }: { name: string; mini?: boolean }
   useEffect(() => {
     if (!el.current) return;
     const term = new Terminal({
-      fontFamily: token("--font-mono") || "monospace",
+      fontFamily: '"Geist Mono", "Cascadia Mono", Consolas, monospace',
       fontSize: mini ? 11 : 13,
       lineHeight: 1.25,
       cursorBlink: false,
@@ -49,15 +48,19 @@ export function Console({ name, mini = false }: { name: string; mini?: boolean }
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(el.current);
-    // Draw on the GPU: the default DOM renderer made busy terminals (spinners, long output) stutter. Falls back to the
-    // DOM renderer by itself when WebGL is not available or the context is lost.
-    if (!mini) { try { const gl = new WebglAddon(); gl.onContextLoss(() => gl.dispose()); term.loadAddon(gl); } catch {} }
+
     // One fit per frame at most: a panel sliding open fires the observer on every frame.
     let frame = 0, cols = 0, rows = 0;
     const resize = () => { if (frame) return; frame = requestAnimationFrame(() => { frame = 0; try { fit.fit(); if (!mini && (term.cols !== cols || term.rows !== rows)) { cols = term.cols; rows = term.rows; window.army.resize(name, cols, rows); } } catch {} }); };
     const observer = new ResizeObserver(resize);
     observer.observe(el.current);
     resize();
+    // xterm measures the cell and draws glyphs when it opens. If Geist Mono was not loaded yet, letters came out in a
+    // proportional fallback font inside monospace cells: big gaps after i, t, r. Redo both once the font is in.
+    // DOM renderer on purpose: the WebGL one drew letters in a proportional font inside monospace cells (big gaps
+    // after i, t, r), even with Geist Mono loaded. Once the font is in, measure the cells again.
+    let disposed = false;
+    void document.fonts.load(`${mini ? 11 : 13}px "Geist Mono"`).then(() => document.fonts.ready).then(() => { if (!disposed) { term.options.fontFamily = `${term.options.fontFamily}`.replace(/^"Geist Mono"/, "'Geist Mono'"); resize(); } }).catch(() => {});
     window.army.output(name).then(data => term.write(data));
     const off = window.army.on("terminal", e => { if (e.name === name) term.write(e.data); });
     if (!mini) term.onData(data => window.army.input(name, data));
@@ -75,7 +78,7 @@ export function Console({ name, mini = false }: { name: string; mini?: boolean }
     const onMenu = (e: MouseEvent) => { e.preventDefault(); if (!copy()) paste(); };
     el.current.addEventListener("contextmenu", onMenu);
     const host = el.current;
-    return () => { cancelAnimationFrame(frame); host.removeEventListener("contextmenu", onMenu); off(); observer.disconnect(); term.dispose(); };
+    return () => { disposed = true; cancelAnimationFrame(frame); host.removeEventListener("contextmenu", onMenu); off(); observer.disconnect(); term.dispose(); };
   }, [name, mini]);
   return <div className="terminal" ref={el} />;
 }

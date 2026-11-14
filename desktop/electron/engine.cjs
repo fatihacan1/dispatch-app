@@ -605,6 +605,9 @@ ipcMain.handle('ui:set', (_e, patch) => {
 });
 ipcMain.handle('skills:list',() => ({ skills: skillStore().list(), settings: skillStore().settings(), roots: skillStore().roots }));
 ipcMain.handle('skills:settings', (_e, patch) => skillStore().saveSettings({ claudeAgents: !!patch?.claudeAgents }));
+// Skill board: the user's groups and which skill sits in which, kept with the other skill settings.
+ipcMain.handle('skills:board', () => skillStore().settings().board || null);
+ipcMain.handle('skills:board-save', (_e, board) => { const groups = Array.isArray(board?.groups) ? board.groups.slice(0, 60).map(g => ({ id: String(g.id), name: String(g.name).slice(0, 60), x: Number(g.x) || 0, y: Number(g.y) || 0 })) : []; const assign = Object.fromEntries(Object.entries(board?.assign || {}).slice(0, 5000).map(([k, v]) => [String(k), String(v)])); skillStore().saveSettings({ board: { groups, assign } }); return true; });
 // One store per preview, so the downloaded files stay until install or discard.
 let skillPreviewStore = null;
 ipcMain.handle('skills:preview', async (_e, input) => { skillPreviewStore = skillStore(); return skillPreviewStore.preview(String(input || '')); });
@@ -1238,6 +1241,7 @@ ipcMain.handle('files:import', (_e, dir, items) => {
   return out.length;
 });
 ipcMain.handle('files:head', (_e, rel) => filesLib.head(workspace, rel));
+ipcMain.handle('files:lint', (_e, rel, text) => require('./lint.cjs').lint(workspace, String(rel), String(text ?? '')).catch(() => []));
 ipcMain.handle('files:all', () => filesLib.all(workspace));
 ipcMain.handle('files:search', (_e, query, opts) => filesLib.search(workspace, query, opts));
 ipcMain.handle('files:watch', (_e, on) => { if (on) filesLib.watch(workspace, batch => notify('files-changed', batch), host.id); else filesLib.unwatch(host.id); return true; });

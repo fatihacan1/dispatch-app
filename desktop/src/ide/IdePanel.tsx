@@ -135,6 +135,15 @@ export function IdePanel({ workspace, open, request, gitFiles, terminal, termina
       const model = monaco.editor.getModel(uriFor(rel)) || monaco.editor.createModel(file.text, undefined, uriFor(rel));
       tab = { path: rel, model, dirty: false, diff: !!opts.diff, saved: file.text };
       model.onDidChangeContent(() => setTabs(ts => ts.map(t => t.path === rel ? { ...t, dirty: model.getValue() !== t.saved } : t)));
+      // Python: Ruff checks the text as it is typed (half a second after the last key), problems show as squiggles.
+      if (/\.pyi?$/i.test(rel)) {
+        let timer = 0;
+        const run = () => { const text = model.getValue(); window.army.files.lint(rel, text).then(items => {
+          if (model.isDisposed() || model.getValue() !== text) return;
+          monaco.editor.setModelMarkers(model, "ruff", (items || []).map(d => ({ startLineNumber: d.line, startColumn: d.col, endLineNumber: d.endLine, endColumn: Math.max(d.endCol, d.col + 1), message: d.message, severity: d.severity === "error" ? monaco.MarkerSeverity.Error : monaco.MarkerSeverity.Warning, source: "ruff" })));
+        }).catch(() => {}); };
+        run(); model.onDidChangeContent(() => { window.clearTimeout(timer); timer = window.setTimeout(run, 500); });
+      }
     }
     setTabs(ts => [...ts, tab]); setActive(rel);
     // Expand the folders down to the file so the tree shows where it is.

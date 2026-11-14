@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ArrowPathIcon, ArrowTopRightOnSquareIcon, ChevronDownIcon, ChevronRightIcon, FolderArrowDownIcon, FolderIcon, MagnifyingGlassIcon, TrashIcon } from "@heroicons/react/16/solid";
 import { Button } from "../components/common";
 import { ask } from "../components/ask";
+import { SkillBoard, type BoardSkill } from "./SkillBoard";
 
 type Scope = "project" | "global";
 type Source = { kind: "github" | "folder" | "pack"; owner?: string; repo?: string; ref?: string; sub?: string; url?: string; path?: string; pack?: string; author?: string };
@@ -94,6 +95,15 @@ export function Skills() {
   const [picked, setPicked] = useState<string[]>([]);
   const [scope, setScope] = useState<Scope>("global");
   const [open, setOpen] = useState<Record<string, string>>({});
+  // List or Board, remembered on this computer.
+  const [layoutMode, setLayoutMode] = useState<"list" | "board">(() => { try { return localStorage.getItem("skills-view") === "board" ? "board" : "list"; } catch { return "list"; } });
+  const pickLayout = (v: "list" | "board") => { setLayoutMode(v); try { localStorage.setItem("skills-view", v); } catch {} };
+  const [claude, setClaude] = useState<ClaudeSkill[]>([]);
+  useEffect(() => { if (layoutMode === "board") army().skills.claude().then(setClaude).catch(() => {}); }, [layoutMode]);
+  const boardSkills: BoardSkill[] = [
+    ...(items || []).map(s => ({ key: `d:${s.scope}:${s.name}`, name: s.name, description: s.description, enabled: s.enabled, where: `Dispatch · ${s.scope === "global" ? "every workspace" : "this workspace"}` })),
+    ...claude.map(s => ({ key: `c:${s.id}`, name: s.name, description: s.description, enabled: true, where: `${s.provider === "codex" ? "Codex" : "Claude Code"} · ${s.kind === "plugin" ? `plugin ${s.plugin}` : KIND[s.kind]}` })),
+  ];
   const load = useCallback(() => army().skills.list().then((r: any) => { setItems(r.skills); setClaudeAgents(!!r.settings.claudeAgents); }).catch((e: unknown) => setError(clean(e))), []);
   useEffect(() => { void load(); }, [load]);
 
@@ -111,7 +121,7 @@ export function Skills() {
 
   return (
     <div className="page prov-page skills-page">
-      <div className="view-heading"><h1>Skills</h1></div>
+      <div className="view-heading"><h1>Skills</h1><div className="mem-seg skills-view" role="tablist" aria-label="Skills view">{(["list", "board"] as const).map(v => <button key={v} type="button" role="tab" aria-selected={layoutMode === v} onClick={() => pickLayout(v)}>{v === "list" ? "List" : "Board"}</button>)}</div></div>
       <div className="prov-list">
         <p className="page-lead">Claude Code skills give the boss ready instructions and scripts for a kind of work. Paste a GitHub link to a repository or to a folder inside it; Dispatch shows the skills it finds before anything is installed. Skills work with Claude only.</p>
 
@@ -146,6 +156,7 @@ export function Skills() {
           </div>
         </section>}
 
+        {layoutMode === "board" ? <SkillBoard skills={boardSkills} /> : <>
         <h2 className="label skill-label">Installed</h2>
         {items?.map(s => {
           const key = `${s.scope}:${s.name}`;
@@ -170,6 +181,7 @@ export function Skills() {
         {items && !items.length && <p className="skill-hint">No skills yet.</p>}
 
         <ClaudeSkills />
+        </>}
 
         <h2 className="label skill-label">Who gets skills</h2>
         <label className="setting-row skill-who">

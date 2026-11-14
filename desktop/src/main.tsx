@@ -5,6 +5,7 @@ import "@fontsource/geist/400.css";
 import "@fontsource/geist/500.css";
 import "@fontsource/geist/600.css";
 import "@fontsource/geist-mono/400.css";
+import "@fontsource/geist-mono/700.css";
 import "./theme/tokens.css";
 import "./style.css";
 import { App } from "./views/App";

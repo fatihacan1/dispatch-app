@@ -39,6 +39,7 @@ declare global {
         read(rel: string): Promise<{ text?: string; mtime?: number; binary?: boolean; tooLarge?: boolean; size?: number }>;
         write(rel: string, text: string): Promise<number>;
         head(rel: string): Promise<string | null>;
+        lint(rel: string, text: string): Promise<{ line: number; col: number; endLine: number; endCol: number; message: string; severity: string }[]>;
         all(): Promise<string[]>;
         search(query: string, opts?: { caseSensitive?: boolean }): Promise<{ path: string; line: number; col: number; text: string }[]>;
         watch(on: boolean): Promise<boolean>;

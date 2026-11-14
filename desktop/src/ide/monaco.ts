@@ -17,10 +17,11 @@ import TsWorker from "monaco-editor/language/typescript/ts.worker?worker";
   },
 };
 
-// The editor is for reading and light edits, not a type checker: no red squiggles for imports it cannot resolve.
 const ts = monaco.typescript;
 for (const d of [ts.typescriptDefaults, ts.javascriptDefaults]) {
-  d.setDiagnosticsOptions({ noSemanticValidation: true, noSyntaxValidation: false });
+  // Type errors on, minus what only a full project could answer: unresolved imports and their types (2307, 2792,
+  // 7016), JSX without React types (7026, 2875) and missing globals from @types packages (2580, 2591, 2304 kept).
+  d.setDiagnosticsOptions({ noSemanticValidation: false, noSyntaxValidation: false, diagnosticCodesToIgnore: [2307, 2792, 7016, 7026, 2875, 2580, 2591, 2503] });
   d.setCompilerOptions({ jsx: ts.JsxEmit.Preserve, allowJs: true, target: ts.ScriptTarget.ESNext, allowNonTsExtensions: true });
 }
 
