@@ -1,6 +1,6 @@
 export type Message = { id: string; from: string; to: string; text: string; chats?: Record<string, string> };
 export type AgentQuestion = { id: string; at: string; questions: { question: string; header: string; multiSelect: boolean; options: { label: string; description: string }[] }[] };
-export type CustomTool = { id: string; name: string; command: string; cwd: string; note: string; autostart: boolean; agents: boolean; terminal: string; log: string; running: boolean; exitCode: number | null; startedAt: string | null };
+export type CustomTool = { id: string; name: string; command: string; cwd: string; note: string; autostart: boolean; agents: boolean; stopped?: boolean; terminal: string; log: string; running: boolean; exitCode: number | null; startedAt: string | null };
 export type QuestionAnswer = { picks: number[]; other?: string };
 export type Server = { id: string; name: string; host: string; port: number; user: string; key: string; note: string; icon: string; access: "off" | "ask" | "on"; hasPassword?: boolean; password?: string };
 export type ServerCall = { id: string; time: number; agent: string; server: string; serverId: string; tool: string; action: string; status: "waiting" | "running" | "done" | "failed" | "denied"; code?: number };

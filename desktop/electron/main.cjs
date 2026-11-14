@@ -195,7 +195,7 @@ ipcMain.handle('custom-tools:list', () => customTools.list());
 ipcMain.handle('custom-tools:save', (_e, tool) => customTools.save(tool));
 ipcMain.handle('custom-tools:remove', (_e, id) => customTools.remove(String(id)));
 ipcMain.handle('custom-tools:start', (_e, id) => customTools.start(String(id)));
-ipcMain.handle('custom-tools:stop', (_e, id) => customTools.stop(String(id)));
+ipcMain.handle('custom-tools:stop', (_e, id) => customTools.stop(String(id), { remember: true }));
 ipcMain.handle('custom-tools:choose-file', async () => {
   const r = await dialog.showOpenDialog(win, { title: 'Program or script to run', properties: ['openFile'], filters: process.platform === 'win32' ? [{ name: 'Programs and scripts', extensions: ['bat', 'cmd', 'exe', 'ps1', 'js', 'mjs', 'py'] }, { name: 'All files', extensions: ['*'] }] : [] });
   if (r.canceled || !r.filePaths[0]) return null;

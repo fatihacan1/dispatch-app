@@ -81,7 +81,7 @@ export function CustomToolRows({ items, edit, openTerminal, onError }: { items: 
           <div className="prov-main">
             <div className="prov-title"><b>{t.name}</b><StatusDot tone={state[1]} label={state[0]} /></div>
             {t.command && <small className="custom-tool-cmd" title={t.cwd ? `${t.command}  ·  in ${t.cwd}` : t.command}>{t.command}{t.cwd ? ` · ${t.cwd}` : ""}</small>}
-            <small>{t.note || "No note: agents only see its name."}{t.agents ? "" : " · Agents are not told about it."}{t.autostart ? " · Starts with Dispatch." : ""}</small>
+            <small>{t.note || "No note: agents only see its name."}{t.agents ? "" : " · Agents are not told about it."}{t.autostart ? (t.stopped ? " · You stopped it, so it stays off when Dispatch starts. Start it to turn that back on." : " · Starts with Dispatch.") : ""}</small>
           </div>
           <div className="prov-actions">
             {t.command && !t.running && <Button className="primary" disabled={busy === t.id} onClick={() => void act(t.id, async () => { await window.army.customTools.start(t.id); openTerminal(t); })}>Start</Button>}

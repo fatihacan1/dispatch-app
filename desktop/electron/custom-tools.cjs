@@ -35,11 +35,11 @@ function create({ dir, spawn, platform = process.platform }) {
     const old = input.id ? items.find(t => t.id === input.id) : null;
     let id = old?.id || cleanId(name) || 'tool';
     if (!old) { const base = id; for (let i = 2; items.some(t => t.id === id); i++) id = `${base}-${i}`; }
-    const tool = { id, name, command, cwd, note, autostart: !!input.autostart && !!command, agents: input.agents !== false };
+    const tool = { id, name, command, cwd, note, autostart: !!input.autostart && !!command, agents: input.agents !== false, ...(old?.stopped ? { stopped: true } : {}) };
     write(old ? items.map(t => t.id === id ? tool : t) : [...items, tool]);
     return tool;
   }
-  function remove(id) { stop(id); write(list().filter(t => t.id !== id)); try { fs.rmSync(logFile(id), { force: true }); } catch {} return true; }
+  function remove(id) { stop(id, { remember: false }); write(list().filter(t => t.id !== id)); try { fs.rmSync(logFile(id), { force: true }); } catch {} return true; }
 
   // The command line as the user typed it, through the system shell, so "start-api.bat", "npm start" or
   // "python server.py --port 8000" all work. The folder defaults to the folder of a file given by its path.
@@ -51,8 +51,11 @@ function create({ dir, spawn, platform = process.platform }) {
     if (first && path.isAbsolute(first) && fs.existsSync(first)) return path.dirname(first);
     return dir();
   }
-  function start(id) {
+  // A tool the user stopped by hand stays off at the next launch (autostart skips it) until they start it again.
+  function remember(id, stopped) { const items = list(); const t = items.find(x => x.id === id); if (!t || !!t.stopped === stopped) return; write(items.map(x => x.id === id ? (stopped ? { ...x, stopped: true } : (({ stopped: _s, ...rest }) => rest)(x)) : x)); }
+  function start(id, { auto = false } = {}) {
     const t = list().find(x => x.id === id); if (!t) throw new Error('Tool not found.');
+    if (!auto) remember(id, false);
     if (!t.command) throw new Error(`${t.name} has no command to run.`);
     const now = running.get(id); if (now && now.exitCode == null) return termName(id);
     const sh = shellFor(t.command);
@@ -74,13 +77,15 @@ function create({ dir, spawn, platform = process.platform }) {
     return termName(id);
   }
   // The whole process tree: a .bat that starts node that starts Chrome must not leave anything behind.
-  function stop(id) {
+  function stop(id, { remember: keep = true } = {}) {
+    if (keep) remember(id, true);
     const r = running.get(id); if (!r) return false;
     if (r.exitCode == null) { const pid = r.terminal.pid; try { if (platform === 'win32' && pid) execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => {}); else r.terminal.kill(); } catch {} try { r.terminal.kill(); } catch {} }
     running.delete(id); emit('custom-tools-changed', null); return true;
   }
-  function stopAll() { for (const id of [...running.keys()]) stop(id); }
-  function autostart() { for (const t of list()) if (t.autostart) try { start(t.id); } catch (e) { console.error(`Custom tool ${t.name}:`, e.message); } }
+  // Quitting stops everything without counting as the user turning a tool off.
+  function stopAll() { for (const id of [...running.keys()]) stop(id, { remember: false }); }
+  function autostart() { for (const t of list()) if (t.autostart && !t.stopped) try { start(t.id, { auto: true }); } catch (e) { console.error(`Custom tool ${t.name}:`, e.message); } }
   const byTerm = name => [...running.entries()].find(([id]) => termName(id) === name)?.[1];
   // What the agents are told, in their start prompt.
   function prompt() {

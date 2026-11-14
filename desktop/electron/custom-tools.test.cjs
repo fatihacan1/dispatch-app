@@ -49,6 +49,23 @@ test('custom tools: the command runs in a terminal, its text goes to the log age
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('custom tools: a tool stopped by hand stays off at the next launch until started again; quitting does not count', () => {
+  const { tools, dir, calls } = setup();
+  const a = tools.save({ name: 'Bridge', command: 'node a.js', autostart: true });
+  const b = tools.save({ name: 'Other', command: 'node b.js', autostart: true });
+  tools.autostart(); assert.equal(calls.length, 2);
+  tools.stop(a.id);
+  assert.equal(tools.list().find(t => t.id === a.id).stopped, true);
+  tools.stopAll();
+  assert.equal(tools.list().find(t => t.id === b.id).stopped, undefined, 'quitting is not a manual stop');
+  const next = create({ dir: () => dir, spawn: fakeSpawn(calls), platform: 'linux' });
+  next.autostart(); assert.deepEqual(calls.slice(2).map(c => c.args[1]), ['node b.js'], 'only the tool not stopped by hand starts');
+  next.save({ ...next.list().find(t => t.id === a.id), note: 'edited' });
+  assert.equal(next.list().find(t => t.id === a.id).stopped, true, 'editing keeps it off');
+  next.start(a.id); assert.equal(next.list().find(t => t.id === a.id).stopped, undefined, 'starting by hand turns autostart back on');
+  next.stopAll(); fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('custom tools: windows runs the command line through cmd as typed; ANSI is stripped from the log', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dispatch-ctools-')); const calls = [];
   const tools = create({ dir: () => dir, spawn: fakeSpawn(calls), platform: 'win32' });
