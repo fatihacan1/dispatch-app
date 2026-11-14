@@ -36,6 +36,33 @@ function Thumb({ file }: { file: string }) {
   React.useEffect(() => { let on = true; if (IMG.test(file)) (window as any).army.outputs?.preview(file).then((v: string | null) => { if (on && v) setSrc(v); }).catch(() => {}); return () => { on = false; }; }, [file]);
   return src ? <img className="out-thumb" src={src} alt="" /> : <span className="out-thumb out-ext">{(file.split(".").pop() || "").slice(0, 4)}</span>;
 }
+// Live progress and preview frames of running ComfyUI jobs (main process listens to ComfyUI; see electron/comfy-live.cjs).
+type Live = { value?: number; max?: number; preview?: string; done?: boolean };
+const liveJobs = new Map<string, Live>(), liveSubs = new Set<() => void>();
+let liveOff: (() => void) | null = null;
+function useComfyLive(id?: string) {
+  const [, force] = useState(0);
+  React.useEffect(() => {
+    if (!id) return;
+    if (!liveOff) liveOff = (window as any).army?.on?.("comfy:live", (e: Live & { id: string }) => { liveJobs.set(e.id, { ...liveJobs.get(e.id), ...e }); liveSubs.forEach(f => f()); }) || null;
+    const f = () => force(n => n + 1); liveSubs.add(f); return () => { liveSubs.delete(f); };
+  }, [id]);
+  return id ? liveJobs.get(id) : undefined;
+}
+function RunningJob({ o, who }: { o: Output; who: React.ReactNode }) {
+  const live = useComfyLive(o.key.slice(4));
+  const [open, setOpen] = useState(false);
+  const pct = live?.max ? Math.min(100, Math.round((live.value || 0) / live.max * 100)) : null;
+  if (live?.done) return <li className="out-row"><span className="out-thumb out-live">{live.preview && <img src={live.preview} alt="" />}</span><span className="row-text"><b>Workflow finished</b><small>{who} · ComfyUI · saving files</small></span></li>;
+  const toggle = () => setOpen(v => !v);
+  return <>
+    <li className="out-row out-running" role="button" tabIndex={0} aria-expanded={open} aria-label="Running ComfyUI workflow, show the live preview" onClick={toggle} onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } }}>
+      <span className="out-thumb out-live">{live?.preview && <img src={live.preview} alt="" />}<span className="out-spin" aria-hidden="true" /></span>
+      <span className="row-text"><b>Workflow running{pct != null ? ` · ${pct}%` : ""}</b><small>{who} · ComfyUI{live?.max ? ` · step ${live.value || 0} of ${live.max}` : ""}</small>{pct != null && <span className="progress"><i style={{ width: pct + "%" }} /></span>}</span>
+    </li>
+    {open && <li className="out-live-big">{live?.preview ? <img src={live.preview} alt="Live preview of the running workflow" /> : <p className="empty-line">No preview yet. ComfyUI sends one while it samples, if previews are on in its settings.</p>}</li>}
+  </>;
+}
 function OutputRow({ o, color }: { o: Output; color: (n: string) => string }) {
   const target = o.kind === "job" ? o.files?.[0] : o.file;
   const reveal = { role: "button", tabIndex: 0, "aria-label": `Show ${base(target) || "outputs"} in folder`, onClick: () => (window as any).army.outputs.reveal(target), onKeyDown: (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); (window as any).army.outputs.reveal(target); } } };
@@ -44,6 +71,7 @@ function OutputRow({ o, color }: { o: Output; color: (n: string) => string }) {
     const pct = o.total ? Math.min(100, Math.round((o.bytes || 0) / o.total * 100)) : 0;
     return <li className="out-row" title={o.file} {...reveal}><span className="out-thumb out-ext">{o.done ? "✓" : pct + "%"}</span><span className="row-text"><b>{base(o.file)}</b><small>{who} · {o.done ? `model downloaded · ${bytes(o.total)}` : `downloading ${bytes(o.bytes)} of ${o.total ? bytes(o.total) : "?"}`}</small>{!o.done && <span className="progress"><i style={{ width: pct + "%" }} /></span>}</span></li>;
   }
+  if (o.kind === "job" && o.status === "queued") return <RunningJob o={o} who={who} />;
   if (o.kind === "job") return <li className="out-row" {...reveal}><span className="out-thumb out-ext">{o.status === "queued" ? "…" : o.status === "success" ? "✓" : "!"}</span><span className="row-text"><b>{o.status === "queued" ? "Workflow running" : o.status === "success" ? `Workflow finished · ${o.files?.length || 0} files` : `Workflow ${o.status}`}</b><small>{who} · ComfyUI</small></span></li>;
   return <li className="out-row" title={o.file} {...reveal}><Thumb file={o.file || ""} /><span className="row-text"><b>{base(o.file)}</b><small>{who} · {o.kind === "model" ? "new model" : "generated"}{o.size ? ` · ${bytes(o.size)}` : ""}</small></span></li>;
 }

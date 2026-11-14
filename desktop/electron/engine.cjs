@@ -834,11 +834,29 @@ let outputsWatcher = null, galleryWatcher = null, outputsOffset = 0;
 function readOutputs(onlyNew = false) { let lines = []; try { lines = fs.readFileSync(outputsFile(), 'utf8').split('\n').filter(Boolean); } catch {} const start = onlyNew ? Math.min(outputsOffset, lines.length) : 0; outputsOffset = lines.length; return lines.slice(start).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); }
 function appendOutput(event) { try { fs.mkdirSync(path.dirname(outputsFile()), { recursive: true }); fs.appendFileSync(outputsFile(), JSON.stringify({ time: Date.now(), ...event }) + '\n'); } catch {} }
 let toolDirWatchers = [];
+// A ComfyUI job that is still running: listen to ComfyUI as the client that queued it, for progress and preview frames.
+const comfyLive = require('./comfy-live.cjs');
+const comfyJobs = new Map(); // client id -> { ids, stop }
+function comfyDone(id) { for (const [client, c] of comfyJobs) if (c.ids.delete(id) && !c.ids.size) { c.stop(); comfyJobs.delete(client); } }
+function trackComfy(items) {
+  for (const e of items || []) {
+    if (e.kind !== 'job' || e.tool !== 'comfyui' || !e.id) continue;
+    if (e.status !== 'queued') { comfyDone(e.id); continue; }
+    if (!e.client || Date.now() - (e.time || 0) > 2 * 3600e3) continue;
+    let c = comfyJobs.get(e.client);
+    if (!c) {
+      const url = tools.comfyConfig().url; if (!url) continue;
+      c = { ids: new Set() }; comfyJobs.set(e.client, c);
+      c.stop = comfyLive.listen(url, e.client, ev => { notify('comfy:live', ev); if (ev.done) comfyDone(ev.id); });
+    }
+    c.ids.add(e.id);
+  }
+}
 function watchTools() {
   outputsWatcher?.close(); toolDirWatchers.forEach(w => w.close()); toolDirWatchers = [];
   outputsWatcher = chokidar.watch([outputsFile()], { ignoreInitial: true });
-  outputsWatcher.on('all', () => { const items = readOutputs(true); if (items.length) notify('outputs', items); });
-  readOutputs(true);
+  outputsWatcher.on('all', () => { const items = readOutputs(true); if (items.length) { notify('outputs', items); trackComfy(items); } });
+  trackComfy(readOutputs(true));
   // Shared gallery: files agents save under .dispatch/outputs/<agent>/ are logged like tool outputs
   // (tools log their own files, so those are skipped).
   galleryWatcher?.close();
@@ -901,6 +919,7 @@ const mediaLib = require('./media.cjs');
 let mediaStop = null;
 ipcMain.handle('media:watch', (_e, on) => {
   mediaStop?.(); mediaStop = null;
+  for (const c of comfyJobs.values()) c.stop(); comfyJobs.clear();
   if (on) mediaStop = mediaLib.watch(u => notify('media:update', u));
   return true;
 });

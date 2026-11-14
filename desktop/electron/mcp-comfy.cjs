@@ -116,7 +116,7 @@ function outputPath(f) { const base = f.type === 'temp' ? 'temp' : f.type === 'i
 async function runPrompt(prompt, wait = true, timeoutSec = 900) {
   await need();
   const { prompt_id, node_errors } = await api('/prompt', { method: 'POST', body: JSON.stringify({ prompt, client_id: CLIENT }) });
-  log({ kind: 'job', id: prompt_id, status: 'queued' });
+  log({ kind: 'job', id: prompt_id, status: 'queued', client: CLIENT }); // client: Dispatch listens as it for live progress
   if (!wait) return { prompt_id, node_errors };
   const end = Date.now() + timeoutSec * 1000;
   while (Date.now() < end) {
