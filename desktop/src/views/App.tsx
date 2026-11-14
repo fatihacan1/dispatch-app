@@ -30,7 +30,8 @@ import { RemoteRailButton, RemoteSettings } from "./Remote";
 import { Servers, RailServers, ServerApprovals } from "./Servers";import { Markdown, firstSentence } from "../components/Markdown";
 import { Sidebar, type AgentInfo } from "./Sidebar";
 import { providers, labels } from "../lib/data";
-import type { Message } from "../lib/types";
+import type { AgentQuestion, Message } from "../lib/types";
+import { QuestionCard } from "../components/QuestionCard";
 
 type Timed = Message & { time?: number };
 function AttachmentPreview({ file }: { file: File }) {
@@ -344,6 +345,7 @@ export function App() {
     return () => { alive = false; window.clearInterval(id); };
   }, [demo, sidebar, workspace]);
   const [trail, setTrail] = useState<Record<string, Trail>>({});
+  const [questions, setQuestions] = useState<Record<string, AgentQuestion>>({});
   useEffect(() => window.army.on("activity", (e: { name: string; steps: Step[]; turn?: boolean; dropLastText?: boolean }) => setTrail(t => {
     const now = Date.now(), old = t[e.name];
     // A turn Dispatch already showed as started (the message was just sent) keeps its clock.
@@ -404,11 +406,13 @@ export function App() {
       return v.map((x, i) => i === pending ? m : x);
     }));
     window.army.attention.list().then(setAttention);
+    window.army.questions?.list().then(setQuestions).catch(() => {});
+    const offQuestion = window.army.on("question", ({ name, question }) => setQuestions(v => { const next = { ...v }; if (question) next[name] = question; else delete next[name]; return next; }));
     const offAttention = window.army.on("attention", ({ name, reason }) => setAttention(v => { const next = { ...v }; if (reason) next[name] = reason; else delete next[name]; return next; }));
     const offSendError = window.army.on("send-error", message => setError(String(message)));
     const offEnlist = window.army.on("enlisted", a => { setAgents(v => [...v, a.name]); setAgentTemplates(v => ({ ...v, [a.name]: a.template })); setEnlistedBy(v => ({ ...v, [a.name]: a.enlistedBy })); });
     const offAction = window.army.on("agent-action", ({ name, action }) => { if (action === "dismiss") setAgents(v => v.filter(a => a !== name)); else setStopped(v => ({ ...v, [name]: action === "stop" })); });
-    return () => { off(); offEnlist(); offAction(); offSendError(); offAttention(); };
+    return () => { off(); offEnlist(); offAction(); offSendError(); offAttention(); offQuestion(); };
   }, []);
   useEffect(() => { if (agents.includes(selected)) window.army.chats.list(selected).then(list => { setChatList(list); setArchive(null); setActiveChat(list.find(c => c.active)?.id || null); }); }, [selected, agents]);
   useEffect(() => {
@@ -457,6 +461,15 @@ export function App() {
     if ((!body.trim() && !files.length) || sending || archive) return;
     setSending(true);
     try {
+      // The agent waits on a one-question menu: what is typed here answers it ("2" picks the second option).
+      const asking = questions[selected];
+      if (asking && asking.questions.length === 1 && !files.length && !body.trim().includes("\n")) {
+        const q = asking.questions[0], t = body.trim();
+        const nums = /^\d+(\s*[,\s]\s*\d+)*$/.test(t) ? t.split(/[,\s]+/).map(n => Number(n) - 1).filter(p => p >= 0 && p < q.options.length) : [];
+        await window.army.questions.answer(selected, [nums.length ? { picks: q.multiSelect ? nums : nums.slice(0, 1) } : { picks: [], other: t }]);
+        if (spoken === undefined) setText("");
+        return;
+      }
       // Files that live on this computer are sent as their path; only pasted (or remote) files are copied.
       const upload = files.filter(f => !window.army.pathFor(f));
       const saved = upload.length ? await window.army.saveAttachments(await Promise.all(upload.map(async file => ({ name: file.name, data: await file.arrayBuffer() })))) : [];
@@ -480,7 +493,7 @@ export function App() {
     setWorkspaceMenu(false);
     const first = needsFolder; if (first && next !== workspace) setNeedsFolder(false);
     if (first || next !== workspace) {
-      setWorkspace(next); setAgents([]); setAttention({}); setMessages([]);
+      setWorkspace(next); setAgents([]); setAttention({}); setQuestions({}); setMessages([]);
       setView("agent"); setAgentTemplates({}); setEnlistedBy({});
       const info = await window.army.info(); setOperations(info.operations); setWorkspaces(info.workspaces);
       if (info.operations[0]) await resume(info.operations[0].id, true);
@@ -802,7 +815,7 @@ export function App() {
               {mode === "terminal" ? <div className="terminal-wrap"><Console key={`${selected}:${epoch}`} name={selected} /></div> : (
                 <div className="message-list" ref={listRef} onScroll={onListScroll}>
                   {offset > 0 && <p className="empty-line older-hint">Scroll up for older messages</p>}
-                  {current.length === 0 && !trailNode ? (
+                  {current.length === 0 && !trailNode && !questions[selected] ? (
                     <div className="empty"><h2>Start a conversation</h2><p>Send an order to {selected}. Live CLI output is in Terminal.</p></div>
                   ) : visible.map((m, j) => { const i = j + offset; return (
                     <React.Fragment key={m.id + i}>
@@ -813,6 +826,7 @@ export function App() {
                     </React.Fragment>
                   ); })}
                   {!trailAboveLast && trailNode}
+                  {!archive && questions[selected] && <QuestionCard agent={selected} question={questions[selected]} openTerminal={() => setMode("terminal")} onError={setError} />}
                   <div ref={listEnd} />
                 </div>
               )}
@@ -851,7 +865,7 @@ export function App() {
         </div>}
       </main>
       {showSidebar && <Sidebar agents={team} selected={selected} activeView={view === "agent"} menu={agentMenu} setMenu={setAgentMenu}
-        select={a => { setSelected(a); setView("agent"); if (attention[a]) setMode("terminal"); }}
+        select={a => { setSelected(a); setView("agent"); if (attention[a] && !questions[a]) setMode("terminal"); else if (questions[a]) setMode("chat"); }}
         act={(a, action) => void act(a, action)} openTerminal={openTerminal} enlist={() => setEnlisting(true)}
         saveTeam={agents.length > 1 && agents.includes("boss") ? () => setSavingTeam({ name: "", scope: "project" }) : undefined}
         changeBoss={() => { setAgentMenu(null); setBossSource("template"); setChangingBoss(true); }}

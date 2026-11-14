@@ -14,7 +14,8 @@
 - **Boss memory.** Long-term project and global memory for the boss, based on the MCP Memory server, with an editor to see and fix what it remembers.
 - **Schedules.** The boss can schedule recurring or timed work ("every morning at 9, make the daily video"). Runs missed while Dispatch was closed run once when it opens.
 - **Telegram.** Connect your own bot in a minute and talk to the boss from your phone. Schedule results and "needs you" notices arrive there too.
-- **Tools for agents.** One-click setup for ComfyUI (image, video, audio, 3D), Blender, Unreal Engine, VoiceStudio, web search and more, exposed to agents over MCP. Everything they generate shows up under Outputs.
+- **Tools for agents.** One-click setup for ComfyUI (image, video, audio, 3D), Blender, Unreal Engine, VoiceStudio, web search and more, exposed to agents over MCP. Everything they generate shows up under Outputs. Add your own tool in Tools: a command Dispatch keeps running in a terminal of its own (answer anything it asks there, such as a sign-in) and a note that tells every agent what it is and how to use it.
+- **Questions in the chat.** When a Claude agent asks you something with options, the question and its choices show up in the chat; click an answer or type one, no terminal needed.
 - **Skills.** Install Claude Code skills from a GitHub link and choose who gets them.
 - **Built in:** a file editor with diffs, terminals, local voice typing (whisper.cpp), sharing agents and teams as `.dispatch` packs, and running a Dispatch on another computer over your network.
 

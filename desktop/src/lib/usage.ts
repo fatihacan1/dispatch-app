@@ -42,8 +42,10 @@ export function useUsage() {
     let on = true;
     api()?.get().then((u: UsageMap) => on && setUsage(u)).catch(() => {});
     const off = (window as any).army?.on?.("usage:update", (u: UsageMap) => setUsage(prev => ({ ...prev, ...u })));
+    // A tab brought to the front reads the shared cache again, so it matches the tab that was in front.
+    const offShown = (window as any).army?.on?.("tab-shown", () => { setNow(Date.now()); api()?.get().then((u: UsageMap) => on && u && setUsage(prev => ({ ...prev, ...u }))).catch(() => {}); });
     const tick = setInterval(() => setNow(Date.now()), 30000);
-    return () => { on = false; off?.(); clearInterval(tick); };
+    return () => { on = false; off?.(); offShown?.(); clearInterval(tick); };
   }, []);
   const refresh = useCallback(async (id?: string) => {
     const key = id || "*"; setLoading(l => ({ ...l, [key]: true }));

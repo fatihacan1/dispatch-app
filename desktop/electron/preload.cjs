@@ -98,6 +98,8 @@ contextBridge.exposeInMainWorld('army', {
   pathFor: file => { if (target) return ''; try { return webUtils.getPathForFile(file) || ''; } catch { return ''; } },
   saveAttachments: files => invoke('attachments:save', files),
   attention: { list: () => invoke('attention:list'), trust: () => invoke('attention:trust') },
+  customTools: { list: () => invoke('custom-tools:list'), save: t => invoke('custom-tools:save', t), remove: id => invoke('custom-tools:remove', id), start: id => invoke('custom-tools:start', id), stop: id => invoke('custom-tools:stop', id), chooseFile: () => invoke('custom-tools:choose-file'), chooseFolder: () => invoke('custom-tools:choose-folder') },
+  questions: { list: () => invoke('questions:list'), answer: (name, answers) => invoke('question:answer', name, answers) },
   enlist: (name, template, task) => invoke('enlist', name, template, task), debugAgent: name => invoke('debug:agent', name),
   chats: { list: name => invoke('chats:list', name), switch: (name, id) => invoke('chats:switch', name, id) },
   agentAction: (name, action) => invoke('agent:action', name, action),

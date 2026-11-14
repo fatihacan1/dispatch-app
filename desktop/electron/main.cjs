@@ -84,6 +84,8 @@ function createTab(folder, { defer = false } = {}) {
     focusFolder: f => { const t = tabs.find(x => !x.engine.needsFolder() && same(x.engine.workspace(), f)); if (t) activate(t); },
     changed: () => { saveTabs(); broadcastTabs(); },
     isActive: () => active === tab,
+    usage: all => { for (const t of tabs) try { t.engine?.onUsage(all); } catch {} },
+    customTools,
     voiceKeyOk: () => voiceKeyOk, registerVoiceKey,
     takePendingPack: () => { const f = pendingPack; pendingPack = null; return f; },
   };
@@ -185,6 +187,23 @@ ipcMain.handle('telegram:disconnect', () => telegram.disconnect());
 ipcMain.handle('telegram:test', () => telegram.send('Test from Dispatch. Your boss can reach you here.'));
 ipcMain.handle('telegram:botfather', () => shell.openExternal('https://t.me/BotFather?start'));
 ipcMain.handle('telegram:clipboard-token', () => { const t = require('electron').clipboard.readText().trim(); return require('./telegram.cjs').looksLikeToken(t) ? t : null; });
+
+// ── Custom tools (Tools > Add tool): one process per tool for the whole app, every tab sees its terminal ──
+const customTools = require('./custom-tools.cjs').create({ dir: globalDir, spawn: (...a) => require('node-pty').spawn(...a) });
+customTools.on((channel, value) => broadcast(channel, value));
+ipcMain.handle('custom-tools:list', () => customTools.list());
+ipcMain.handle('custom-tools:save', (_e, tool) => customTools.save(tool));
+ipcMain.handle('custom-tools:remove', (_e, id) => customTools.remove(String(id)));
+ipcMain.handle('custom-tools:start', (_e, id) => customTools.start(String(id)));
+ipcMain.handle('custom-tools:stop', (_e, id) => customTools.stop(String(id)));
+ipcMain.handle('custom-tools:choose-file', async () => {
+  const r = await dialog.showOpenDialog(win, { title: 'Program or script to run', properties: ['openFile'], filters: process.platform === 'win32' ? [{ name: 'Programs and scripts', extensions: ['bat', 'cmd', 'exe', 'ps1', 'js', 'mjs', 'py'] }, { name: 'All files', extensions: ['*'] }] : [] });
+  if (r.canceled || !r.filePaths[0]) return null;
+  const f = r.filePaths[0], ext = path.extname(f).toLowerCase(), q = /\s/.test(f) ? `"${f}"` : f;
+  const command = ext === '.js' || ext === '.mjs' ? `node ${q}` : ext === '.py' ? `python ${q}` : ext === '.ps1' ? `powershell -NoProfile -ExecutionPolicy Bypass -File ${q}` : q;
+  return { command, cwd: path.dirname(f), name: path.basename(f, ext).replace(/[-_]+/g, ' ') };
+});
+ipcMain.handle('custom-tools:choose-folder', async () => { const r = await dialog.showOpenDialog(win, { title: 'Folder to run it in', properties: ['openDirectory'] }); return r.canceled ? null : r.filePaths[0] || null; });
 
 // ── Updates ──
 const updater = require('./updater.cjs').create({ notify: broadcast, onBeforeInstall: () => { quitting = true; } });
@@ -304,10 +323,10 @@ app.whenReady().then(() => {
   activate(tabs.find(t => same(t.engine.workspace(), saved.active)) || tabs[0]);
   const loadRest = () => { const next = tabs.find(t => !t.loaded); if (!next) return; loadTab(next); let went = false; const go = () => { if (!went) { went = true; setTimeout(loadRest, 800); } }; next.view.webContents.once('did-finish-load', go); setTimeout(go, 6000); };
   // Tray and the bot come after the first tab has loaded: the window is up sooner, and the tab is the first page.
-  let rest = false; const startRest = () => { if (rest) return; rest = true; createTray(); registerVoiceKey(); telegram.start(); setTimeout(loadRest, 1500); };
+  let rest = false; const startRest = () => { if (rest) return; rest = true; createTray(); registerVoiceKey(); telegram.start(); if (!process.env.DISPATCH_TEST_HOME || process.env.DISPATCH_TEST_TOOLS) customTools.autostart(); setTimeout(loadRest, 1500); };
   active.view.webContents.once('did-finish-load', startRest); setTimeout(startRest, 8000);
 });
 // On quit every project's agents go down with everything they started.
-app.on('before-quit', () => { quitting = true; for (const t of tabs) try { t.engine.dispose(); } catch {} telegram.stop(); try { tray?.destroy(); } catch {} });
+app.on('before-quit', () => { quitting = true; for (const t of tabs) try { t.engine.dispose(); } catch {} customTools.stopAll(); telegram.stop(); try { tray?.destroy(); } catch {} });
 app.on('will-quit', () => { try { require('electron').globalShortcut.unregisterAll(); } catch {} whisper.stop(); });
 app.on('window-all-closed', () => app.quit());

@@ -6,6 +6,8 @@ function normalize(text) {
 function attentionFrom(text) {
   const t = normalize(text);
   if ((/trust/.test(t) && /folder|workspace|directory/.test(t)) || /accessing\s*workspace.*safety\s*check/.test(t)) return 'Trust folder';
+  // Claude's AskUserQuestion menu (and its "review your answers" step): the agent waits for a choice.
+  if ((/chat about this/.test(t) && /enter to select/.test(t) && /arrow keys to navigate/.test(t)) || /ready to submit your answers\?/.test(t)) return 'Question';
   // A real login screen, not an agent that merely writes about logins while it works on auth code.
   if (/select login method|sign[ -]?in with|(?:sign|log)[ -]?in to continue|please (?:sign|log)[ -]?in|not (?:logged|signed) in|waiting for authentication|authentication required|run \/login|notlogin/.test(t)) return 'Sign in';
   if (/(?:approve|allow|permission).{0,120}(?:command|tool|execute|run|access).{0,80}\?/.test(t) || /(?:do you want to|would you like to).{0,100}(?:run|execute|allow).{0,80}\?/.test(t)) return 'Approve command';
@@ -14,7 +16,7 @@ function attentionFrom(text) {
   return null;
 }
 // Prompts that wait for a key: nothing may be pasted into them. Anything else is only shown to the user.
-const BLOCKING = ['Trust folder', 'Sign in', 'Approve command'];
+const BLOCKING = ['Trust folder', 'Sign in', 'Approve command', 'Question'];
 // Codex offers a cheaper model when the limit is near and waits for a choice; Enter would switch the model.
 // Answer "2. Keep current model" (Down, Enter) so the agent goes on with the model the user chose.
 function nudgeAnswer(provider, text) {
@@ -30,4 +32,4 @@ function trustAnswer(provider, text) {
   if (provider === 'gemini' && t.includes('do you trust the files in this folder?') && /1\.\s*trust folder/.test(t) && /2\.\s*trust parent folder/.test(t) && /3\.\s*don.t trust/.test(t)) return '\r';
   return null;
 }
-module.exports = { attentionFrom, trustAnswer, nudgeAnswer, BLOCKING };
+module.exports = { attentionFrom, trustAnswer, nudgeAnswer, BLOCKING, normalize };

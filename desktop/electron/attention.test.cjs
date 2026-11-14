@@ -33,3 +33,16 @@ test('codex model nudge keeps the current model', () => {
  assert.equal(nudgeAnswer('claude', screen), null);
  assert.equal(nudgeAnswer('codex', 'Approaching rate limits'), null);
 });
+test('claude question menu and its review step wait for the user; they block pasting', () => {
+ const { BLOCKING } = require('./attention.cjs');
+ const menu = '\x1b[12;1HPick a color\r\n\u276f 1. Red\x1b[16;3H2.\x1b[1CGreen 3. Blue 4.\x1b[1CType\x1b[1Csomething.\r\n5.\x1b[1CChat\x1b[1Cabout\x1b[1Cthis Enter to select \u00b7 Tab/Arrow keys to navigate \u00b7 Esc to cancel';
+ assert.equal(attentionFrom(menu), 'Question');
+ assert.equal(attentionFrom('Review your answers \u25cf Pick a color \u2192 Blue Ready to submit your answers? \u276f 1. Submit answers 2. Cancel'), 'Question');
+ assert.equal(attentionFrom('I will chat about this later and type something in the docs.'), null);
+ assert.ok(BLOCKING.includes('Question'));
+});
+test('claude trust menu (No, exit first): Down then Enter trusts', () => {
+ const screen = 'Accessing workspace: C:\\proj Quick safety check: Is this a project you created or one you trust? \u276f No, exit Yes, I trust this folder Enter to confirm';
+ assert.equal(attentionFrom(screen), 'Trust folder');
+ assert.equal(trustAnswer('claude', screen), '\x1b[B\r');
+});

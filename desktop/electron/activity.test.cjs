@@ -21,3 +21,19 @@ test('codex: messages, turn start and the final reply', () => {
  const end = parseCodex({ type: 'event_msg', payload: { type: 'task_complete', last_agent_message: 'All good.' } });
  assert.equal(end.turn, false); assert.equal(end.final, 'All good.');
 });
+test('claude: AskUserQuestion becomes a question the chat can answer, its tool result closes it', () => {
+ const ask = parseClaude(line([{ type: 'tool_use', id: 'toolu_1', name: 'AskUserQuestion', input: { questions: [{ question: 'Pick a color', header: 'Color', multiSelect: false, options: [{ label: 'Red', description: 'warm' }, { label: 'Blue' }] }, { question: 'Toppings?', header: 'Toppings', multiSelect: true, options: [{ label: 'Cheese' }, { label: 'Olives' }, { label: 'Ham' }] }] } }], 'tool_use'));
+ assert.equal(ask.ask.id, 'toolu_1'); assert.equal(ask.ask.questions.length, 2);
+ assert.deepEqual(ask.ask.questions[0].options[0], { label: 'Red', description: 'warm' }); assert.equal(ask.ask.questions[1].multiSelect, true);
+ assert.match(ask.steps[0].text, /^Asks you · Pick a color/);
+ assert.deepEqual(parseClaude({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'answered' }] } }).answered, ['toolu_1']);
+});
+test('question keys: a number per single choice, toggles then Submit for several, own text in "Type something"', () => {
+ const { questionKeys } = require('./activity.cjs');
+ const D = '\x1b[B';
+ const qs = [{ question: 'Color', multiSelect: false, options: [{ label: 'Red' }, { label: 'Green' }, { label: 'Blue' }] }, { question: 'Toppings', multiSelect: true, options: [{ label: 'Cheese' }, { label: 'Olives' }, { label: 'Ham' }] }];
+ assert.deepEqual(questionKeys(qs, [{ picks: [2] }, { picks: [0, 2] }]), [['3'], ['1', '3', D, D, D, D, '\r']]);
+ assert.deepEqual(questionKeys(qs, [{ picks: [], other: 'Purple\nsky' }, { picks: [1], other: 'Pineapple' }]), [[D, D, D, 'Purple sky', '\r'], ['2', D, D, D, 'Pineapple', D, '\r']]);
+ assert.throws(() => questionKeys(qs, [{ picks: [] }, { picks: [0] }]), /Pick an answer/);
+ assert.throws(() => questionKeys(qs, [{ picks: [7] }, { picks: [0] }]), /Pick an answer/);
+});

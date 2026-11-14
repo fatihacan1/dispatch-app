@@ -10,7 +10,7 @@ const activity = require('./activity.cjs');
 const gitLib = require('./git.cjs');
 const { parseMessage } = require('./bus.cjs');
 const { createDemoTerminal } = require('./demo-terminal.cjs');
-const { attentionFrom, trustAnswer, nudgeAnswer, BLOCKING } = require('./attention.cjs');
+const { attentionFrom, trustAnswer, nudgeAnswer, BLOCKING, normalize } = require('./attention.cjs');
 const localAI = require('./local-ai.cjs');
 const mcp = require('./mcp.cjs');
 const storage = require('./storage.cjs');
@@ -76,12 +76,68 @@ const processes = new Map();
 const pendingAsks = new Set();
 const trustFile = () => path.join(workspace, '.dispatch', 'trust.json');
 function trusted() { try { return JSON.parse(fs.readFileSync(trustFile(), 'utf8')).trusted === true; } catch { return false; } }
-function setAttention(name, agent, reason) { if (agent.attention === reason) return; if (reason !== 'Trust folder') agent.trustInteracted = false; agent.attention = reason; agent.blocked = BLOCKING.includes(reason); if (agent.blocked) clearTimeout(agent.timer); notify('attention', { name, reason }); }
+function setAttention(name, agent, reason) {
+  if (agent.attention === reason) return; if (reason !== 'Trust folder') agent.trustInteracted = false; agent.attention = reason; agent.blocked = BLOCKING.includes(reason);
+  if (agent.blocked) hold(agent);
+  notify('attention', { name, reason });
+}
+// Nothing may be pasted while a prompt waits for a key. A message being pasted when the prompt came up must not get
+// its Enter (in Claude's trust menu that picks "No, exit" and the agent quits): it goes back to the front of the queue.
+function hold(agent) {
+  agent.blocked = true; clearTimeout(agent.timer);
+  if (agent.submitting) { const item = agent.inFlight; agent.submitting = false; agent.inFlight = null; if (item && !agent.queue.some(x => x.file === item.file)) agent.queue.unshift(item); }
+}
 function answerTrust(agent) {
   if (agent.attention !== 'Trust folder' || !trusted() || agent.trustInteracted) return;
   const answer = trustAnswer(agent.template.provider, agent.promptBuffer || '');
   if (!answer) return false;
-  agent.promptBuffer = ''; agent.awaitingAnswer = true; agent.terminal.write(answer);
+  agent.promptBuffer = ''; agent.awaitingAnswer = true; typeKeys(agent, answer);
+  return true;
+}
+// Menu keys one at a time, after the menu has settled. Down and Enter in one write reached Claude's trust menu as
+// one input: Enter took the row that was selected before (No, exit) and the agent quit.
+function typeKeys(agent, keys, first = 400) {
+  const parts = String(keys).match(/\x1b\[[A-D]|\r|[^\x1b\r]+/g) || [];
+  agent.answering = true; // no message is pasted between the keys
+  parts.forEach((k, i) => setTimeout(() => { try { agent.terminal.write(k); } catch {} }, first + i * 250));
+  setTimeout(() => { agent.answering = false; if (agent.ready && !agent.blocked && agent.queue.length) deliver(agent); }, first + parts.length * 250 + 300);
+}
+
+// ── Questions an agent asks with Claude's AskUserQuestion: shown in the chat (and on Telegram), answered from there ──
+function showQuestion(name, agent, ask) {
+  agent.question = { ...ask, at: new Date().toISOString() };
+  notify('question', { name, question: agent.question });
+  // A conversation from the phone is going on with this agent: ask there too, the reply answers it.
+  if (telegram.connected() && tgOwner() === name && Date.now() - tgWaiting < 30 * 60e3) {
+    const text = ask.questions.map(q => `${q.question}${q.multiSelect ? ' (several allowed: 1,3)' : ''}\n${q.options.map((o, i) => `${i + 1}. ${o.label}${o.description ? ` (${o.description})` : ''}`).join('\n')}`).join('\n\n');
+    void telegram.send(`[${path.basename(workspace)}${name !== 'boss' ? ` · ${name}` : ''}] ${name} asks:\n${text}\n\nReply with a number, or write your own answer.`).catch(() => {});
+  }
+}
+function clearQuestion(name, agent) { if (!agent?.question) return; agent.question = null; notify('question', { name, question: null }); }
+// A typed reply to a one-question menu: "2" or "1, 3" picks options, anything else is the user's own answer.
+function replyAsAnswer(q, text) {
+  const t = String(text).trim();
+  if (/^\d+(\s*[,\s]\s*\d+)*$/.test(t)) { const picks = t.split(/[,\s]+/).map(n => Number(n) - 1).filter(p => p >= 0 && p < q.options.length); if (picks.length) return { picks: q.multiSelect ? picks : picks.slice(0, 1) }; }
+  return { picks: [], other: t };
+}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function answerQuestion(name, answers, via = '') {
+  const agent = processes.get(name), q = agent?.question;
+  if (!q) throw new Error(`${name} has no open question. It may have been answered in its terminal.`);
+  if (agent.answering) throw new Error(`${name} is already taking an answer.`);
+  const groups = activity.questionKeys(q.questions, Array.isArray(answers) ? answers : []);
+  agent.answering = true; clearTimeout(agent.timer);
+  try {
+    agent.promptBuffer = '';
+    for (const keys of groups) { for (const k of keys) { agent.terminal.write(k); await sleep(k.length > 4 ? 300 : 140); } await sleep(500); }
+    // Several questions, or several choices, end on a "Review your answers" step; its first row submits.
+    for (let i = 0; i < 16; i++) { if (/ready to submit your answers\?/.test(normalize(String(agent.promptBuffer || '').slice(-3000)))) { agent.terminal.write('\r'); break; } await sleep(150); }
+  } finally { agent.answering = false; }
+  agent.promptBuffer = ''; agent.awaitingAnswer = true;
+  const said = q.questions.map((x, i) => { const a = answers[i] || {}; const picked = (a.picks || []).map(p => x.options[p]?.label).filter(Boolean); if (a.other) picked.push(String(a.other).trim()); return `${q.questions.length > 1 ? `${x.header || x.question}: ` : ''}${picked.join(', ')}`; }).join('\n');
+  emitMessage({ from: 'you', to: name, text: via ? `[via ${via}] ${said}` : said });
+  clearQuestion(name, agent);
+  setTimeout(() => { if (processes.get(name) === agent && !agent.blocked && agent.queue.length) deliver(agent); }, 1500);
   return true;
 }
 
@@ -195,7 +251,7 @@ function watch() {
 // Notes delivered with an agent's next message instead of as a message of their own, so they never wake it up.
 const quietNotes = new Map();
 function deliver(agent) {
-  if (agent.submitting || agent.blocked || !agent.ready) return;
+  if (agent.submitting || agent.blocked || agent.answering || !agent.ready) return;
   clearTimeout(agent.timer);
   if (!agent.queue.length) return;
   if (agent.command === 'codex' && agent.codexStateKnown && !agent.atPrompt) return;
@@ -219,6 +275,7 @@ function deliver(agent) {
     // Press Enter only after the CLI has taken the whole paste in (its echo went quiet). A fixed 200 ms was too
     // early for long messages: the Enter landed inside the paste and the text sat in the prompt, never sent.
     const submit = () => {
+      if (agent.blocked) return; // setAttention already put the message back in the queue
       const age = Date.now() - pastedAt;
       if (age < (midTurn && !wasIdle ? 800 : 3000) && (age < 350 || Date.now() - agent.lastOutput < 300)) { agent.timer = setTimeout(submit, 100); return; }
       try { agent.terminal.write('\r'); } catch {}
@@ -300,7 +357,7 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
   const catalogue = bossVisibleTemplates().map(t => `${t.name}: ${t.description} (${t.provider}, ${t.model || 'default'}; Dispatch tools: ${mcp.selected(t).join(', ') || 'none'})`).join('\n');
   const prompt = `${template.body || ''}\nCode index (saves tokens): this workspace has a symbol index. Reading whole files and running broad searches costs many tokens, so look things up in the index first: to find a function, class, type or component, run dispatch index search <name>; it returns file paths and line numbers. Then read only those lines (offset/limit), not the whole file. If the command fails, finds nothing, or you need text that is not a symbol name, fall back to your usual way (grep, glob, reading files). The index may lag edits made in the last seconds, so check the lines you open.\nYou are ${name}. You report to ${name === 'boss' ? 'you (the user)' : enlistedBy && enlistedBy !== 'user' ? enlistedBy : 'boss'}. Squad: ${[...new Set([...operation.agents.map(a => a.name), ...rosterHint, name])].map(n => `${n} (${operation.agents.find(a => a.name === n)?.stopped ? 'stopped' : processes.has(n) || n === name ? 'running' : 'starting'})`).join(', ')}. ${direct
     ? `The user reads your replies in the Dispatch chat exactly as you write them here, rendered as Markdown. ${name === 'boss' ? 'To talk to the user' : 'When a message is from you (the user)'}, simply write your answer as your normal final reply: use short paragraphs, headings, lists, tables and code blocks where they help. Never run dispatch send --to you; that would show the user a second, unformatted copy. Use dispatch send only for other agents: when another agent gave you the task or you need its input, report with dispatch send --to <agent> "<report>".`
-    : `When you finish a task or need input, report to the requester using dispatch send --to <requester> "<short report>". For a message from you, run dispatch send --to you "<short report>"; for a message from another agent, use that agent's name.`} A message with line breaks, quotes or backticks gets cut by the shell: write it to a file and send it with dispatch send --to <agent> --file <path> (dispatch spawn takes --task-file <path> the same way). Keep reports to other agents short. Use dispatch list to see the squad.${name === 'boss' ? `\nAvailable providers (plan and notes are supplied by the user):\n${providerInfo}\nTemplate catalogue:\n${catalogue}\nUse dispatch spawn --template <name> --name <id> --task <task> and dispatch template create --name <name> --provider <provider> --description <description> --role <prompt>.\n${SCHEDULE_HELP}${telegramHelp()}` : (tgOwner() === name ? telegramHelp(name) : '')}\nShared outputs: save every finished deliverable (images, video, audio, documents, exports) in ${path.join(workspace, '.dispatch', 'outputs', name)} so the user and the other agents can find it. Run dispatch outputs [agent] to see what the squad has produced and reuse those files by path.${memoryText}`;
+    : `When you finish a task or need input, report to the requester using dispatch send --to <requester> "<short report>". For a message from you, run dispatch send --to you "<short report>"; for a message from another agent, use that agent's name.`} A message with line breaks, quotes or backticks gets cut by the shell: write it to a file and send it with dispatch send --to <agent> --file <path> (dispatch spawn takes --task-file <path> the same way). Keep reports to other agents short. Use dispatch list to see the squad.${name === 'boss' ? `\nAvailable providers (plan and notes are supplied by the user):\n${providerInfo}\nTemplate catalogue:\n${catalogue}\nUse dispatch spawn --template <name> --name <id> --task <task> and dispatch template create --name <name> --provider <provider> --description <description> --role <prompt>.\n${SCHEDULE_HELP}${telegramHelp()}` : (tgOwner() === name ? telegramHelp(name) : '')}\nShared outputs: save every finished deliverable (images, video, audio, documents, exports) in ${path.join(workspace, '.dispatch', 'outputs', name)} so the user and the other agents can find it. Run dispatch outputs [agent] to see what the squad has produced and reuse those files by path.${host.customTools?.prompt() || ''}${memoryText}`;
   if (!saved) { saved = { name, template, provider, model: template.model || '', enlistedBy }; operation.agents.push(saved); createChat(saved); resumeSession = false; } else if (!saved.chatId) { const previousSession = saved.sessionId; const chat = createChat(saved); if (previousSession) { chat.sessionId = previousSession; saved.sessionId = previousSession; writeChat(name, chat); saveOperation(); } }
   const session = saved.sessionId;
   // Claude can only resume a session it has written down. An agent that never got a message has none yet
@@ -341,9 +398,11 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
     agent.eventAt = Date.now();
     if (e.turn === true) { agent.turn = true; agent.turnKnown = true; agent.toldYou = false; agent.turnAt = Date.now(); agent.lastText = ''; }
     const said = e.steps.filter(s => s.kind === 'text').at(-1); if (said) agent.lastText = said.text;
+    if (e.ask) showQuestion(name, agent, e.ask);
+    if (e.answered && agent.question && e.answered.includes(agent.question.id)) clearQuestion(name, agent);
     let dropLastText = false;
     if (e.turn === false) {
-      agent.turn = false; agent.turnKnown = true;
+      agent.turn = false; agent.turnKnown = true; clearQuestion(name, agent);
       // The reply the agent wrote in its terminal is the chat message, formatting intact. The boss always talks to
       // the user; another agent does when the user was the one who wrote to it.
       const forYou = name === 'boss' || ['you', 'user'].includes(agent.lastFrom);
@@ -376,7 +435,7 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
     }
   } catch (e) { if (e.code !== 'ENOENT') throw e; }
   fs.writeFileSync(path.join(workspace, '.dispatch', 'agents.json'), JSON.stringify([...processes.keys()]));
-  terminal.onData(data => { agent.output = (agent.output + data).slice(-200000);
+  terminal.onData(data => { agent.sawOutput = true; agent.output = (agent.output + data).slice(-200000);
     agent.promptBuffer = ((agent.promptBuffer || '') + data).slice(-5000);
     // A choice the CLI wants that has one safe answer (Codex: keep the model when the limit is near).
     const nudge = nudgeAnswer(provider, agent.promptBuffer);
@@ -399,10 +458,19 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
     if (detected === 'Sign in' && !agent.signinTold) { agent.signinTold = true; tellSignIn(name, agent, provider, false); }
     // The prompt is gone from the screen (answered here, in the terminal, or by the CLI itself): the agent is free
     // again. Without this one "needs you" stuck for good and every later message waited in the queue.
-    if (!detected && (agent.awaitingAnswer || agent.attention)) { agent.awaitingAnswer = false; setAttention(name, agent, null); if (!agent.ready) setTimeout(agent.initialize, 1000); else if (agent.queue.length) deliver(agent); }
-    if (detected && !agent.awaitingAnswer) { setAttention(name, agent, detected); if (detected === 'Trust folder' && trusted()) answerTrust(agent); }
+    if (!detected && (agent.awaitingAnswer || agent.attention || agent.held)) { agent.awaitingAnswer = false; agent.held = false; clearTimeout(agent.trustTimer); agent.trustTimer = null; if (agent.attention) setAttention(name, agent, null); else agent.blocked = false; if (!agent.ready) setTimeout(agent.initialize, 1000); else if (agent.queue.length) deliver(agent); }
+    if (detected && !agent.awaitingAnswer) {
+      // A project already trusted in Dispatch (this tab's folder, .dispatch/trust.json): the CLI's trust menu is
+      // answered quietly. Showing the dialog first only made it flash up and vanish. It shows if no answer fits.
+      if (detected === 'Trust folder' && !agent.attention && !agent.trustInteracted && trusted()) {
+        hold(agent); agent.held = true;
+        const answer = trustAnswer(provider, agent.promptBuffer || '');
+        if (answer) { clearTimeout(agent.trustTimer); agent.trustTimer = null; agent.promptBuffer = ''; agent.awaitingAnswer = true; typeKeys(agent, answer, 700); }
+        else if (!agent.trustTimer) agent.trustTimer = setTimeout(() => { agent.trustTimer = null; if (processes.get(name) === agent && agent.held && !agent.awaitingAnswer) setAttention(name, agent, 'Trust folder'); }, 3000);
+      } else { setAttention(name, agent, detected); if (detected === 'Trust folder' && trusted()) answerTrust(agent); }
+    }
     agent.lastOutput = Date.now(); const codexState = [...data.matchAll(/\x1b\]7501;state=(idle|working|done):app=codex/g)].at(-1); if (codexState) { agent.codexStateKnown = true; agent.atPrompt = codexState[1] !== 'working'; if (codexState[1] === 'working') agent.turnAt = Date.now(); } else if (provider !== 'codex') agent.atPrompt = /(?:^|[\r\n])\s*[>\u276f$]\s*$/.test(agent.output.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')); if (agent.queue.length && (provider !== 'codex' || agent.atPrompt)) deliver(agent); notify('terminal', { name, data }); });
-  terminal.onExit(() => { agent.stopActivity?.(); if (processes.get(name) === agent) {
+  terminal.onExit(() => { agent.stopActivity?.(); clearQuestion(name, agent); if (processes.get(name) === agent) {
     processes.delete(name); clearTimeout(agent.timer); setAttention(name, agent, null); notify('exit', name);
     // Died on its own: mark it stopped (card shows it) and tell whoever enlisted it.
     const entry = operation?.agents.find(a => a.name === name);
@@ -414,8 +482,12 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
     if (!lead || !processes.has(lead)) { exited.add(name); notify('attention', { name, reason: 'Exited' }); notify('message', recordMessage({ id: crypto.randomUUID(), from: 'dispatch', to: 'you', text: `${name} exited unexpectedly. Restart it from the bar at the top.`, kind: 'send', time: new Date().toISOString() })); }
     else if (lead !== name) void sendMessage(lead, `${name} exited unexpectedly. dispatch restart ${name} brings it back.`, 'dispatch').catch(() => {});
   } });
+  const startedAt = Date.now();
   const initialize = () => {
     if (agent.blocked || processes.get(name) !== agent) return;
+    // Claude in a project it has not seen yet draws its trust question a moment after start. Wait until its screen
+    // has settled (or 10 s), so the first message is never pasted while that question is coming up.
+    if (!demo && provider === 'claude' && Date.now() - startedAt < 10000 && (!agent.lastOutput || Date.now() - agent.lastOutput < 800 || !agent.sawOutput)) { agent.timer = setTimeout(initialize, 300); return; }
     if (!demo && provider !== 'claude') {
       terminal.write(`\x1b[200~${prompt.replace(/\n/g, ' ')}\x1b[201~`);
       agent.timer = setTimeout(() => { terminal.write('\r'); agent.ready = true; if (agent.queue.length) deliver(agent); }, 200);
@@ -616,6 +688,12 @@ async function telegramIn(text, files = []) {
   if (!operation || !operation.agents.some(a => a.name === owner)) throw new Error(`No team is open in ${path.basename(workspace)}. Start a chat with the boss in Dispatch first.`);
   if (!processes.has(owner)) agentAction(owner, 'restart');
   tgWaiting = Date.now();
+  // The owner is waiting on its own question: the message from the phone is the answer (a number picks an option).
+  const asking = processes.get(owner)?.question;
+  if (asking && !files.length && String(text).trim()) {
+    if (asking.questions.length > 1) { await telegram.send(`[${path.basename(workspace)}] ${owner} asked several questions at once; answer them in Dispatch.`).catch(() => {}); return; }
+    await answerQuestion(owner, [replyAsAnswer(asking.questions[0], text)], 'Telegram'); return;
+  }
   const saved = [];
   for (const f of files) { try { saved.push(await telegram.download(f, path.join(workspace, '.dispatch', 'telegram'))); } catch (e) { saved.push(`(not received: ${e.message})`); } }
   const body = [text, saved.length ? `Files from the user (open them with your tools): ${saved.join(', ')}` : ''].filter(Boolean).join('\n');
@@ -991,16 +1069,20 @@ function retryUsageSoon(all) {
   const failed = Object.values(all || {}).filter(u => u.error && u.errorCode !== 'unsupported' && u.errorCode !== 'not-installed');
   if (!failed.length || usageRetry) return;
   const wait = Math.min(300, Math.max(30, ...failed.map(u => u.retryAfter || 30)));
-  usageRetry = setTimeout(() => { usageRetry = null; if (!host.isActive()) return; usageLib.getAll({ providers: failed.map(u => u.provider), resolveCommand, force: true }).then(fresh => { notify('usage:update', fresh); }).catch(() => {}); }, wait * 1000);
+  usageRetry = setTimeout(() => { usageRetry = null; if (!host.isActive()) return; usageLib.getAll({ providers: failed.map(u => u.provider), resolveCommand, force: true }).then(shareUsage).catch(() => {}); }, wait * 1000);
 }
+// Limits belong to the account, not the project: a new reading goes to every tab (each keeps only the providers it
+// has enabled), so two tabs never show different numbers for the same limit.
+const shareUsage = all => (host.usage ? host.usage(all) : onUsage(all));
+function onUsage(all) { if (demo) return; const ids = usageIds(); const mine = Object.fromEntries(Object.entries(all || {}).filter(([id]) => ids.includes(id))); if (Object.keys(mine).length) notify('usage:update', mine); }
 async function usageAll(force) { if (demo) return usageLib.demo(); const all = await usageLib.getAll({ providers: usageIds(), resolveCommand, force }); retryUsageSoon(all); return all; }
 ipcMain.handle('usage:get', () => usageAll(false));
-ipcMain.handle('usage:refresh', async (_e, id) => { if (id && !demo) { const all = await usageLib.getAll({ providers: [id], resolveCommand, force: true }); notify('usage:update', all); return all; } const all = await usageAll(true); notify('usage:update', all); return all; });
-intervals.push(setInterval(() => { if (host.isActive() && win && !win.isDestroyed() && win.isVisible() && !win.isMinimized()) usageAll(true).then(all => notify('usage:update', all)).catch(() => {}); }, 180000));
+ipcMain.handle('usage:refresh', async (_e, id) => { if (demo) { const all = usageLib.demo(); notify('usage:update', all); return all; } const all = id ? await usageLib.getAll({ providers: [id], resolveCommand, force: true }) : await usageAll(true); shareUsage(all); return all; });
+intervals.push(setInterval(() => { if (host.isActive() && win && !win.isDestroyed() && win.isVisible() && !win.isMinimized()) usageAll(true).then(shareUsage).catch(() => {}); }, 180000));
 ipcMain.handle('templates:save', (_e, t) => templates.save(workspace, t));
 ipcMain.handle('templates:delete', (_e, file) => templates.remove(file));
 ipcMain.handle('templates:reveal', (_e, file) => { require('electron').shell.showItemInFolder(file); return true; });
-ipcMain.handle('output', (_e, name) => processes.get(name)?.output || shells.get(name)?.output || '');
+ipcMain.handle('output', (_e, name) => processes.get(name)?.output || shells.get(name)?.output || host.customTools?.output(name) || '');
 ipcMain.handle('start', (_e, template, teamFile) => {
   if (teamFile) {
     const team = teams.list(workspace).find(t => t.file === teamFile); if (!team) throw new Error('Team not found.');
@@ -1218,11 +1300,14 @@ ipcMain.handle('attachments:save', async (_e, files) => {
     return saved;
   } catch (error) { await Promise.all(saved.map(file => fs.promises.unlink(file).catch(() => {}))); throw error; }
 });
-ipcMain.handle('send', (_e, to, text) => sendMessage(to, text));
-ipcMain.on('input', (_e, name, data) => { const shell = shells.get(name); if (shell) { if (!shell.exited) shell.terminal.write(data); return; } const agent = processes.get(name); if (!agent) return; if (agent.attention === 'Trust folder') agent.trustInteracted = true; if (agent.blocked && /[\r\n]/.test(data)) { agent.promptBuffer = ''; agent.awaitingAnswer = true; } agent.terminal.write(data); });
+// A message typed in the chat while the agent waits on a one-question menu is the answer to it (a number picks).
+ipcMain.handle('send', (_e, to, text) => { const q = processes.get(to)?.question; if (q && q.questions.length === 1 && String(text || '').trim() && !/\n/.test(String(text).trim())) return answerQuestion(to, [replyAsAnswer(q.questions[0], text)]); return sendMessage(to, text); });
+ipcMain.handle('questions:list', () => Object.fromEntries([...processes].filter(([, a]) => a.question).map(([name, a]) => [name, a.question])));
+ipcMain.handle('question:answer', (_e, name, answers) => answerQuestion(String(name), answers));
+ipcMain.on('input', (_e, name, data) => { if (host.customTools?.input(name, data)) return; const shell = shells.get(name); if (shell) { if (!shell.exited) shell.terminal.write(data); return; } const agent = processes.get(name); if (!agent) return; if (agent.attention === 'Trust folder') agent.trustInteracted = true; if (agent.blocked && /[\r\n]/.test(data)) { agent.promptBuffer = ''; agent.awaitingAnswer = true; } agent.terminal.write(data); });
 ipcMain.handle('attention:list', () => ({ ...Object.fromEntries([...exited].map(name => [name, 'Exited'])), ...Object.fromEntries([...processes].filter(([, a]) => a.attention).map(([name, a]) => [name, a.attention])) }));
 ipcMain.handle('attention:trust', () => { fs.mkdirSync(path.dirname(trustFile()), { recursive: true }); fs.writeFileSync(trustFile(), JSON.stringify({ trusted: true }, null, 2)); const manual = []; for (const [name, agent] of processes) if (agent.attention === 'Trust folder' && !answerTrust(agent)) manual.push(name); return manual; });
-ipcMain.on('resize', (_e, name, cols, rows) => { try { (processes.get(name) || shells.get(name))?.terminal.resize(cols, rows); } catch {} });
+ipcMain.on('resize', (_e, name, cols, rows) => { if (host.customTools?.resize(name, cols, rows)) return; try { (processes.get(name) || shells.get(name))?.terminal.resize(cols, rows); } catch {} });
 // On quit every agent goes down with everything it started. A child left behind without its terminal (a git
 // fetch, a login helper) falls back to desktop prompts such as Git's credential helper window.
 function killTrees() {
@@ -1243,6 +1328,6 @@ function status() {
   const names = (operation?.agents || []).map(a => a.name).filter(n => processes.has(n));
   return { running: names.length, needs: exited.size + names.filter(n => processes.get(n).attention).length, working: names.filter(n => { try { return isWorking(n); } catch { return false; } }).length };
 }
-return { init, dispose, status, telegramIn, onTelegramChange, workspace: () => workspace, needsFolder: () => needsFolder, owner: () => tgOwner() };
+return { init, dispose, status, telegramIn, onTelegramChange, onUsage, workspace: () => workspace, needsFolder: () => needsFolder, owner: () => tgOwner() };
 };
 

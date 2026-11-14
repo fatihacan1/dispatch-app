@@ -4,9 +4,10 @@ import memorySvg from "../../public/tools/memory.svg?raw";
 import rustSvg from "../../public/tools/rustxng.svg?raw";
 import ddgsSvg from "../../public/tools/ddgs.svg?raw";
 import blenderSvg from "../../public/tools/blender.svg?raw";
-import { ArrowTopRightOnSquareIcon, FolderArrowDownIcon, FolderIcon, MicrophoneIcon } from "@heroicons/react/16/solid";
+import { ArrowTopRightOnSquareIcon, FolderArrowDownIcon, FolderIcon, MicrophoneIcon, PlusIcon, XMarkIcon } from "@heroicons/react/16/solid";
 import { Button, Console, StatusDot } from "../components/common";
 import { ScheduleTool, TelegramTool } from "./ToolsExtra";
+import { CustomToolForm, CustomToolRows, EMPTY_TOOL, useCustomTools, type ToolDraft } from "./CustomTools";
 
 type Comfy = { installed: boolean; running: boolean; url: string; path: string; version: string; models: number; gpu: string; startedByDispatch: boolean };
 const army = () => (window as any).army;
@@ -19,7 +20,11 @@ export function Tools({ openMemory }: { openMemory?: () => void }) {
   const [comfy, setComfy] = useState<Comfy | null>(null);
   const [mcp, setMcp] = useState<Record<string, boolean> | null>(null);
   const [busy, setBusy] = useState(false);
-  const [task, setTask] = useState<{ name: string; label: string; done?: boolean; code?: number } | null>(null);
+  const [task, setTask] = useState<{ name: string; label: string; done?: boolean; code?: number; terminal?: boolean } | null>(null);
+  const custom = useCustomTools();
+  const [formOpen, setFormOpen] = useState(false);
+  const [draft, setDraft] = useState<ToolDraft>(EMPTY_TOOL);
+  const openForm = (d: ToolDraft) => { setDraft(d); setFormOpen(true); };
   const [error, setError] = useState("");
   const [files, setFiles] = useState<Record<string, string | null>>({});
   const loadFiles = () => Promise.all(["comfyui", "voicestudio", "rustxng", "ddgs", "blender"].map(async id => [id, await army().tools.file?.(id).catch(() => null)] as const)).then(e => setFiles(Object.fromEntries(e)));
@@ -41,9 +46,11 @@ export function Tools({ openMemory }: { openMemory?: () => void }) {
 
   return (
     <div className={"page prov-page tools-page" + (task ? " with-task" : "")}>
-      <div className="view-heading"><h1>Tools</h1></div>
+      <div className="view-heading"><h1>Tools</h1><span className="grow" /><button className="button secondary local-add-toggle" type="button" aria-label={formOpen ? "Close the tool form" : "Add a tool"} aria-expanded={formOpen} onClick={() => formOpen ? setFormOpen(false) : openForm(EMPTY_TOOL)}>{formOpen ? <XMarkIcon aria-hidden="true" /> : <PlusIcon aria-hidden="true" />}<span>{formOpen ? "Close" : "Add tool"}</span></button></div>
       <div className="prov-list">
         <p className="page-lead">Local tools your agents can use. Turn a tool on for an agent in Agent templates, under Tools. Everything a tool generates or downloads shows up under Outputs in the side panel.</p>
+        <CustomToolForm open={formOpen} draft={draft} setDraft={setDraft} close={() => setFormOpen(false)} saved={(t, started) => { setFormOpen(false); void custom.load(); if (started) setTask({ name: `ctool-${t.id}`, label: t.name, terminal: true }); }} />
+        <CustomToolRows items={custom.items} edit={t => openForm({ id: t.id, name: t.name, command: t.command, cwd: t.cwd, note: t.note, autostart: t.autostart, agents: t.agents })} openTerminal={t => setTask({ name: t.terminal, label: t.name, terminal: true })} onError={setError} />
         <ScheduleTool />
         <TelegramTool />
         <div className="prov-row">
@@ -140,7 +147,7 @@ export function Tools({ openMemory }: { openMemory?: () => void }) {
         {error && <p className="tpl-error">{error}</p>}
       </div>
       {task && <div className="prov-task">
-        <div className="prov-task-head"><span>{task.done ? (task.code === 0 ? "Finished" : `Exited with code ${task.code}`) : `Installing ${task.label}…`}</span>{task.label === "ComfyUI" && <small>Downloads the official Windows portable build (several GB).</small>}<Button className="ghost" onClick={() => setTask(null)}>{task.done ? "Close" : "Hide"}</Button></div>
+        <div className="prov-task-head"><span>{task.terminal ? `${task.label} · terminal` : task.done ? (task.code === 0 ? "Finished" : `Exited with code ${task.code}`) : `Installing ${task.label}…`}</span>{task.label === "ComfyUI" && <small>Downloads the official Windows portable build (several GB).</small>}<Button className="ghost" onClick={() => setTask(null)}>{task.done || task.terminal ? "Close" : "Hide"}</Button></div>
         <Console key={task.name} name={task.name} />
       </div>}
     </div>

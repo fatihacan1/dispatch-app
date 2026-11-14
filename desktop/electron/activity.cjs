@@ -14,13 +14,25 @@ function toolLabel(name, input) {
   return clip(arg ? `${name} · ${Array.isArray(arg) ? arg.join(' ') : arg}` : name, 120);
 }
 
-// One transcript line → { steps: [{ kind, text }], turn?: true|false }
+// Claude's AskUserQuestion: the questions and options it shows in its terminal, so the chat can show them too.
+function askFrom(b) {
+  const qs = Array.isArray(b.input?.questions) ? b.input.questions : [];
+  const questions = qs.map(q => ({
+    question: String(q?.question || '').trim(), header: String(q?.header || '').trim(), multiSelect: !!q?.multiSelect,
+    options: (Array.isArray(q?.options) ? q.options : []).map(o => ({ label: String(o?.label ?? o ?? '').trim(), description: String(o?.description || '').trim() })).filter(o => o.label),
+  })).filter(q => q.question && q.options.length);
+  return questions.length ? { id: String(b.id || ''), questions } : null;
+}
+
+// One transcript line → { steps: [{ kind, text }], turn?: true|false, ask?, answered? }
 function parseClaude(o) {
   const out = { steps: [] };
   const c = o.message?.content;
   // Sub-agent lines, skill bodies and slash commands (/model, /effort) are not turns of this agent.
   if (o.isSidechain || o.isMeta) return out;
   if (o.type === 'user') {
+    // The tool result of a question: it was answered (here, in the terminal, or cancelled).
+    if (Array.isArray(c)) { const ids = c.filter(x => x.type === 'tool_result' && x.tool_use_id).map(x => String(x.tool_use_id)); if (ids.length) out.answered = ids; }
     if (typeof c === 'string' || (Array.isArray(c) && c.some(x => x.type === 'text'))) {
       const text = typeof c === 'string' ? c : c.filter(x => x.type === 'text').map(x => x.text).join(' ');
       if (/^\s*<(local-command|command-name|command-message)/.test(text)) return out;
@@ -32,6 +44,7 @@ function parseClaude(o) {
   const done = o.message.stop_reason === 'end_turn' || o.message.stop_reason === 'stop_sequence';
   for (const b of c) {
     if (b.type === 'thinking') out.steps.push({ kind: 'thinking', text: clip(b.thinking) });
+    else if (b.type === 'tool_use' && b.name === 'AskUserQuestion') { const ask = askFrom(b); if (ask) out.ask = ask; out.steps.push({ kind: 'tool', text: clip(`Asks you · ${ask?.questions.map(q => q.question).join(' · ') || 'a question'}`, 120) }); }
     else if (b.type === 'tool_use') out.steps.push({ kind: 'tool', text: toolLabel(b.name, b.input) });
     // What the agent says between tool calls; the closing text of a turn is the reply itself, not a step.
     else if (b.type === 'text' && !done && String(b.text || '').trim()) out.steps.push({ kind: 'text', text: String(b.text).trim().slice(0, 4000) });
@@ -172,7 +185,7 @@ function watch({ provider, cwd, session, onEvent, onSession }) {
     if (size === pos) return;
     const fd = fs.openSync(file, 'r'); const buf = Buffer.alloc(size - pos); fs.readSync(fd, buf, 0, buf.length, pos); fs.closeSync(fd); pos = size;
     const lines = (rest + buf.toString('utf8')).split('\n'); rest = lines.pop();
-    for (const line of lines) { if (!line.trim()) continue; let o; try { o = JSON.parse(line); } catch { continue; } const e = parse(o); if (e.steps.length || e.turn !== undefined) onEvent(e); }
+    for (const line of lines) { if (!line.trim()) continue; let o; try { o = JSON.parse(line); } catch { continue; } const e = parse(o); if (e.steps.length || e.turn !== undefined || e.answered) onEvent(e); }
     // Claude's tool_use turns end with stop_reason tool_use; only a plain user prompt or end_turn moves the turn state.
   };
   const timer = setInterval(() => { try { tick(); } catch {} }, 700);
@@ -180,4 +193,24 @@ function watch({ provider, cwd, session, onEvent, onSession }) {
   return () => { stopped = true; clearInterval(timer); if (file) claimed.delete(file); };
 }
 
-module.exports = { watch, parseClaude, parseCodex, parseAgyStep, claudeFile };
+// Keys that answer Claude's AskUserQuestion menu, one group per question (checked against Claude Code 2.1):
+// a single choice is its number (picks and moves on); several choices are their numbers (each toggles) and then
+// Down past the options and "Type something" onto Submit. Own text goes in the "Type something" row.
+// answers: [{ picks: number[] (0-based), other?: string }] in question order.
+function questionKeys(questions, answers) {
+  const DOWN = '\x1b[B';
+  return questions.map((q, i) => {
+    const a = answers[i] || {}, n = q.options.length;
+    const picks = [...new Set((a.picks || []).map(Number).filter(p => Number.isInteger(p) && p >= 0 && p < n))];
+    const other = String(a.other || '').replace(/[\r\n\t\x1b]+/g, ' ').trim();
+    if (!q.multiSelect) {
+      if (other) return [...Array(n).fill(DOWN), other, '\r'];
+      if (!picks.length) throw new Error(`Pick an answer for "${q.header || q.question}".`);
+      return [String(picks[0] + 1)];
+    }
+    if (!picks.length && !other) throw new Error(`Pick at least one answer for "${q.header || q.question}".`);
+    return [...picks.map(p => String(p + 1)), ...(other ? [...Array(n).fill(DOWN), other, DOWN] : Array(n + 1).fill(DOWN)), '\r'];
+  });
+}
+
+module.exports = { watch, parseClaude, parseCodex, parseAgyStep, claudeFile, questionKeys };
