@@ -4,7 +4,7 @@
 
 <p align="center">Run a team of coding agents from one window. A boss agent plans the work, enlists specialists on Claude Code, Codex, Antigravity, Gemini, OpenCode or a local model, and reports back to you.</p>
 
-![Dispatch: the boss and its team in the chat, with the 3D office above](docs/images/chat.png)
+![Dispatch: files and editor on the left, the Music scene and the team chat in the middle, team and activity on the right](docs/images/hero.png)
 
 ## What it does
 
