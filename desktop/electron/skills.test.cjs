@@ -26,7 +26,7 @@ test('install from a folder, toggle, plugin dirs, remove', async () => {
     assert.deepEqual(s.pluginDirs(), []);
     const p = await s.preview(src);
     assert.deepEqual(p.skills.map(x => [x.name, x.path, x.scripts]), [['alpha', 'tools/alpha', 1], ['beta-skill', 'tools/beta', 1]]);
-    assert.deepEqual(s.install(p.id, ['alpha'], 'global'), ['alpha']);
+    assert.deepEqual(await s.install(p.id, ['alpha'], 'global'), ['alpha']);
     assert.ok(fs.existsSync(path.join(root, 'home', 'skills', '.claude-plugin', 'plugin.json')));
     assert.ok(fs.existsSync(path.join(root, 'home', 'skills', 'skills', 'alpha', 'scripts', 'run.py')));
     assert.deepEqual(s.pluginDirs(), [path.join(root, 'home', 'skills')]);
@@ -37,7 +37,7 @@ test('install from a folder, toggle, plugin dirs, remove', async () => {
     s.setEnabled('alpha', 'global', true);
     s.remove('alpha', 'global');
     assert.deepEqual(s.list(), []);
-    assert.throws(() => s.install(p.id, ['alpha'], 'global'), /expired/);
+    await assert.rejects(() => s.install(p.id, ['alpha'], 'global'), /expired/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -48,7 +48,7 @@ test('real GitHub lookup and install', { skip: !process.env.DISPATCH_NET_TESTS }
     const p = await s.preview('https://github.com/anthropics/skills');
     assert.ok(p.skills.length > 3, `found ${p.skills.length}`);
     const one = p.skills[0].name;
-    s.install(p.id, [one], 'project');
+    await s.install(p.id, [one], 'project');
     assert.equal(s.list()[0].source.owner, 'anthropics');
     assert.ok(await s.update(one, 'project'));
   } finally { fs.rmSync(root, { recursive: true, force: true }); }

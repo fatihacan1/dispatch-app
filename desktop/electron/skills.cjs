@@ -37,21 +37,23 @@ function parseSource(input) {
   throw new Error('Paste a GitHub link, like https://github.com/owner/repo or a link to a folder inside it.');
 }
 
-// Every folder under dir that holds a SKILL.md (a skill folder is not searched further).
-function findSkills(dir, base = dir, depth = 0, out = []) {
+// Every folder under dir that holds a SKILL.md (a skill folder is not searched further). count(dir) gives the files
+// in a skill folder; for a download it comes from the archive listing, since only SKILL.md files are unpacked.
+function findSkills(dir, count = listFiles, base = dir, depth = 0, out = []) {
   let entries; try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return out; }
   const skillFile = entries.find(e => e.isFile() && e.name.toLowerCase() === 'skill.md');
   if (skillFile) {
+    const rel = path.relative(base, dir).split(path.sep).join('/');
     // The antivirus can quarantine a file right after unpacking (offensive-security skills): skip that skill,
     // say which, and keep the rest instead of failing the whole lookup.
     let meta, files;
-    try { meta = frontmatter(fs.readFileSync(path.join(dir, skillFile.name), 'utf8')); files = listFiles(dir); }
-    catch { (out.blocked ||= []).push(path.relative(base, dir).split(path.sep).join('/') || path.basename(dir)); return out; }
-    out.push({ dir, rel: path.relative(base, dir).split(path.sep).join('/'), name: slug(meta.name || path.basename(dir)) || 'skill', description: meta.description || '', files: files.length, scripts: files.filter(f => /\.(sh|ps1|py|js|mjs|cjs|ts|bat|cmd|exe)$/i.test(f)).length, skillFile: skillFile.name });
+    try { meta = frontmatter(fs.readFileSync(path.join(dir, skillFile.name), 'utf8')); files = count(dir); }
+    catch { (out.blocked ||= []).push(rel || path.basename(dir)); return out; }
+    out.push({ dir, rel, name: slug(meta.name || path.basename(dir)) || 'skill', description: meta.description || '', files: files.length, scripts: files.filter(f => /\.(sh|ps1|py|js|mjs|cjs|ts|bat|cmd|exe)$/i.test(f)).length, skillFile: skillFile.name });
     return out;
   }
   if (depth > 6) return out;
-  for (const e of entries) if (e.isDirectory() && !SKIP.has(e.name)) findSkills(path.join(dir, e.name), base, depth + 1, out);
+  for (const e of entries) if (e.isDirectory() && !SKIP.has(e.name)) findSkills(path.join(dir, e.name), count, base, depth + 1, out);
   return out;
 }
 function listFiles(dir, rel = '', out = []) {
@@ -65,6 +67,15 @@ function listFiles(dir, rel = '', out = []) {
 
 const run = (file, args, opts = {}) => new Promise((resolve, reject) => execFile(file, args, { windowsHide: true, ...opts }, (err, stdout, stderr) => err ? reject(new Error(String(stderr || err.message).trim())) : resolve(stdout)));
 
+const TAR = process.platform === 'win32' ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe') : 'tar';
+// Unpack these archive members (exact names, in chunks so the command line stays short).
+async function untar(archive, out, members) {
+  for (let i = 0; i < members.length; i += 200) await run(TAR, ['-xzf', archive, '-C', out, ...members.slice(i, i + 200)], { maxBuffer: 64 * 1024 * 1024 });
+}
+
+// Downloads the repo as an archive but unpacks only its SKILL.md files. Everything else stays packed until the user
+// installs a skill, and then only that skill's folder comes out: security repos are full of exploit samples, and
+// unpacking all of them made the antivirus raise virus warnings for files nobody installed.
 async function download(src, workDir) {
   const headers = { 'user-agent': 'dispatch-skills', accept: 'application/vnd.github+json' };
   let ref = src.ref;
@@ -80,14 +91,18 @@ async function download(src, workDir) {
   if (buf.length > 200 * 1024 * 1024) throw new Error('That repository is larger than 200 MB.');
   const archive = path.join(workDir, 'src.tar.gz'), out = path.join(workDir, 'x');
   fs.writeFileSync(archive, buf); fs.mkdirSync(out);
-  // A link to a folder unpacks only that folder: security repos carry exploit samples elsewhere in the tree, and
-  // unpacking the whole repo made the antivirus raise a virus warning for files that were never installed.
-  const only = src.sub ? [`*/${src.sub.replace(/\/+$/, '')}/*`] : [];
-  await run(process.platform === 'win32' ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe') : 'tar', ['-xzf', archive, '-C', out, ...(only.length ? ['--wildcards', ...only] : [])].filter(a => !(process.platform === 'win32' && a === '--wildcards')));
-  fs.rmSync(archive, { force: true });
-  const top = fs.readdirSync(out).find(n => fs.statSync(path.join(out, n)).isDirectory());
+  const listing = String(await run(TAR, ['-tzf', archive], { maxBuffer: 64 * 1024 * 1024 })).split(/\r?\n/).filter(Boolean);
+  const files = listing.filter(n => !n.endsWith('/'));
+  const top = (listing[0] || '').split('/')[0];
   if (!top) throw new Error('The download was empty.');
-  return { root: path.join(out, top), ref };
+  const sub = src.sub ? `${top}/${src.sub.replace(/\/+$/, '')}/` : `${top}/`;
+  await untar(archive, out, files.filter(n => n.startsWith(sub) && path.posix.basename(n).toLowerCase() === 'skill.md'));
+  fs.mkdirSync(path.join(out, top), { recursive: true });
+  const members = dir => { const prefix = path.relative(out, dir).split(path.sep).join('/') + '/'; return files.filter(n => n.startsWith(prefix) && !n.split('/').some(x => SKIP.has(x))).map(n => [n, n.slice(prefix.length)]); };
+  // Files of one skill folder, read from the listing; and unpacking that folder right before it is installed.
+  const count = dir => members(dir).map(m => m[1]);
+  const unpack = dir => untar(archive, out, members(dir).map(m => m[0]));
+  return { root: path.join(out, top), ref, count, unpack };
 }
 
 function create({ globalDir, projectDir }) {
@@ -130,35 +145,35 @@ function create({ globalDir, projectDir }) {
   async function preview(input) {
     const work = fs.mkdtempSync(path.join(os.tmpdir(), 'dispatch-skill-'));
     try {
-      let base, source;
+      let base, source, count = listFiles, unpack = null;
       if (input && fs.existsSync(String(input)) && fs.statSync(String(input)).isDirectory()) { base = path.resolve(String(input)); source = { kind: 'folder', path: base }; }
       else {
         const src = parseSource(input);
-        const { root: repoRoot, ref } = await download(src, work);
+        const dl = await download(src, work); const { root: repoRoot, ref } = dl; count = dl.count; unpack = dl.unpack;
         base = src.sub ? path.join(repoRoot, ...src.sub.split('/')) : repoRoot;
         if (!fs.existsSync(base)) throw new Error(`Folder "${src.sub}" is not in ${src.owner}/${src.repo}@${ref}.`);
         source = { kind: 'github', owner: src.owner, repo: src.repo, ref: src.ref || ref, pinnedRef: !!src.ref, sub: src.sub, url: `https://github.com/${src.owner}/${src.repo}` };
       }
-      const found = findSkills(base);
+      const found = findSkills(base, count);
       const blocked = found.blocked || [];
       if (!found.length && blocked.length) throw new Error(`Windows could not open ${blocked.length === 1 ? 'this skill' : `these ${blocked.length} skills`} (${blocked.slice(0, 5).join(', ')}${blocked.length > 5 ? ', …' : ''}). Usually the antivirus removed a file it flagged, which happens with offensive-security skills.`);
       if (!found.length) throw new Error('No SKILL.md found there. A skill is a folder with a SKILL.md file.');
       const installed = new Set(list().map(s => `${s.scope}:${s.name}`));
       const id = Math.random().toString(36).slice(2);
-      previews.set(id, { work, base, source, found });
+      previews.set(id, { work, base, source, found, unpack });
       setTimeout(() => discard(id), 30 * 60 * 1000).unref?.();
       return { id, source, blocked, skills: found.map(f => ({ name: f.name, path: f.rel || '.', description: f.description, files: f.files, scripts: f.scripts, installed: { project: installed.has(`project:${f.name}`), global: installed.has(`global:${f.name}`) } })) };
     } catch (e) { fs.rmSync(work, { recursive: true, force: true }); throw e; }
   }
   function discard(id) { const p = previews.get(id); if (!p) return; previews.delete(id); fs.rmSync(p.work, { recursive: true, force: true }); }
 
-  function install(id, names, scope) {
+  async function install(id, names, scope) {
     const p = previews.get(id); if (!p) throw new Error('This preview expired. Look the link up again.');
     const r = ensurePlugin(scope), sources = readJson(sourcesFile(scope), {}), done = [];
     for (const f of p.found.filter(f => names.includes(f.name))) {
       const target = path.join(r, 'skills', f.name);
       fs.rmSync(target, { recursive: true, force: true }); fs.rmSync(path.join(r, 'disabled', f.name), { recursive: true, force: true });
-      try { fs.cpSync(f.dir, target, { recursive: true, filter: s => !SKIP.has(path.basename(s)) }); } catch { fs.rmSync(target, { recursive: true, force: true }); continue; }
+      try { if (p.unpack) await p.unpack(f.dir); fs.cpSync(f.dir, target, { recursive: true, filter: s => !SKIP.has(path.basename(s)) }); } catch { fs.rmSync(target, { recursive: true, force: true }); continue; }
       sources[f.name] = { ...p.source, skillPath: f.rel, installedAt: new Date().toISOString() };
       done.push(f.name);
     }
@@ -176,7 +191,7 @@ function create({ globalDir, projectDir }) {
     const match = p.skills.find(s => s.name === name) || (p.skills.length === 1 ? p.skills[0] : null);
     if (!match) { discard(p.id); throw new Error(`"${name}" is no longer in ${src.owner}/${src.repo}.`); }
     const enabled = fs.existsSync(path.join(root(scope), 'skills', name));
-    install(p.id, [match.name], scope);
+    await install(p.id, [match.name], scope);
     if (!enabled) setEnabled(name, scope, false);
     return true;
   }
