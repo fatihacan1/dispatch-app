@@ -66,6 +66,22 @@ export function applyTheme() {
       "diffEditor.insertedLineBackground": v("--diff-add") + "1a",
       "diffEditor.removedLineBackground": v("--diff-del") + "1a",
       "focusBorder": v("--focus"),
+      // Suggest list, hovers and other dropdowns in the app's colors instead of Monaco's blue.
+      "editorSuggestWidget.background": v("--overlay"),
+      "editorSuggestWidget.border": v("--line-strong"),
+      "editorSuggestWidget.foreground": v("--text-2"),
+      "editorSuggestWidget.selectedBackground": v("--selected"),
+      "editorSuggestWidget.selectedForeground": v("--text"),
+      "editorSuggestWidget.highlightForeground": v("--text"),
+      "editorSuggestWidget.focusHighlightForeground": v("--text"),
+      "editorHoverWidget.background": v("--overlay"),
+      "editorHoverWidget.border": v("--line-strong"),
+      "list.activeSelectionBackground": v("--selected"),
+      "list.activeSelectionForeground": v("--text"),
+      "list.focusBackground": v("--selected"),
+      "list.hoverBackground": v("--hover"),
+      "list.highlightForeground": v("--text"),
+      "quickInput.background": v("--overlay"),
     },
   });
   monaco.editor.setTheme("dispatch");

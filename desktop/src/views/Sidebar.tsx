@@ -94,7 +94,8 @@ function usePanes() {
   const update = (next: Panes) => { setPanes(next); try { localStorage.setItem(PANES_KEY, JSON.stringify(next)); } catch {} };
   return [panes, update] as const;
 }
-const paneStyle = (s: { open: boolean; size: number }): React.CSSProperties => s.open ? { flex: `${Math.max(1, s.size)} 1 0px`, minHeight: PANE_MIN } : { flex: "none" };
+// Closed: grow 0 instead of flex none, so opening and closing animate (flex-grow and min-height transition in CSS).
+const paneStyle = (s: { open: boolean; size: number }): React.CSSProperties => s.open ? { flex: `${Math.max(1, s.size)} 1 0px`, minHeight: PANE_MIN } : { flex: "0 1 0px" };
 
 function Section({ id, title, meta, action, children, open, toggle, style }: { id: PaneId; title: string; meta?: React.ReactNode; action?: React.ReactNode; children: React.ReactNode; open: boolean; toggle: () => void; style: React.CSSProperties }) {
   return <section className={"side-section side-pane " + (open ? "open" : "")} data-pane={id} style={style}>
@@ -103,7 +104,7 @@ function Section({ id, title, meta, action, children, open, toggle, style }: { i
       {meta !== undefined && <span className="side-meta">{meta}</span>}
       {action}
     </div>
-    {open && <div className="pane-body">{children}</div>}
+    <div className="pane-body" inert={!open || undefined}>{children}</div>
   </section>;
 }
 /** The line between two panes: drag (or arrow keys) moves height from the nearest open pane on one side to the other. */
@@ -126,10 +127,10 @@ function Sash({ index, panes, setPanes, host }: { index: number; panes: Panes; s
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!live || e.button !== 0) return;
     e.preventDefault();
-    const el = e.currentTarget; el.setPointerCapture(e.pointerId); el.classList.add("dragging");
+    const el = e.currentTarget; el.setPointerCapture(e.pointerId); el.classList.add("dragging"); host.current?.classList.add("resizing");
     const base = measure(), y0 = e.clientY;
     const onMove = (ev: PointerEvent) => setPanes(move(base, ev.clientY - y0));
-    const onUp = () => { el.classList.remove("dragging"); el.removeEventListener("pointermove", onMove); el.removeEventListener("pointerup", onUp); el.removeEventListener("pointercancel", onUp); };
+    const onUp = () => { el.classList.remove("dragging"); host.current?.classList.remove("resizing"); el.removeEventListener("pointermove", onMove); el.removeEventListener("pointerup", onUp); el.removeEventListener("pointercancel", onUp); };
     el.addEventListener("pointermove", onMove); el.addEventListener("pointerup", onUp); el.addEventListener("pointercancel", onUp);
   };
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -199,7 +200,7 @@ export function Sidebar(p: Props) {
         <button type="button" role="tab" aria-selected={tab === "outputs"} onClick={() => { setTab("outputs"); if (!panes.files.open) togglePane("files"); }}>Outputs{active ? <span className="tab-spin" role="img" aria-label={`${active} running`} title={`${active} running`} /> : outputs.length ? <span className="side-meta">{outputs.length}</span> : null}</button>
         {p.shells && <button type="button" role="tab" aria-selected={tab === "terminals"} onClick={() => { setTab("terminals"); if (!panes.files.open) togglePane("files"); }}>Terminals{p.shells.length ? <span className="side-meta">{p.shells.length}</span> : null}</button>}
       </div>
-      {panes.files.open && <div className="side-tab-body">
+      {<div className="side-tab-body" key={tab} inert={!panes.files.open || undefined}>
         {tab === "terminals" ? <div className="term-grid">
           {p.agents.map(a => <button type="button" key={a.name} className="term-tile" title={`${a.name} · ${a.provider} CLI`} aria-label={`Open ${a.name} terminal`} onClick={() => p.openTerminal(a.name)}>
             <span className={"term-tag prov-" + String(a.provider).replace(/^local.*/, "local")}>{a.name}</span>

@@ -599,7 +599,17 @@ export function App() {
   const [atBottom, setAtBottom] = useState(true);
   const pinned = useRef(true);
   const prevHeight = useRef(0);
-  const toBottom = (smooth = false) => { const el = listRef.current; if (el) el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" }); pinned.current = true; setAtBottom(true); };
+  // The jump button glides with its own easing (the browser's smooth scroll snapped on long chats), following the
+  // bottom if content grows meanwhile. Any later instant scroll, or the user's wheel, ends the glide.
+  const glide = useRef(0);
+  const toBottom = (smooth = false) => {
+    const el = listRef.current; pinned.current = true; setAtBottom(true); cancelAnimationFrame(glide.current); glide.current = 0;
+    if (!el) return;
+    if (!smooth || window.matchMedia("(prefers-reduced-motion: reduce)").matches) { el.scrollTop = el.scrollHeight; return; }
+    const from = el.scrollTop, t0 = performance.now(), ms = Math.min(700, 300 + (el.scrollHeight - from) / 20);
+    const step = (now: number) => { const t = Math.min(1, (now - t0) / ms), k = 1 - Math.pow(1 - t, 3); el.scrollTop = from + (el.scrollHeight - el.clientHeight - from) * k; if (t < 1) glide.current = requestAnimationFrame(step); else glide.current = 0; };
+    glide.current = requestAnimationFrame(step);
+  };
   useEffect(() => { setShown(PAGE); pinned.current = true; setAtBottom(true); requestAnimationFrame(() => toBottom()); }, [selected, archive, mode]);
   useEffect(() => { if (pinned.current) toBottom(); }, [current.length, tr?.steps.length, live]);
   // Content that grows after render (images, code blocks, the live trail) must not pull the view away from the bottom.
@@ -611,7 +621,7 @@ export function App() {
     return () => ro.disconnect();
   });
   const onListScroll = () => {
-    const el = listRef.current; if (!el) return;
+    const el = listRef.current; if (!el || glide.current) return;
     const bottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
     pinned.current = bottom; if (bottom !== atBottom) setAtBottom(bottom);
     if (el.scrollTop < 120 && shown < current.length) { prevHeight.current = el.scrollHeight; setShown(s => s + PAGE); }
@@ -848,7 +858,7 @@ export function App() {
               </div>
 
               {mode === "terminal" ? <div className="terminal-wrap"><Console key={`${selected}:${epoch}`} name={selected} /></div> : (
-                <div className="message-list" ref={listRef} onScroll={onListScroll}>
+                <div className="message-list" ref={listRef} onScroll={onListScroll} onWheel={() => { cancelAnimationFrame(glide.current); glide.current = 0; }}>
                   {offset > 0 && <p className="empty-line older-hint">Scroll up for older messages</p>}
                   {current.length === 0 && !trailNode && !questions[selected] ? (
                     <div className="empty"><h2>Start a conversation</h2><p>Send an order to {selected}. Live CLI output is in Terminal.</p></div>
