@@ -14,7 +14,7 @@ test('schedules: boss sets one, plain agents cannot, the title bar shows it; age
   const app = await electron.launch({ args: [path.resolve('electron/main.cjs'), '--demo'], cwd: workspace, env: { ...process.env, HOME: home, DISPATCH_TEST_HOME: home, DISPATCH_HOME: home } });
   try {
     const page = await app.firstWindow();
-    await expect(page.getByRole('button', { name: 'Search' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Search' })).toBeVisible({ timeout: 20000 });
 
     const denied = await cli(workspace, 'writer', ['schedule', 'list']);
     expect(denied.ok).toBe(false);

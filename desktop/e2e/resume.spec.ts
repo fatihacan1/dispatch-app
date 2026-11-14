@@ -38,7 +38,10 @@ test('operations survive restart and project tabs run side by side', async () =>
   await expect(page.locator('.ptab')).toHaveCount(2, { timeout: 20000 });
   const tabs = (await page.evaluate(() => (window as any).army.tabs.list())).tabs;
   expect(tabs.map((t: any) => t.path)).toEqual([first, second]);
-  const firstPage = app.windows().find(w => !w.url().includes('tray')) && await (async () => { for (const w of app.windows()) { try { if ((await w.evaluate(() => window.army.info())).workspace === first) return w; } catch {} } return null; })();
+  // Tabs restored at start load one after another: wait for the first project's page.
+  const findFirst = async () => { for (const w of app.windows()) { try { if (!w.url().includes('tray') && (await w.evaluate(() => window.army.info())).workspace === first) return w; } catch {} } return null; };
+  await expect.poll(async () => !!(await findFirst()), { timeout: 20000 }).toBe(true);
+  const firstPage = await findFirst();
   expect(firstPage).toBeTruthy();
   await page.evaluate(id => (window as any).army.tabs.switch(id), tabs[0].id);
   await expect(firstPage!.locator('.team')).toBeVisible({ timeout: 20000 });

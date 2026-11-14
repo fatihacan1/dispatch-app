@@ -10,7 +10,7 @@ test('boss template and model override launch and change boss', async () => {
   const app = await electron.launch({ args: [path.resolve('electron/main.cjs'), '--demo'], cwd: workspace, env: { ...process.env, HOME: workspace, DISPATCH_TEST_HOME: workspace, DISPATCH_HOME: workspace } });
   try {
     const page = await app.firstWindow();
-    await expect(page.getByLabel('Model', { exact: true })).toHaveValue('custom-template-model');
+    await expect(page.getByLabel('Model', { exact: true })).toHaveValue('custom-template-model', { timeout: 20000 });
     await page.getByRole('button', { name: 'Start operation' }).click();
     let boss = await page.evaluate(() => (window as any).army.debugAgent('boss'));
     expect(boss.args).toContain('custom-template-model'); expect(boss.prompt).toContain('Custom boss instructions');

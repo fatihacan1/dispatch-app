@@ -157,7 +157,7 @@ export function Skills() {
                 <small className="skill-src">{where(s.source)}</small>
               </div>
               <div className="prov-actions">
-                <label className="skill-on"><input type="checkbox" aria-label={`Use ${s.name}`} checked={s.enabled} onChange={e => void act("toggle", () => army().skills.enabled(s.name, s.scope, e.target.checked))} />On</label>
+                <label className="skill-on"><input type="checkbox" aria-label={`Use ${s.name}`} checked={s.enabled} onChange={e => { const on = e.target.checked; setItems(v => v && v.map(x => x.name === s.name && x.scope === s.scope ? { ...x, enabled: on } : x)); void act("toggle", () => army().skills.enabled(s.name, s.scope, on)); }} />On</label>
                 {s.source?.kind === "github" && <button type="button" className="icon-button lg" title="Update from GitHub" aria-label={`Update ${s.name}`} disabled={!!busy} onClick={() => void act("update", () => army().skills.update(s.name, s.scope))}><ArrowPathIcon className={busy === "update" ? "spin" : ""} /></button>}
                 <button type="button" className="icon-button lg" title="Show in folder" aria-label={`Show ${s.name} in folder`} onClick={() => army().skills.reveal(s.name, s.scope)}><FolderArrowDownIcon /></button>
                 <button type="button" className="icon-button lg danger" title="Remove" aria-label={`Remove ${s.name}`} onClick={async () => { if (await ask.confirm(`Remove ${s.name}?`, { description: "Its folder is deleted.", action: "Remove", danger: true })) void act("remove", () => army().skills.remove(s.name, s.scope)); }}><TrashIcon /></button>
