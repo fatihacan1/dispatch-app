@@ -782,9 +782,9 @@ html.overlay-window, html.overlay-window body, html.overlay-window #root { backg
 .tool-sched-list { display: grid; gap: 8px; padding: 10px 8px 14px 46px; border-bottom: var(--border); }
 .tool-tg { align-items: flex-start; }
 .tg-blue { color: #26a5e4; }
-.tg-mark { display: inline-grid; place-items: center; width: 14px; height: 14px; flex: none; }
-.tg-mark svg { width: 14px; height: 14px; }
-.row-text b .tg-mark { margin-left: 6px; vertical-align: -2px; }
+.tg-mark { display: inline-grid; place-items: center; width: 12px; height: 12px; flex: none; }
+.tg-mark svg { width: 12px; height: 12px; }
+.row-text b .tg-mark { margin-left: 6px; vertical-align: -1px; }
 .tg-steps { margin: 6px 0 4px; padding-left: 18px; color: var(--text-2); font-size: var(--text-sm); display: grid; gap: 2px; }
 .tg-token { display: flex; gap: 8px; margin-top: 4px; max-width: 460px; }
 .tg-token input { flex: 1; min-width: 0; }

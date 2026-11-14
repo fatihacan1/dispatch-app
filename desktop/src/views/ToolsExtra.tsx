@@ -63,7 +63,9 @@ export function ScheduleTool() {
 }
 
 /** Telegram brand mark in its blue, for the Team list. */
-export const TelegramMark = ({ title }: { title?: string }) => <span className="tg-mark tg-blue" role={title ? "img" : undefined} aria-label={title} title={title} aria-hidden={title ? undefined : true} dangerouslySetInnerHTML={{ __html: telegramSvg.replace("<svg", '<svg fill="currentColor"').replace(/<title>.*?<\/title>/, "") }} />;
+// Telegram's own mark: a blue disc with a white plane (the one-colour glyph showed the dark page through its cut-out plane).
+const TG_MARK = '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="12" fill="#26a5e4"/><path fill="#fff" d="M5.491 11.74l11.57-4.461c.537-.194 1.006.131.832.943l-1.97 9.281c-.146.658-.537.818-1.084.508l-3-2.211-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.121l-6.871 4.326-2.962-.924c-.643-.204-.657-.643.136-.953z"/></svg>';
+export const TelegramMark = ({ title }: { title?: string }) => <span className="tg-mark" role={title ? "img" : undefined} aria-label={title} title={title} aria-hidden={title ? undefined : true} dangerouslySetInnerHTML={{ __html: TG_MARK }} />;
 
 /** Who answers Telegram in the open operation, or null when Telegram is not connected. */
 export function useTelegramOwner(): [string | null, (name: string) => Promise<void>] {
