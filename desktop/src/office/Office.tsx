@@ -10,6 +10,7 @@ const SCENES = [
   { id: "office", label: "Office", hint: FLY_HINT, load: (): Promise<{ createOfficeScene: Factory }> => import("./OfficeScene") },
   { id: "studio", label: "Studio", hint: FLY_HINT, load: (): Promise<{ createOfficeScene: Factory }> => import("./StudioScene") },
   { id: "pixel", label: "Pixel", hint: "Drag to pan · wheel zoom · WASD pan · F focus · Home reset", load: (): Promise<{ createOfficeScene: Factory }> => import("./PixelScene") },
+  { id: "music", label: "Music", hint: "Plays what Windows is playing: Spotify, YouTube, YouTube Music. The bars follow your system sound.", load: (): Promise<{ createOfficeScene: Factory }> => import("./MusicScene") },
 ] as const;
 type SceneId = (typeof SCENES)[number]["id"];
 

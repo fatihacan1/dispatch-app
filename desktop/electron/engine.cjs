@@ -583,7 +583,7 @@ ipcMain.handle('voice:warm', () => whisper.ensure(voiceLang()).then(() => true))
 ipcMain.handle('voice:transcribe', (_e, wav) => whisper.transcribe(Buffer.from(wav), voiceLang()));
 ipcMain.handle('ui:set', (_e, patch) => {
   const next = { ...readUi() };
-  if (patch && ['studio', 'pixel', 'office'].includes(patch.scene)) next.scene = patch.scene;
+  if (patch && ['studio', 'pixel', 'office', 'music'].includes(patch.scene)) next.scene = patch.scene;
   if (patch && typeof patch.hintSeen === 'boolean') next.hintSeen = patch.hintSeen;
   if (patch && typeof patch.ideOpen === 'boolean') next.ideOpen = patch.ideOpen;
   // Home > live usage switch. Off by default: nothing reads limits (or the Claude sign-in) until the user turns it on.
@@ -896,6 +896,15 @@ const chatImage = require('./chat-image.cjs');
 const chatImageRoots = () => [path.join(workspace, '.dispatch'), tools.comfyConfig().layout?.root].filter(Boolean);
 ipcMain.handle('chat:image', (_e, file) => chatImage.imageData(file, chatImageRoots()));
 ipcMain.handle('chat:open-image', (_e, file) => { const full = chatImage.allowedImage(file, chatImageRoots()); if (!full) return false; void shell.openPath(full); return true; });
+// Music scene: what Windows is playing (Spotify app, YouTube / YouTube Music in a browser...), read only while the scene is open.
+const mediaLib = require('./media.cjs');
+let mediaStop = null;
+ipcMain.handle('media:watch', (_e, on) => {
+  mediaStop?.(); mediaStop = null;
+  if (on) mediaStop = mediaLib.watch(u => notify('media:update', u));
+  return true;
+});
+ipcMain.handle('media:control', (_e, cmd) => mediaLib.send(String(cmd)));
 ipcMain.handle('outputs:reveal', (_e, file) => { const full = file ? path.resolve(String(file)) : ''; if (full && outputAllowed(full) && fs.existsSync(full)) { shell.showItemInFolder(full); return true; } fs.mkdirSync(outputsDir(), { recursive: true }); void shell.openPath(outputsDir()); return false; });
 ipcMain.handle('tools:install', (_e, id = 'comfyui') => {
   const script = id === 'comfyui' ? tools.installScript() : tools.TOOL_INSTALL[id]?.();
@@ -1327,6 +1336,7 @@ function killTrees() {
 }
 // Tab closed or app quitting: every agent goes down with everything it started, and nothing keeps watching.
 function dispose() {
+  mediaStop?.(); mediaStop = null;
   finishOperation(); watcher?.close(); memoryWatcher?.close(); outputsWatcher?.close(); galleryWatcher?.close(); toolDirWatchers.forEach(w => w.close());
   filesLib.unwatch(host.id); codeIndexWorker?.postMessage('close'); killTrees(); stopAgents();
   for (const s of shells.values()) try { s.terminal.kill(); } catch {}

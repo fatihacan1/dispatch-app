@@ -305,6 +305,11 @@ app.on('open-file', (e, file) => { e.preventDefault(); if (file.toLowerCase().en
 pendingPack = packFromArgv(process.argv);
 
 app.whenReady().then(() => {
+  // Music scene visualizer: getDisplayMedia hands the page the system sound (loopback); the screen video track is dropped by the page.
+  try {
+    const { session, desktopCapturer } = require('electron');
+    session.defaultSession.setDisplayMediaRequestHandler((_req, cb) => { desktopCapturer.getSources({ types: ['screen'] }).then(src => cb(src[0] ? { video: src[0], audio: 'loopback' } : {})).catch(() => cb({})); });
+  } catch {}
   if (process.env.DISPATCH_TEST_HOME) process.env.USERPROFILE = process.env.DISPATCH_TEST_HOME;
   storage.migrate(process.env.DISPATCH_HOME || os.homedir());
   // DISPATCH_TEST_HIDDEN: e2e runs never show a window or take focus from what the user is doing.
