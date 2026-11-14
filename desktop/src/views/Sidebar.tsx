@@ -139,7 +139,7 @@ export function Sidebar(p: Props) {
     <div className="side-files">
       <div className="side-tabs" role="tablist">
         {p.files && <button type="button" role="tab" aria-selected={tab === "files"} onClick={() => setTab("files")} title="Changed files">Changes{p.files.length ? <span className="side-meta">{p.files.length}</span> : null}</button>}
-        <button type="button" role="tab" aria-selected={tab === "outputs"} onClick={() => setTab("outputs")}>Outputs{active ? <span className="side-meta live-count">{active} running</span> : outputs.length ? <span className="side-meta">{outputs.length}</span> : null}</button>
+        <button type="button" role="tab" aria-selected={tab === "outputs"} onClick={() => setTab("outputs")}>Outputs{active ? <span className="tab-spin" role="img" aria-label={`${active} running`} title={`${active} running`} /> : outputs.length ? <span className="side-meta">{outputs.length}</span> : null}</button>
         {p.shells && <button type="button" role="tab" aria-selected={tab === "terminals"} onClick={() => setTab("terminals")}>Terminals{p.shells.length ? <span className="side-meta">{p.shells.length}</span> : null}</button>}
       </div>
       <div className="side-tab-body">
