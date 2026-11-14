@@ -720,18 +720,20 @@ function setTgOwner(name) {
   }
   return tgOwner();
 }
-// The owner's replies go back to Telegram while a Telegram conversation is going (30 min); notices that need the user always go.
+// The owner's replies and Dispatch's own notices (limit, sign-in, an agent gone quiet) go back to Telegram only while
+// a Telegram conversation with this project is going (30 min). Before, every newly opened project tab sent its
+// start-up notices to the phone although the user never talked to it from there; they still show in Dispatch.
 function tgForward(msg) {
   if (!telegram.connected()) return;
   const owner = tgOwner();
-  const fromPhone = msg.from === owner && Date.now() - tgWaiting < 30 * 60e3;
+  if (Date.now() - tgWaiting >= 30 * 60e3 || (msg.from !== owner && msg.from !== 'dispatch')) return;
   const where = `[${path.basename(workspace)}${owner !== 'boss' ? ` · ${owner}` : ''}]`;
-  if (fromPhone || msg.from === 'dispatch') void telegram.send(msg.from === owner ? `${where} ${msg.text}` : `${where} Dispatch: ${msg.text}`).catch(() => {});
+  void telegram.send(msg.from === owner ? `${where} ${msg.text}` : `${where} Dispatch: ${msg.text}`).catch(() => {});
 }
 function telegramHelp(name = 'boss') {
   if (!telegram.connected()) return '';
   const owner = tgOwner();
-  return `\nTelegram: the user is connected on their phone; ${owner === name ? 'you answer it' : `${owner} answers it now`}. Messages starting with [via Telegram] come from there (the user reaches this project by starting a message with @${path.basename(workspace)}, or by replying to one of its messages) (files they send are saved and listed with their paths) and your answer goes back automatically. Send text or any file yourself (image, video, audio, document) with dispatch telegram send --text "<message>" [--file <path>]. Change the bot's own profile with dispatch telegram profile [--photo <jpg|png>] [--name "<name>"] [--description "<text>"] [--about "<short text>"].${name === 'boss' ? ' Hand Telegram to another agent (e.g. a cheap one that watches it) with dispatch telegram owner <agent>, and back with dispatch telegram owner boss.' : ''}`;
+  return `\nTelegram: the user is on their phone; ${owner === name ? 'you answer it' : `${owner} answers it now`}. Messages starting with [via Telegram] come from there (files they send are listed with their paths); your reply goes back automatically. Answer those like a chat message on a phone: a few short lines of plain text, no headings, tables or long lists. Send a file with dispatch telegram send --text "<message>" --file <path>; bot profile: dispatch telegram profile [--photo <jpg|png>] [--name "<name>"] [--description "<text>"] [--about "<short text>"].${name === 'boss' ? ' Hand Telegram to another agent with dispatch telegram owner <agent>, back with dispatch telegram owner boss.' : ''}`;
 }
 async function handleTelegram(msg) {
   let req = {}; try { req = JSON.parse(msg.text); } catch {}
