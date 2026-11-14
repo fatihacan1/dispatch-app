@@ -91,6 +91,7 @@ contextBridge.exposeInMainWorld('army', {
   devMock: () => invoke('dev:mock'), devUnmock: () => invoke('dev:unmock'),
   mcpStatus: () => invoke('mcp:status'),
   tools: { status: () => invoke('tools:status'), start: () => invoke('tools:start'), stop: () => invoke('tools:stop'), choosePath: () => invoke('tools:choose-path'), install: id => invoke('tools:install', id), file: id => invoke('tools:file', id), reveal: id => invoke('tools:reveal', id), voiceStatus: () => invoke('tools:voice-status'), voiceStart: () => invoke('tools:voice-start'), voiceChoose: () => invoke('tools:voice-choose'), unrealStatus: () => invoke('tools:unreal-status'), blenderStatus: () => invoke('tools:blender-status'), blenderStart: () => invoke('tools:blender-start'), blenderChoose: () => invoke('tools:blender-choose'), unrealChoose: () => invoke('tools:unreal-choose'), unrealEnable: () => invoke('tools:unreal-enable'), unrealOpen: () => invoke('tools:unreal-open') },
+  chatImage: { get: file => invoke('chat:image', file), open: file => invoke('chat:open-image', file) },
   outputs: { list: () => invoke('outputs:list'), preview: file => invoke('outputs:preview', file), reveal: file => invoke('outputs:reveal', file) },
   localAI: { list: () => invoke('local-ai:list'), remove: model => invoke('local-ai:remove', model), chooseIcon: () => invoke('local-ai:choose-icon'), get: () => invoke('local-ai:get'), save: config => invoke('local-ai:save', config), check: config => invoke('local-ai:check', config) },
   attachmentPreview: path => invoke('attachments:preview', path),

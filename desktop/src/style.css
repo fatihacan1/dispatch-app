@@ -1233,3 +1233,7 @@ input[type=checkbox]:focus-visible { outline: 2px solid var(--focus); outline-of
 @keyframes ptab-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(76,195,138,.45); } 50% { box-shadow: 0 0 0 4px rgba(76,195,138,0); } }
 @keyframes tab-flash { from { opacity: .55; } to { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .ptab-glider, .ptab, .ptab-dot.working, .tab-flash, .ptab-add svg { transition: none; animation: none; } }.tg-how { list-style: disc; }
+/* Images an agent shows in the chat with ![alt](path). */
+.md .md-image { display: block; max-width: 100%; margin: 6px 0; padding: 0; border: var(--border); border-radius: var(--radius-lg); background: none; overflow: hidden; cursor: zoom-in; }
+.md .md-image img { display: block; max-width: 100%; max-height: 480px; object-fit: contain; }
+.md .md-image-missing { color: var(--text-3); font-size: var(--text-sm); }

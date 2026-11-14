@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode } from "react";
+import { Fragment, useEffect, useState, type ReactNode } from "react";
 
 // Small, safe Markdown for chat: paragraphs, headings, lists, code fences, quotes, **bold**, *em*, `code`, links.
 // Never injects HTML. Agents also write "1) foo 2) bar" inline; that becomes a list too.
@@ -29,6 +29,28 @@ function inlineList(p: string): { lead: string; items: string[] } | null {
   return { lead: parts[0], items };
 }
 
+// "![alt](D:\path\shot.png)" or "![alt](<path with spaces.png>)" on its own line: an image an agent shows from its outputs.
+// Local paths only; the main process decides which files may be read (electron/chat-image.cjs).
+const IMAGE = /^\s*!\[([^\]\n]*)\]\((.+)\)\s*$/;
+export function imageAt(line: string): { alt: string; src: string } | null {
+  const m = line.match(IMAGE); if (!m) return null;
+  const src = m[2].trim().replace(/^<(.+)>$/, "$1").trim();
+  if (!src || /^[a-z][a-z0-9+.-]*:\/\//i.test(src) || /^data:/i.test(src)) return null;
+  return { alt: m[1].trim(), src };
+}
+function ChatImage({ alt, src }: { alt: string; src: string }) {
+  const [url, setUrl] = useState<string | null | undefined>(undefined);
+  useEffect(() => {
+    let on = true; const api = (window as any).army?.chatImage;
+    if (!api) { setUrl(null); return; }
+    api.get(src).then((u: string | null) => { if (on) setUrl(u || null); }).catch(() => { if (on) setUrl(null); });
+    return () => { on = false; };
+  }, [src]);
+  const name = src.split(/[\\/]/).pop() || src;
+  if (!url) return <p className="md-image-missing">{url === undefined ? "Loading image" : "Image not available"}: {alt || name}</p>;
+  return <button type="button" className="md-image" title={`${alt || name} · click to open`} onClick={() => void (window as any).army?.chatImage?.open(src)}><img src={url} alt={alt || name} /></button>;
+}
+
 // A table starts with a row of cells followed by a |---|---| line.
 const cells = (line: string) => line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map(c => c.trim());
 const tableAt = (lines: string[], i: number) => lines[i].includes("|") && i + 1 < lines.length && /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(lines[i + 1]) && lines[i + 1].includes("|");
@@ -47,6 +69,8 @@ export function Markdown({ text }: { text: string }) {
       while (i < lines.length && !/^\s*```/.test(lines[i])) body.push(lines[i++]);
       i++; blocks.push(<pre key={key()}><code>{body.join("\n")}</code></pre>); continue;
     }
+    const img = imageAt(line);
+    if (img) { blocks.push(<ChatImage key={key()} alt={img.alt} src={img.src} />); i++; continue; }
     if (/^\s*([-*_])\s*(\1\s*){2,}$/.test(line)) { blocks.push(<hr key={key()} />); i++; continue; }
     if (tableAt(lines, i)) {
       const head = cells(lines[i]); i += 2;
@@ -78,7 +102,7 @@ export function Markdown({ text }: { text: string }) {
       blocks.push(<List key={key()}>{items.map((t, j) => <li key={j}>{inline(t, `l${n}-${j}`)}</li>)}</List>); continue;
     }
     const para: string[] = [];
-    while (i < lines.length && lines[i].trim() && !/^\s*```/.test(lines[i]) && !/^#{1,4}\s/.test(lines[i]) && !bullet.test(lines[i]) && !numbered.test(lines[i]) && !/^\s*>/.test(lines[i]) && !(para.length && tableAt(lines, i))) para.push(lines[i++]);
+    while (i < lines.length && lines[i].trim() && !imageAt(lines[i]) && !/^\s*```/.test(lines[i]) && !/^#{1,4}\s/.test(lines[i]) && !bullet.test(lines[i]) && !numbered.test(lines[i]) && !/^\s*>/.test(lines[i]) && !(para.length && tableAt(lines, i))) para.push(lines[i++]);
     const p = para.join("\n");
     const list = inlineList(p.replace(/\n/g, " "));
     if (list) {
