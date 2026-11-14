@@ -902,7 +902,7 @@ export function App() {
         </div>}
       </main>
       {showSidebar && <Sidebar agents={team} selected={selected} activeView={view === "agent"} menu={agentMenu} setMenu={setAgentMenu}
-        select={a => { setSelected(a); setView("agent"); if (attention[a] && !questions[a]) setMode("terminal"); else if (questions[a]) setMode("chat"); }}
+        select={a => { setSelected(a); setView("agent"); if (questions[a]) setMode("chat"); }}
         act={(a, action) => void act(a, action)} openTerminal={openTerminal} enlist={() => setEnlisting(true)}
         saveTeam={agents.length > 1 && agents.includes("boss") ? () => setSavingTeam({ name: "", scope: "project" }) : undefined}
         changeBoss={() => { setAgentMenu(null); setBossSource("template"); setChangingBoss(true); }}
