@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useState, type ReactNode } from "react";
+import { CopyButton } from "./CopyButton";
 
 // Small, safe Markdown for chat: paragraphs, headings, lists, code fences, quotes, **bold**, *em*, `code`, links.
 // Never injects HTML. Agents also write "1) foo 2) bar" inline; that becomes a list too.
@@ -63,11 +64,14 @@ export function Markdown({ text }: { text: string }) {
   while (i < lines.length) {
     const line = lines[i];
     if (!line.trim()) { i++; continue; }
-    const fence = line.match(/^\s*```/);
+    const fence = line.match(/^\s*```\s*([\w#+.-]*)/);
     if (fence) {
       const body: string[] = []; i++;
       while (i < lines.length && !/^\s*```/.test(lines[i])) body.push(lines[i++]);
-      i++; blocks.push(<pre key={key()}><code>{body.join("\n")}</code></pre>); continue;
+      i++;
+      // Something to paste somewhere: the language on the left, a copy button on the right.
+      const code = body.join("\n");
+      blocks.push(<div className="md-code" key={key()}><div className="md-code-head"><span>{fence[1] || "code"}</span><CopyButton text={code} label="Copy code" showLabel /></div><pre><code>{code}</code></pre></div>); continue;
     }
     const img = imageAt(line);
     if (img) { blocks.push(<ChatImage key={key()} alt={img.alt} src={img.src} />); i++; continue; }

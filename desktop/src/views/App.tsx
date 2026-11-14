@@ -9,6 +9,7 @@ import { VoiceSettings } from "../voice/VoiceSettings";
 import { TerminalSettings } from "../components/TerminalSettings";
 import { ProjectTabs } from "./Tabs";
 import { getLang, setLang, type Lang } from "../lib/i18n";
+import { CopyButton } from "../components/CopyButton";
 import {
   ChatBubbleLeftRightIcon, ChevronDownIcon, Cog6ToothIcon, CpuChipIcon, ServerStackIcon, DocumentIcon, DocumentTextIcon, EnvelopeIcon,
   CheckIcon, CodeBracketIcon, FolderIcon, LinkIcon, MicrophoneIcon, HomeIcon, MagnifyingGlassIcon, PaperAirplaneIcon, PaperClipIcon, PlusIcon, Squares2X2Icon, StopIcon, CubeIcon, WrenchScrewdriverIcon, TrashIcon, XMarkIcon, BookOpenIcon, ArrowsRightLeftIcon, CircleStackIcon, BeakerIcon,
@@ -854,6 +855,7 @@ export function App() {
                     <React.Fragment key={m.id + i}>
                       {trailAboveLast && i === current.length - 1 && trailNode}
                       <article className={"message" + (m.from === "you" ? " mine" : "")}>
+                        {m.from !== "you" && <div className="msg-tools"><CopyButton text={m.text} label="Copy message" /></div>}
                         <ChatMessage message={m}><div className="message-meta"><b className={`who c-${agentColor(m.from)}`}>{m.from}</b><span className="message-recipient">to {m.to}</span>{m.time && <time>{new Date(m.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>}</div></ChatMessage>
                       </article>
                     </React.Fragment>

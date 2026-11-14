@@ -290,6 +290,34 @@ input[type=checkbox] { width: 15px; height: 15px; margin: 0; accent-color: var(-
 .md li::marker { color: var(--text-3); }
 .md code { font-family: var(--font-mono); font-size: 0.92em; padding: 1px 5px; border-radius: var(--radius-sm); background: var(--surface); border: var(--border); }
 .md pre { margin: 0; padding: 10px 12px; border-radius: var(--radius); background: var(--surface); border: var(--border); overflow-x: auto; }
+/* Code to copy: one outlined box, a quiet header row with the language and Copy, no extra fill. */
+.md-code { border: var(--border); border-radius: var(--radius); overflow: hidden; animation: enter var(--dur) var(--ease-out); }
+.md-code-head { display: flex; align-items: center; justify-content: space-between; height: 30px; padding: 0 4px 0 12px; border-bottom: var(--border); color: var(--text-3); font-family: var(--font-mono); font-size: var(--text-xs); text-transform: lowercase; }
+.md-code pre { border: 0; border-radius: 0; background: transparent; }
+/* Copy button: the clipboard turns into a green check, the label slides from Copy to Copied. */
+.copy-button { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 6px; border: 0; border-radius: var(--radius); background: transparent; color: var(--text-3); font: inherit; font-family: var(--font-ui); font-size: var(--text-xs); text-transform: none; cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out); }
+.copy-button:hover { color: var(--text); background: var(--hover); }
+.copy-button:active .copy-icons { transform: scale(0.88); }
+.copy-button.copied { color: var(--status-working); }
+.copy-icons { position: relative; display: inline-grid; width: 14px; height: 14px; transition: transform var(--dur-fast) var(--ease-out); }
+.copy-icons svg { grid-area: 1 / 1; width: 14px; height: 14px; transition: opacity 160ms var(--ease-out), transform 260ms var(--ease-out); }
+.copy-check { opacity: 0; transform: scale(0.4) rotate(-45deg); }
+.copy-button.copied .copy-clip { opacity: 0; transform: scale(0.4) rotate(45deg); }
+.copy-button.copied .copy-check { opacity: 1; transform: none; }
+.copy-label { display: inline-grid; overflow: hidden; height: 16px; line-height: 16px; }
+.copy-label > span { grid-area: 1 / 1; transition: transform 220ms var(--ease-out), opacity 160ms var(--ease-out); }
+.copy-label-done { transform: translateY(100%); opacity: 0; }
+.copy-button.copied .copy-label-idle { transform: translateY(-100%); opacity: 0; }
+.copy-button.copied .copy-label-done { transform: none; opacity: 1; }
+/* Hover toolbar on agent messages (like Peach Cord): appears at the top right, copies the whole message. */
+.message { position: relative; }
+.msg-tools { position: absolute; top: 8px; right: 70px; display: flex;
+  opacity: 0; transform: translateY(2px); pointer-events: none; transition: opacity var(--dur-fast) var(--ease-out), transform var(--dur) var(--ease-out); z-index: 2; }
+.message:hover .msg-tools, .msg-tools:focus-within { opacity: 1; transform: none; pointer-events: auto; }
+.msg-tools .copy-button { width: 22px; height: 22px; padding: 0; justify-content: center; }
+.msg-tools .copy-icons, .msg-tools .copy-icons svg { width: 13px; height: 13px; }
+@media (prefers-reduced-motion: reduce) { .copy-icons svg, .copy-label > span, .msg-tools { transition: none; } }
 .md pre code { padding: 0; border: 0; background: none; font-size: var(--text-sm); white-space: pre; }
 .md blockquote { margin: 0; padding: 6px 12px; border-radius: var(--radius); background: var(--surface); color: var(--text-2); }
 .md a { color: var(--focus); text-decoration: none; } .md a:hover { text-decoration: underline; }
