@@ -42,8 +42,11 @@ function findSkills(dir, base = dir, depth = 0, out = []) {
   let entries; try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return out; }
   const skillFile = entries.find(e => e.isFile() && e.name.toLowerCase() === 'skill.md');
   if (skillFile) {
-    const meta = frontmatter(fs.readFileSync(path.join(dir, skillFile.name), 'utf8'));
-    const files = listFiles(dir);
+    // The antivirus can quarantine a file right after unpacking (offensive-security skills): skip that skill,
+    // say which, and keep the rest instead of failing the whole lookup.
+    let meta, files;
+    try { meta = frontmatter(fs.readFileSync(path.join(dir, skillFile.name), 'utf8')); files = listFiles(dir); }
+    catch { (out.blocked ||= []).push(path.relative(base, dir).split(path.sep).join('/') || path.basename(dir)); return out; }
     out.push({ dir, rel: path.relative(base, dir).split(path.sep).join('/'), name: slug(meta.name || path.basename(dir)) || 'skill', description: meta.description || '', files: files.length, scripts: files.filter(f => /\.(sh|ps1|py|js|mjs|cjs|ts|bat|cmd|exe)$/i.test(f)).length, skillFile: skillFile.name });
     return out;
   }
@@ -137,12 +140,14 @@ function create({ globalDir, projectDir }) {
         source = { kind: 'github', owner: src.owner, repo: src.repo, ref: src.ref || ref, pinnedRef: !!src.ref, sub: src.sub, url: `https://github.com/${src.owner}/${src.repo}` };
       }
       const found = findSkills(base);
+      const blocked = found.blocked || [];
+      if (!found.length && blocked.length) throw new Error(`Windows could not open ${blocked.length === 1 ? 'this skill' : `these ${blocked.length} skills`} (${blocked.slice(0, 5).join(', ')}${blocked.length > 5 ? ', …' : ''}). Usually the antivirus removed a file it flagged, which happens with offensive-security skills.`);
       if (!found.length) throw new Error('No SKILL.md found there. A skill is a folder with a SKILL.md file.');
       const installed = new Set(list().map(s => `${s.scope}:${s.name}`));
       const id = Math.random().toString(36).slice(2);
       previews.set(id, { work, base, source, found });
       setTimeout(() => discard(id), 30 * 60 * 1000).unref?.();
-      return { id, source, skills: found.map(f => ({ name: f.name, path: f.rel || '.', description: f.description, files: f.files, scripts: f.scripts, installed: { project: installed.has(`project:${f.name}`), global: installed.has(`global:${f.name}`) } })) };
+      return { id, source, blocked, skills: found.map(f => ({ name: f.name, path: f.rel || '.', description: f.description, files: f.files, scripts: f.scripts, installed: { project: installed.has(`project:${f.name}`), global: installed.has(`global:${f.name}`) } })) };
     } catch (e) { fs.rmSync(work, { recursive: true, force: true }); throw e; }
   }
   function discard(id) { const p = previews.get(id); if (!p) return; previews.delete(id); fs.rmSync(p.work, { recursive: true, force: true }); }
@@ -153,7 +158,7 @@ function create({ globalDir, projectDir }) {
     for (const f of p.found.filter(f => names.includes(f.name))) {
       const target = path.join(r, 'skills', f.name);
       fs.rmSync(target, { recursive: true, force: true }); fs.rmSync(path.join(r, 'disabled', f.name), { recursive: true, force: true });
-      fs.cpSync(f.dir, target, { recursive: true, filter: s => !SKIP.has(path.basename(s)) });
+      try { fs.cpSync(f.dir, target, { recursive: true, filter: s => !SKIP.has(path.basename(s)) }); } catch { fs.rmSync(target, { recursive: true, force: true }); continue; }
       sources[f.name] = { ...p.source, skillPath: f.rel, installedAt: new Date().toISOString() };
       done.push(f.name);
     }

@@ -7,7 +7,7 @@ type Scope = "project" | "global";
 type Source = { kind: "github" | "folder" | "pack"; owner?: string; repo?: string; ref?: string; sub?: string; url?: string; path?: string; pack?: string; author?: string };
 type Installed = { name: string; scope: Scope; enabled: boolean; description: string; source: (Source & { installedAt?: string; skillPath?: string }) | null };
 type Found = { name: string; path: string; description: string; files: number; scripts: number; installed: Record<Scope, boolean> };
-type Preview = { id: string; source: Source; skills: Found[] };
+type Preview = { id: string; source: Source; blocked?: string[]; skills: Found[] };
 
 const army = () => (window as any).army;
 const clean = (e: unknown) => String(e).replace(/^Error: Error invoking remote method '[^']+': (Error: )?/, "");
@@ -136,6 +136,7 @@ export function Skills() {
               <span className="mem-meta">{s.files} files{s.scripts ? ` · ${s.scripts} scripts` : ""}</span>
             </label>)}
           </div>
+          {!!preview.blocked?.length && <p className="skill-warn">Left out {preview.blocked.length === 1 ? "1 skill" : `${preview.blocked.length} skills`} Windows could not open, usually because the antivirus removed a file it flagged: {preview.blocked.slice(0, 6).join(", ")}{preview.blocked.length > 6 ? ", …" : ""}</p>}
           {scripts > 0 && <p className="skill-warn">The selected skills include {scripts} script{scripts === 1 ? "" : "s"} the boss may run. Install only from sources you trust.</p>}
           <div className="skill-preview-foot">
             <label className="field skill-scope">Install for<select value={scope} onChange={e => setScope(e.target.value as Scope)}><option value="global">Every workspace</option><option value="project">This workspace only</option></select></label>
