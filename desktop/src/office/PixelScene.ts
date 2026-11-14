@@ -191,6 +191,8 @@ export function createOfficeScene(container: HTMLElement, options: SceneOptions 
   let last = performance.now(), time = 0;
   function frame(now: number) {
     if (disposed) return; requestAnimationFrame(frame);
+    // Hidden (another page, or the office folded away): no work at all until it is shown again.
+    if (!container.offsetParent) { last = now; return; }
     const dt = Math.min((now - last) / 1000, 0.05); last = now; time += dt;
     if (keys.size) { const s = (keys.has("shift") ? 3 : 1) * 160 / camT.z * dt; if (keys.has("a")) camT.x -= s; if (keys.has("d")) camT.x += s; if (keys.has("w")) camT.y -= s; if (keys.has("s")) camT.y += s; }
     const k = 1 - Math.exp(-dt * 14);

@@ -8,6 +8,15 @@ const { spawn, execFile } = require('node:child_process');
 const TTL = 60000;
 const SUPPORTED = ['claude', 'codex', 'antigravity'];
 const cache = new Map(); // provider -> { at, value, pending }
+// Last good reading per provider, kept on disk so a failed first fetch after a restart (429, expired token) still shows the last numbers.
+let cacheFile = null, saved = null;
+function setCacheFile(file) { cacheFile = file; saved = null; }
+function savedReadings() { if (saved) return saved; try { saved = cacheFile ? JSON.parse(fs.readFileSync(cacheFile, 'utf8')) || {} : {}; } catch { saved = {}; } return saved; }
+function remember(value) {
+  if (!cacheFile || value.error || !value.windows?.length) return;
+  const all = savedReadings(); all[value.provider] = value;
+  try { fs.mkdirSync(path.dirname(cacheFile), { recursive: true }); fs.writeFileSync(cacheFile, JSON.stringify(all)); } catch {}
+}
 
 const num = v => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const clampPct = v => Math.max(0, Math.min(100, Math.round(v * 10) / 10));
@@ -48,7 +57,7 @@ async function fetchClaude() {
   try {
     const res = await fetch('https://api.anthropic.com/api/oauth/usage', { headers: { Authorization: `Bearer ${cred.token}`, 'anthropic-beta': 'oauth-2025-04-20', Accept: 'application/json' }, signal: AbortSignal.timeout(12000) });
     if (res.status === 401 || res.status === 403) return { error: 'Claude rejected the stored token. Sign in again from Providers.', errorCode: 'auth', plan: cred.plan };
-    if (res.status === 429) return { error: 'Claude usage endpoint is rate limited; try again in a minute.', errorCode: 'rate-limited', plan: cred.plan };
+    if (res.status === 429) { const wait = Number(res.headers.get('retry-after')); return { error: 'Claude usage endpoint is rate limited; try again in a minute.', errorCode: 'rate-limited', retryAfter: Number.isFinite(wait) && wait > 0 ? wait : 60, plan: cred.plan }; }
     if (!res.ok) return { error: `Claude usage endpoint returned ${res.status}.`, plan: cred.plan };
     const out = parseClaude(await res.json(), cred.plan);
     return out.windows.length ? out : { error: 'Claude returned no limit windows for this account.', errorCode: 'unsupported', plan: cred.plan };
@@ -168,7 +177,7 @@ const FETCH = { claude: () => fetchClaude(), codex: r => fetchCodex(r), antigrav
 async function load(provider, resolveCommand) {
   let r;
   try { r = await FETCH[provider](resolveCommand); } catch (e) { r = { error: e.message || String(e) }; }
-  const prev = cache.get(provider)?.value;
+  const prev = cache.get(provider)?.value || savedReadings()[provider];
   const value = { provider, windows: [], ...r, updatedAt: new Date().toISOString() };
   if (value.error && prev?.windows?.length && value.errorCode !== 'not-installed' && value.errorCode !== 'unsupported') return { ...prev, stale: true, error: value.error, staleSince: prev.staleSince || prev.updatedAt };
   return value;
@@ -180,7 +189,7 @@ async function getUsage(provider, { resolveCommand, force } = {}) {
   const hit = cache.get(provider);
   if (hit?.pending) return hit.pending;
   if (!force && hit?.value && Date.now() - hit.at < TTL) return hit.value;
-  const pending = load(provider, resolveCommand).then(value => { cache.set(provider, { at: Date.now(), value }); return value; });
+  const pending = load(provider, resolveCommand).then(value => { cache.set(provider, { at: Date.now(), value }); remember(value); return value; });
   cache.set(provider, { ...(hit || { at: 0 }), pending });
   return pending;
 }
@@ -201,4 +210,4 @@ function demo() {
   };
 }
 
-module.exports = { SUPPORTED, getUsage, getAll, demo, parseClaude, parseCodexLimits, parseCodexRollout, parseAntigravity, minutesLabel };
+module.exports = { SUPPORTED, setCacheFile, getUsage, getAll, demo, parseClaude, parseCodexLimits, parseCodexRollout, parseAntigravity, minutesLabel };

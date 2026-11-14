@@ -63,13 +63,17 @@ function updateTitle() { if (win && !win.isDestroyed() && active) win.setTitle(`
 function layout() {
   if (!win || win.isDestroyed()) return;
   const [width, height] = win.getContentSize();
-  for (const t of tabs) { t.view.setBounds({ x: 0, y: 0, width, height }); t.view.setVisible(t === active); }
+  // A tab in the back keeps its agents running (they live here, in the main process); its page is throttled like a
+  // background browser tab, so its office scene and timers stop costing CPU and GPU.
+  for (const t of tabs) { t.view.setBounds({ x: 0, y: 0, width, height }); t.view.setVisible(t === active); try { t.view.webContents.setBackgroundThrottling(t !== active); } catch {} }
 }
 function rendererUrl(view, hash) {
   if (process.env.VITE_DEV_SERVER_URL) return view.webContents.loadURL(process.env.VITE_DEV_SERVER_URL + (hash ? '#' + hash : ''));
   return view.webContents.loadFile(path.join(__dirname, '../dist/index.html'), hash ? { hash } : undefined);
 }
-function createTab(folder) {
+// Tabs restored at start load their page one after another, not all at once (each is a full app): the window is usable sooner.
+function loadTab(tab) { if (tab.loaded) return; tab.loaded = true; void rendererUrl(tab.view); }
+function createTab(folder, { defer = false } = {}) {
   const view = new WebContentsView({ webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } });
   view.setBackgroundColor('#0d0e10');
   const tab = { id: ++tabSeq, view };
@@ -91,13 +95,13 @@ function createTab(folder) {
   view.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:\/\//.test(url)) void shell.openExternal(url); return { action: 'deny' }; });
   // The preload asks remote:target synchronously on load: attach before the first page starts loading.
   if (tabs.length === 1) remote.attach({ webContents: view.webContents }, globalDir(), require('electron'));
-  void rendererUrl(view);
+  if (!defer) loadTab(tab);
   return tab;
 }
 function activate(tab) {
   if (!tab || tab === active) return;
   const from = active ? tabs.indexOf(active) : null;
-  active = tab; layout();
+  active = tab; loadTab(tab); layout();
   if (!process.env.DISPATCH_TEST_HIDDEN) try { tab.view.webContents.focus(); } catch {}
   saveTabs(); broadcastTabs(from); sendTo(tab, 'tab-shown', null);
 }
@@ -296,10 +300,11 @@ app.whenReady().then(() => {
   let saved = { tabs: [], active: null };
   if (!process.env.DISPATCH_TEST_HOME || process.env.DISPATCH_TEST_TABS) try { saved = JSON.parse(fs.readFileSync(tabsFile(), 'utf8')); } catch {}
   const folders = (saved.tabs || []).filter(f => { try { return fs.statSync(f).isDirectory(); } catch { return false; } }).slice(0, MAX_TABS);
-  if (folders.length) for (const f of folders) createTab(f); else createTab();
+  if (folders.length) for (const f of folders) createTab(f, { defer: true }); else createTab();
   activate(tabs.find(t => same(t.engine.workspace(), saved.active)) || tabs[0]);
+  const loadRest = () => { const next = tabs.find(t => !t.loaded); if (!next) return; loadTab(next); let went = false; const go = () => { if (!went) { went = true; setTimeout(loadRest, 800); } }; next.view.webContents.once('did-finish-load', go); setTimeout(go, 6000); };
   // Tray and the bot come after the first tab has loaded: the window is up sooner, and the tab is the first page.
-  let rest = false; const startRest = () => { if (rest) return; rest = true; createTray(); registerVoiceKey(); telegram.start(); };
+  let rest = false; const startRest = () => { if (rest) return; rest = true; createTray(); registerVoiceKey(); telegram.start(); setTimeout(loadRest, 1500); };
   active.view.webContents.once('did-finish-load', startRest); setTimeout(startRest, 8000);
 });
 // On quit every project's agents go down with everything they started.

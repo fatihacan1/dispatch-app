@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from "react";
 import localIcons from "../../electron/local-icons.json";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { WebglAddon } from "@xterm/addon-webgl";
 import { labels } from "../lib/data";
 
 export function Button({ children, className = "", ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) {
@@ -48,7 +49,12 @@ export function Console({ name, mini = false }: { name: string; mini?: boolean }
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(el.current);
-    const resize = () => { try { fit.fit(); if (!mini) window.army.resize(name, term.cols, term.rows); } catch {} };
+    // Draw on the GPU: the default DOM renderer made busy terminals (spinners, long output) stutter. Falls back to the
+    // DOM renderer by itself when WebGL is not available or the context is lost.
+    if (!mini) { try { const gl = new WebglAddon(); gl.onContextLoss(() => gl.dispose()); term.loadAddon(gl); } catch {} }
+    // One fit per frame at most: a panel sliding open fires the observer on every frame.
+    let frame = 0, cols = 0, rows = 0;
+    const resize = () => { if (frame) return; frame = requestAnimationFrame(() => { frame = 0; try { fit.fit(); if (!mini && (term.cols !== cols || term.rows !== rows)) { cols = term.cols; rows = term.rows; window.army.resize(name, cols, rows); } } catch {} }); };
     const observer = new ResizeObserver(resize);
     observer.observe(el.current);
     resize();
@@ -69,7 +75,7 @@ export function Console({ name, mini = false }: { name: string; mini?: boolean }
     const onMenu = (e: MouseEvent) => { e.preventDefault(); if (!copy()) paste(); };
     el.current.addEventListener("contextmenu", onMenu);
     const host = el.current;
-    return () => { host.removeEventListener("contextmenu", onMenu); off(); observer.disconnect(); term.dispose(); };
+    return () => { cancelAnimationFrame(frame); host.removeEventListener("contextmenu", onMenu); off(); observer.disconnect(); term.dispose(); };
   }, [name, mini]);
   return <div className="terminal" ref={el} />;
 }

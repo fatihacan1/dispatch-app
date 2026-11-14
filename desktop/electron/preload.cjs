@@ -103,7 +103,7 @@ contextBridge.exposeInMainWorld('army', {
   agentAction: (name, action) => invoke('agent:action', name, action),
   setModel: (name, model) => invoke('agent:set-model', name, model),
   gitChanges: () => invoke('git:changes'),
-  shells: { list: () => invoke('shell:list'), open: () => invoke('shell:open'), close: name => invoke('shell:close', name), rename: (name, title) => invoke('shell:rename', name, title) },
+  shells: { choices: () => invoke('terminal:shells'), list: () => invoke('shell:list'), open: () => invoke('shell:open'), close: name => invoke('shell:close', name), rename: (name, title) => invoke('shell:rename', name, title) },
   files: { list: rel => invoke('files:list', rel), read: rel => invoke('files:read', rel), write: (rel, text) => invoke('files:write', rel, text), import: (dir, items) => invoke('files:import', dir, items), head: rel => invoke('files:head', rel), all: () => invoke('files:all'), search: (q, opts) => invoke('files:search', q, opts), watch: on => invoke('files:watch', on), reveal: rel => invoke('files:reveal', rel), context: (rel, isDir) => invoke('files:context', rel, isDir) },
   setEffort: (name, effort) => invoke('agent:set-effort', name, effort),
   usage: { get: () => invoke('usage:get'), refresh: id => invoke('usage:refresh', id) },

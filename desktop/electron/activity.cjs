@@ -63,10 +63,11 @@ function codexFile(session) {
 // A new Codex session has no id until its rollout file appears: take the first unclaimed one for this cwd created after start.
 const claimed = new Set();
 function newCodexFile(cwd, since) {
-  const d = new Date(), dir = path.join(codexHome(), 'sessions', String(d.getFullYear()), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0'));
-  let names = []; try { names = fs.readdirSync(dir).filter(n => n.startsWith('rollout-') && n.endsWith('.jsonl')); } catch { return null; }
-  for (const n of names) {
-    const full = path.join(dir, n); if (claimed.has(full)) continue;
+  // The day folder of the start and of today: a session started just before midnight lands in the next day's folder.
+  const day = d => path.join(codexHome(), 'sessions', String(d.getFullYear()), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0'));
+  const files = [...new Set([day(new Date(since)), day(new Date())])].flatMap(dir => { try { return fs.readdirSync(dir).filter(n => n.startsWith('rollout-') && n.endsWith('.jsonl')).map(n => path.join(dir, n)); } catch { return []; } });
+  for (const full of files) {
+    if (claimed.has(full)) continue;
     try {
       if (fs.statSync(full).birthtimeMs < since - 2000) continue;
       const fd = fs.openSync(full, 'r'); const buf = Buffer.alloc(8192); const len = fs.readSync(fd, buf, 0, buf.length, 0); fs.closeSync(fd);

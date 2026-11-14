@@ -200,6 +200,7 @@ input[type=checkbox] { width: 15px; height: 15px; margin: 0; accent-color: var(-
 .rail-item:nth-child(2) { margin-bottom: 8px; }
 
 .main { grid-area: main; overflow: hidden; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
+.view[hidden] { display: none; }
 .view { flex: 1; min-height: 0; display: flex; flex-direction: column; animation: enter var(--dur) var(--ease-out); }
 @keyframes enter { from { opacity: 0; transform: translateY(4px); } }
 .page { flex: 1; min-height: 0; overflow: auto; padding: 28px 32px; }
@@ -400,6 +401,7 @@ input[type=checkbox] { width: 15px; height: 15px; margin: 0; accent-color: var(-
 .settings-group .label { margin-bottom: 6px; }
 .setting-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; border-bottom: var(--border); }
 .setting-row p { color: var(--text-3); font-size: var(--text-sm); overflow-wrap: anywhere; }
+.terminal-custom { display: flex; flex-direction: column; gap: 6px; width: 320px; }
 .setting-row.compact { padding: 8px 0; color: var(--text-2); }
 
 /* ---------- Enlist ---------- */
@@ -951,6 +953,9 @@ label.setting-row { cursor: pointer; }
 .trail-head:disabled { cursor: default; }
 .trail-head:not(:disabled):hover .trail-title { color: var(--text); }
 .trail-spark { display: inline-block; width: 14px; text-align: center; font-size: 14px; line-height: 1; color: var(--agent-0); }
+.trail-icon { width: 14px; height: 14px; flex: none; animation: trail-icon-pulse 1.4s ease-in-out infinite; }
+@keyframes trail-icon-pulse { 50% { opacity: .45; } }
+@media (prefers-reduced-motion: reduce) { .trail-icon { animation: none; } }
 .trail-done { width: 14px; height: 14px; color: var(--text-3); }
 .trail-time, .trail-count { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-3); font-variant-numeric: tabular-nums; }
 .trail-count::before { content: "· "; }

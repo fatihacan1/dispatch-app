@@ -192,6 +192,8 @@ function watch() {
     }
   });
 }
+// Notes delivered with an agent's next message instead of as a message of their own, so they never wake it up.
+const quietNotes = new Map();
 function deliver(agent) {
   if (agent.submitting || agent.blocked || !agent.ready) return;
   clearTimeout(agent.timer);
@@ -204,7 +206,11 @@ function deliver(agent) {
   agent.timer = setTimeout(() => {
     const item = agent.queue.shift(); if (!item) return; agent.inFlight = item;
     agent.atPrompt = false;
-    const text = `[Dispatch] message from ${item.msg.from} (id ${item.msg.id})${item.previous ? ' (from previous chat)' : ''}: ${item.msg.text}`;
+    // A note for this agent that must not start a turn of its own (e.g. it now answers Telegram) rides along with the next real message.
+    const who = item.msg.to; const note = item.msg.from !== 'dispatch' && quietNotes.get(who); if (note) quietNotes.delete(who);
+    const text = `[Dispatch] message from ${item.msg.from} (id ${item.msg.id})${item.previous ? ' (from previous chat)' : ''}: ${item.msg.text}${note ? `
+
+(Dispatch note: ${note})` : ''}`;
     agent.submitting = true; agent.lastFrom = item.msg.from;
     // It now owes whoever wrote a reply; the watchdog below speaks up if it goes quiet without one.
     if (item.msg.from !== 'dispatch') agent.owes = { to: item.msg.from, at: Date.now() };
@@ -342,10 +348,12 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
       // the user; another agent does when the user was the one who wrote to it.
       const forYou = name === 'boss' || ['you', 'user'].includes(agent.lastFrom);
       if (direct && e.final && forYou && !agent.toldYou) { dropLastText = agent.lastText === e.final; emitMessage({ from: name, to: 'you', text: e.final }); }
-      // Other CLIs (Antigravity) must report with dispatch send, and often end the turn without doing it (or the
-      // send fails). Their final reply is in the transcript: pass it on to whoever is waiting, if nothing came.
-      if (!direct && e.final && agent.owes) {
-        const owes = agent.owes, final = e.final;
+      // An agent working for another agent (or Antigravity, always) must report with dispatch send, and often ends the
+      // turn without doing it (or the send fails). Codex does this a lot. The final reply is in the transcript: pass it
+      // on to whoever is waiting, if nothing came. Codex marks every turn end (task_complete), even one with no text.
+      const shown = direct && e.final && forYou;
+      if (!shown && agent.owes && (e.final || provider === 'codex')) {
+        const owes = agent.owes, final = e.final || `${name} ended its turn without a reply or a report.`;
         setTimeout(() => {
           // Went on working (it was only waiting on a command): that text was not the end; the real one comes later.
           if (agent.owes !== owes || processes.get(name) !== agent || agent.turn) return;
@@ -509,6 +517,9 @@ ipcMain.handle('ui:set', (_e, patch) => {
   if (patch && ['tr', 'en', 'auto'].includes(patch.voiceLang)) { if (next.voiceLang !== patch.voiceLang) whisper.stop(); next.voiceLang = patch.voiceLang; }
   if (patch && typeof patch.voiceMic === 'string' && patch.voiceMic.length <= 300) next.voiceMic = patch.voiceMic;
   if (patch && VOICE_KEYS.includes(patch.voiceShortcut)) { next.voiceShortcut = patch.voiceShortcut; setImmediate(host.registerVoiceKey); }
+  // Terminal (Settings > Terminal): which shell the side panel opens, and where.
+  if (patch && typeof patch.terminalShell === 'string' && /^[\w-]{1,20}$/.test(patch.terminalShell)) next.terminalShell = patch.terminalShell;
+  for (const k of ['terminalPath', 'terminalArgs', 'terminalCwd']) if (patch && typeof patch[k] === 'string' && patch[k].length <= 1000) next[k] = patch[k].trim();
   if (patch && Number.isFinite(patch.ideWidth)) next.ideWidth = Math.max(420, Math.min(3000, Math.round(patch.ideWidth)));
   fs.mkdirSync(globalDir(), { recursive: true }); fs.writeFileSync(uiFile(), JSON.stringify(next, null, 2));
   return next;
@@ -614,14 +625,17 @@ let tgWaiting = 0;
 // The boss learns the Telegram commands (dispatch telegram owner ...) in its start prompt, but only if Telegram was
 // already connected then. Connected later, it never knew it could hand Telegram over itself: tell it now, once.
 let tgToldBoss = false;
-function onTelegramChange() { const on = telegram.connected(); if (on && !tgToldBoss && processes.has('boss')) { tgToldBoss = true; void sendMessage('boss', `Telegram is connected now (no reply needed).${telegramHelp('boss')}`, 'dispatch').catch(() => {}); } if (!on) tgToldBoss = false; }
+// A message of its own would start a turn the user never asked for, so it rides along with the boss's next message.
+function onTelegramChange() { const on = telegram.connected(); if (on && !tgToldBoss && processes.has('boss')) { tgToldBoss = true; quietNotes.set('boss', `Telegram is connected now.${telegramHelp('boss')}`); } if (!on) { tgToldBoss = false; quietNotes.delete('boss'); } }
 // Who answers Telegram in this operation: the boss unless the boss or the user handed it to another agent.
 function tgOwner() { const o = operation?.telegramOwner; return o && operation.agents.some(a => a.name === o) ? o : 'boss'; }
 function setTgOwner(name) {
   if (!operation || !operation.agents.some(a => a.name === name)) throw new Error(`No agent ${name} in this operation.`);
   const before = tgOwner(); operation.telegramOwner = name === 'boss' ? undefined : name; saveOperation(); notify('telegram-owner', tgOwner());
   if (before !== name) {
-    if (processes.has(name)) void sendMessage(name, `You now answer the user's Telegram messages.${telegramHelp(name)}`, 'dispatch').catch(() => {});
+    // Told with its next message (the first Telegram message, usually), not now: a message now made it start working by itself.
+    quietNotes.delete(before);
+    quietNotes.set(name, `You now answer the user's Telegram messages.${telegramHelp(name)}`);
     if (telegram.connected()) void telegram.send(`[${path.basename(workspace)}] Telegram is now answered by ${name}.`).catch(() => {});
   }
   return tgOwner();
@@ -825,7 +839,11 @@ ipcMain.handle('local-ai:choose-icon', async () => {
 });
 ipcMain.handle('local-ai:check', (_e, config) => localAI.check(config));
 ipcMain.handle('providers:list', () => providersLib.PROVIDERS.map(p => ({ id: p.id, name: p.name }))); 
-ipcMain.handle('providers:check', async (_e, id) => { if (id !== 'local' && !id.startsWith('local:')) return providersLib.check(resolveCommand, id); const config = localAI.read(id.startsWith('local:') ? decodeURIComponent(id.slice(6)) : undefined); let installed = true; try { resolveCommand('opencode'); } catch { installed = false; } const status = config && installed ? await localAI.check(config) : null; return { id, name: config?.name || 'Custom AI', installed, auth: status?.ok && status.matches ? 'signed-in' : 'error', detail: !installed ? 'OpenCode is required.' : !config ? 'Configure a custom AI provider in Providers.' : !status.ok ? status.error || 'Server is offline.' : !status.matches ? 'Configured model was not found on the server.' : config.baseURL, models: config ? [config.model] : [] }; });
+// Checking a provider starts its CLI; opening the Providers page again within a minute reuses the answer. A sign-in or
+// install run (provider:done) clears it, so the page shows the new state right away.
+const providerChecks = new Map();
+function checkProvider(id) { const hit = providerChecks.get(id); if (hit && Date.now() - hit.at < 60000) return hit.value; const value = Promise.resolve(providersLib.check(resolveCommand, id)); providerChecks.set(id, { at: Date.now(), value }); value.catch(() => providerChecks.delete(id)); return value; }
+ipcMain.handle('providers:check', async (_e, id) => { if (id !== 'local' && !id.startsWith('local:')) return checkProvider(id); const config = localAI.read(id.startsWith('local:') ? decodeURIComponent(id.slice(6)) : undefined); let installed = true; try { resolveCommand('opencode'); } catch { installed = false; } const status = config && installed ? await localAI.check(config) : null; return { id, name: config?.name || 'Custom AI', installed, auth: status?.ok && status.matches ? 'signed-in' : 'error', detail: !installed ? 'OpenCode is required.' : !config ? 'Configure a custom AI provider in Providers.' : !status.ok ? status.error || 'Server is offline.' : !status.matches ? 'Configured model was not found on the server.' : config.baseURL, models: config ? [config.model] : [] }; });
 ipcMain.handle('providers:update-info', (_e, id, version) => providersLib.updateInfo(id, version));
 ipcMain.handle('providers:models', (_e, id) => providersLib.refreshModels(resolveCommand, id));
 ipcMain.handle('providers:action', (_e, id, kind) => {
@@ -835,17 +853,53 @@ ipcMain.handle('providers:action', (_e, id, kind) => {
   const terminal = pty.spawn(spec.file, spec.args, { name: 'xterm-256color', cols: 100, rows: 24, cwd: os.homedir(), env: process.env });
   const entry = { terminal, queue: [], output: '' }; processes.set(name, entry);
   terminal.onData(data => { entry.output = (entry.output + data).slice(-200000); notify('terminal', { name, data }); });
-  terminal.onExit(({ exitCode }) => { notify('provider:done', { id, kind, exitCode, name }); });
+  terminal.onExit(({ exitCode }) => { providerChecks.delete(id); notify('provider:done', { id, kind, exitCode, name }); });
   return name;
 });
 // User shells (Terminal tab in the side panel): PowerShell in the workspace. Kept apart from agents so stopping
 // or restarting the team never touches them; they share the 'terminal' event and the input/resize/output channels.
 const shells = new Map(); let shellSeq = 0;
+// Shells found on this computer for Settings > Terminal. Git Bash is looked up next to git.exe on PATH and in the usual folders.
+function findOnPath(exe) { for (const dir of String(process.env.PATH || '').split(path.delimiter)) { try { const f = path.join(dir, exe); if (dir && fs.statSync(f).isFile()) return f; } catch {} } return null; }
+function gitBash() {
+  const git = findOnPath('git.exe'), roots = [];
+  if (git) roots.push(path.resolve(path.dirname(git), '..'), path.resolve(path.dirname(git), '..', '..'));
+  roots.push(path.join(process.env.ProgramFiles || 'C:/Program Files', 'Git'), path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Git'), path.join(process.env['ProgramFiles(x86)'] || '', 'Git'));
+  for (const r of roots) { const f = path.join(r, 'bin', 'bash.exe'); try { if (fs.statSync(f).isFile()) return f; } catch {} }
+  return null;
+}
+function shellChoices() {
+  if (process.platform !== 'win32') return [{ id: 'default', label: `Default (${path.basename(process.env.SHELL || 'bash')})`, path: process.env.SHELL || 'bash' }, { id: 'custom', label: 'Custom…', path: '' }];
+  const list = [{ id: 'powershell', label: 'Windows PowerShell', path: 'powershell.exe' }];
+  const pwsh = findOnPath('pwsh.exe'); if (pwsh) list.push({ id: 'pwsh', label: 'PowerShell 7', path: pwsh });
+  list.push({ id: 'cmd', label: 'Command Prompt', path: 'cmd.exe' });
+  const bash = gitBash(); if (bash) list.push({ id: 'gitbash', label: 'Git Bash', path: bash });
+  const wsl = findOnPath('wsl.exe'); if (wsl) list.push({ id: 'wsl', label: 'WSL', path: wsl });
+  list.push({ id: 'custom', label: 'Custom…', path: '' });
+  return list;
+}
+function shellSpec(ui) {
+  const id = ui.terminalShell || (process.platform === 'win32' ? 'powershell' : 'default');
+  if (id === 'custom' && ui.terminalPath) return { file: ui.terminalPath, args: (ui.terminalArgs || '').match(/"[^"]*"|\S+/g)?.map(a => a.replace(/^"|"$/g, '')) || [], env: {} };
+  if (process.platform !== 'win32') return { file: process.env.SHELL || 'bash', args: [], env: {} };
+  const hit = shellChoices().find(c => c.id === id);
+  // CHERE_INVOKING keeps Git Bash in the folder it was started in instead of jumping to the home folder.
+  if (id === 'gitbash' && hit) return { file: hit.path, args: ['--login', '-i'], env: { CHERE_INVOKING: '1', MSYSTEM: 'MINGW64' } };
+  if (id === 'cmd') return { file: 'cmd.exe', args: [], env: {} };
+  if (id === 'pwsh' && hit) return { file: hit.path, args: ['-NoLogo'], env: {} };
+  if (id === 'wsl' && hit) return { file: hit.path, args: [], env: {} };
+  return { file: 'powershell.exe', args: ['-NoLogo'], env: {} };
+}
 ipcMain.handle('shell:list', () => [...shells.entries()].map(([name, s]) => ({ name, title: s.title, cwd: s.cwd, exited: s.exited, server: s.server || null })));
+ipcMain.handle('terminal:shells', () => shellChoices());
 ipcMain.handle('shell:open', () => {
-  const name = `shell-${++shellSeq}`, cwd = workspace || os.homedir();
-  const file = process.platform === 'win32' ? 'powershell.exe' : (process.env.SHELL || 'bash');
-  const terminal = pty.spawn(file, process.platform === 'win32' ? ['-NoLogo'] : [], { name: 'xterm-256color', cols: 100, rows: 24, cwd, env: process.env });
+  const name = `shell-${++shellSeq}`, ui = readUi();
+  const wanted = ui.terminalCwd && (() => { try { return fs.statSync(ui.terminalCwd).isDirectory(); } catch { return false; } })() ? ui.terminalCwd : null;
+  const cwd = wanted || workspace || os.homedir();
+  const spec = shellSpec(ui);
+  let terminal;
+  try { terminal = pty.spawn(spec.file, spec.args, { name: 'xterm-256color', cols: 100, rows: 24, cwd, env: { ...process.env, ...spec.env } }); }
+  catch (e) { throw new Error(`Could not start ${spec.file}: ${e.message}. Pick another shell in Settings > Terminal.`); }
   const entry = { terminal, output: '', cwd, title: `Terminal ${shellSeq}`, exited: false };
   shells.set(name, entry);
   terminal.onData(data => { entry.output = (entry.output + data).slice(-400000); notify('terminal', { name, data }); });
@@ -930,7 +984,16 @@ ipcMain.handle('providers:close', (_e, name) => { try { processes.get(name)?.ter
 // Remaining usage limits (session / weekly). Polled every 3 min only while the window is visible.
 const usageLib = require('./usage.cjs');
 const usageIds = () => usageLib.SUPPORTED.filter(providerEnabled);
-async function usageAll(force) { return demo ? usageLib.demo() : usageLib.getAll({ providers: usageIds(), resolveCommand, force }); }
+if (!demo) usageLib.setCacheFile(path.join(globalDir(), 'usage.json'));
+// A failed reading (rate limit, timeout, token being refreshed) is retried soon instead of waiting for the next 3-minute poll.
+let usageRetry = null;
+function retryUsageSoon(all) {
+  const failed = Object.values(all || {}).filter(u => u.error && u.errorCode !== 'unsupported' && u.errorCode !== 'not-installed');
+  if (!failed.length || usageRetry) return;
+  const wait = Math.min(300, Math.max(30, ...failed.map(u => u.retryAfter || 30)));
+  usageRetry = setTimeout(() => { usageRetry = null; if (!host.isActive()) return; usageLib.getAll({ providers: failed.map(u => u.provider), resolveCommand, force: true }).then(fresh => { notify('usage:update', fresh); }).catch(() => {}); }, wait * 1000);
+}
+async function usageAll(force) { if (demo) return usageLib.demo(); const all = await usageLib.getAll({ providers: usageIds(), resolveCommand, force }); retryUsageSoon(all); return all; }
 ipcMain.handle('usage:get', () => usageAll(false));
 ipcMain.handle('usage:refresh', async (_e, id) => { if (id && !demo) { const all = await usageLib.getAll({ providers: [id], resolveCommand, force: true }); notify('usage:update', all); return all; } const all = await usageAll(true); notify('usage:update', all); return all; });
 intervals.push(setInterval(() => { if (host.isActive() && win && !win.isDestroyed() && win.isVisible() && !win.isMinimized()) usageAll(true).then(all => notify('usage:update', all)).catch(() => {}); }, 180000));

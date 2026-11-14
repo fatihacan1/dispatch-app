@@ -229,6 +229,8 @@ export function createOfficeScene(container: HTMLElement, options: SceneOptions 
   const all = () => [...(boss ? [boss] : []), ...agents.values()];
   function frame() {
     if (disposed) return; requestAnimationFrame(frame);
+    // Hidden (another page, or the office folded away): no work at all until it is shown again.
+    if (!container.offsetParent) { clock.getDelta(); return; }
     const dt = Math.min(clock.getDelta(), 0.05);
     fly.update(dt);
     for (const a of all()) {

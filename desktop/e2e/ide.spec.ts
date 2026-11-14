@@ -48,12 +48,14 @@ test('files panel opens, edits, saves, reloads from disk and shows a diff', asyn
   await expect(page.getByRole('button', { name: 'Open boss terminal' })).toBeVisible();
   await page.getByRole('button', { name: 'New terminal', exact: true }).first().click();
   await expect(page.locator('.term-pane')).toBeVisible();
-  await expect(page.locator('.term-body .xterm-rows')).toContainText('PS ', { timeout: 20000 });
+  // The terminal draws with WebGL, so its text is read from the shell's output instead of the DOM.
+  const shellText = () => page.evaluate(async () => { const list = await (window as any).army.shells.list(); return list.length ? (window as any).army.output(list[list.length - 1].name) : ''; });
+  await expect.poll(shellText, { timeout: 20000 }).toContain('PS ');
   await page.locator('.term-body .xterm').click();
   await page.keyboard.type('echo dispatch-$((6*7))');
   await page.keyboard.press('Enter');
-  await expect(page.locator('.term-body .xterm-rows')).toContainText('dispatch-42', { timeout: 15000 });
-  await expect(page.locator('.term-body .xterm-rows')).toContainText(path.basename(workspace));
+  await expect.poll(shellText, { timeout: 15000 }).toContain('dispatch-42');
+  await expect.poll(shellText).toContain(path.basename(workspace));
   await page.screenshot({ path: path.join('test-results', 'ide-terminal.png') });
   await page.getByRole('button', { name: 'Hide files' }).click();
   await expect(page.locator('.workbench.ide-open')).toHaveCount(0);

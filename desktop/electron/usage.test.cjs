@@ -56,3 +56,17 @@ test('getUsage never throws and reports unsupported providers', async () => {
   const c = await u.getUsage('codex', { resolveCommand: () => { throw new Error('nf'); }, force: true });
   assert.strictEqual(c.errorCode, 'not-installed');
 });
+
+test('claude: a failed first reading falls back to the last good one saved on disk', async () => {
+  const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-'));
+  const file = path.join(home, 'usage.json');
+  fs.writeFileSync(file, JSON.stringify({ claude: { provider: 'claude', windows: [{ id: 'session', label: 'Session (5h)', usedPercent: 40, resetsAt: null }], updatedAt: '2026-11-14T10:00:00.000Z', source: 'x' } }));
+  fs.mkdirSync(path.join(home, '.claude')); fs.writeFileSync(path.join(home, '.claude', '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 't', expiresAt: 1 } })); // expired -> error
+  const prevHome = process.env.DISPATCH_USAGE_HOME; process.env.DISPATCH_USAGE_HOME = home;
+  try {
+    u.setCacheFile(file);
+    const r = await u.getUsage('claude', { force: true });
+    assert.strictEqual(r.windows.length, 1); assert.strictEqual(r.stale, true);
+  } finally { u.setCacheFile(null); if (prevHome === undefined) delete process.env.DISPATCH_USAGE_HOME; else process.env.DISPATCH_USAGE_HOME = prevHome; }
+});

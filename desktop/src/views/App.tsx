@@ -6,6 +6,7 @@ import { Terminals, type Shell } from "../ide/Terminals";
 import { Dictation, joinSpoken } from "../voice/dictation";
 import { Visualizer } from "../voice/Visualizer";
 import { VoiceSettings } from "../voice/VoiceSettings";
+import { TerminalSettings } from "../components/TerminalSettings";
 import { ProjectTabs } from "./Tabs";
 import { getLang, setLang, type Lang } from "../lib/i18n";
 import {
@@ -82,7 +83,7 @@ function Elapsed({ since }: { since: number }) {
   return <span className="trail-time">{duration(Date.now() - since)}</span>;
 }
 /** What the agent is doing right now (thinking, tool calls, what it says between them); folds to one line when the turn ends. */
-function ActivityTrail({ steps, live, since, took }: { steps: Step[]; live: boolean; since: number; took?: number }) {
+function ActivityTrail({ steps, live, since, took, provider }: { steps: Step[]; live: boolean; since: number; took?: number; provider: string }) {
   const [open, setOpen] = useState(false);
   if (!steps.length && !live) return null;
   const tools = steps.filter(s => s.kind === "tool").length;
@@ -92,7 +93,7 @@ function ActivityTrail({ steps, live, since, took }: { steps: Step[]; live: bool
   const offset = steps.length - shown.length;
   return <div className={"trail" + (live ? " is-live" : "")}>
     <button type="button" className="trail-head" aria-expanded={open} disabled={!steps.length} onClick={() => setOpen(!open)}>
-      {live ? <Spark /> : <CheckIcon className="trail-done" aria-hidden="true" />}
+      {live ? (provider === "claude" ? <Spark /> : <ProviderIcon className="trail-icon" provider={provider} alt="" aria-hidden="true" />) : <CheckIcon className="trail-done" aria-hidden="true" />}
       <span className="trail-title">{live ? `${verb}…` : took ? `Worked for ${duration(took)}` : "Done"}</span>
       {live && <Elapsed since={since} />}
       {tools > 0 && <span className="trail-count">{tools} {tools === 1 ? "step" : "steps"}</span>}
@@ -396,6 +397,8 @@ export function App() {
     const off = window.army.on("message", (incoming: Message) => setMessages(v => {
       const m: Timed = { ...incoming, time: Date.now() };
       if (v.some(x => x.id === m.id)) return v;
+      // A message from the phone starts a turn just like one typed here: show the agent working right away.
+      if (m.from === "you" && m.text.startsWith("[via Telegram")) setTrail(t => t[m.to]?.live ? t : { ...t, [m.to]: { steps: [], live: true, since: Date.now() } });
       const pending = v.findIndex(x => x.id.startsWith("pending-") && x.from === m.from && x.to === m.to && x.text === m.text);
       if (pending < 0) return [...v, m];
       return v.map((x, i) => i === pending ? m : x);
@@ -546,8 +549,10 @@ export function App() {
   const current: Timed[] = archive ? archive.messages : messages.filter(m => (m.to === selected || m.from === selected) && (!activeChat || !m.chats?.[selected] || m.chats[selected] === activeChat));
   // Live steps sit under the conversation; once the turn is over they fold into one line above the agent's reply.
   const tr = archive ? undefined : trail[selected];
-  const live = !stopped[selected] && !attention[selected] && (tr ? tr.live : !!working[selected]);
-  const trailNode = !archive && (tr || live) ? <ActivityTrail steps={tr?.steps || []} live={live} since={tr?.since || workSince[selected] || Date.now()} took={tr?.took} /> : null;
+  // A message being delivered (submitting / in flight) counts as working too, also when an old finished trail is shown:
+  // a message from Telegram or another agent starts a turn the chat never saw being sent.
+  const live = !stopped[selected] && !attention[selected] && (tr ? tr.live || (agentProvider(selected) === "claude" && !!working[selected]) : !!working[selected]);
+  const trailNode = !archive && (tr || live) ? <ActivityTrail steps={tr?.steps || []} live={live} since={tr?.since || workSince[selected] || Date.now()} took={tr?.took} provider={agentProvider(selected)} /> : null;
   const trailAboveLast = !!trailNode && !live && current.at(-1)?.from === selected;
   // Chat scroll: stays pinned to the bottom unless the user scrolled up. Only the last `shown` messages are rendered;
   // scrolling near the top loads the previous page and keeps the view where it was.
@@ -610,6 +615,9 @@ export function App() {
     finally { setTrusting(false); }
   };
   const showHome = view === "home" || (agents.length === 0 && view === "agent");
+  const [agentSeen, setAgentSeen] = useState(false);
+  const onAgentPage = !showHome && view === "agent";
+  useEffect(() => { if (onAgentPage) setAgentSeen(true); }, [onAgentPage]);
   const showSidebar = agents.length > 0 && !showHome && ["agent", "overview", "comms"].includes(view);
   const agentFeed = messages.filter(m => m.from !== "you" && m.to !== "you");
   const pairs = [...new Set(agentFeed.map(m => [m.from, m.to].sort().join(" ↔ ")))];
@@ -664,7 +672,7 @@ export function App() {
           <div className="attention-items">{Object.entries(attention).map(([name, reason]) => <span className="attention-item" key={name}><span>{name} · {reason.toLowerCase()}</span>{reason === "Sign in" ? <Button className="ghost" onClick={() => setView("providers")}>Providers</Button> : reason === "Exited" ? <Button className="ghost" onClick={() => void act(name, "restart")} aria-label={`Restart ${name}`}>Restart</Button> :<Button className="ghost" onClick={() => openTerminal(name)} aria-label={`Open ${name} terminal`}>Open</Button>}</span>)}</div>
           {trustWaiting.length > 0 && trustLater && <Button className="secondary" onClick={() => setTrustLater(false)}>Trust folder…</Button>}
         </div>}
-        <div className="view" key={showHome ? "home" : view}>
+        {!onAgentPage && <div className="view" key={showHome ? "home" : view}>
           {showHome ? (
             <div className="page home">
               <section className="home-start">
@@ -696,7 +704,75 @@ export function App() {
                 </section>
               </div>
             </div>
-          ) : view === "agent" ? (
+          ) : view === "agent" ? null : view === "overview" ? (
+            <div className="page overview">
+              {agents.length === 0 ? <div className="empty"><h2>No active agents</h2><p>Start an operation to see your team here.</p><Button className="secondary" onClick={() => go("home")}>New operation</Button></div> : (
+                <div className="tile-grid">
+                  {team.map(a => (
+                    <div className="tile" key={a.name}>
+                      <div className="tile-head">
+                        <AgentId agent={a} template={agentTemplates[a.name]} />
+                        <small>{a.model}</small>
+                        <StatusDot tone={a.tone} label={a.status} />
+                        <span className="grow" />
+                        <Button className="ghost" onClick={() => { setSelected(a.name); setView("agent"); setMode("chat"); }}>Message</Button>
+                        <Button className="ghost" onClick={() => openTerminal(a.name)}>Open</Button>
+                      </div>
+                      <Console key={`${a.name}:${epoch}`} name={a.name} mini />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : view === "comms" ? (
+            <div className="page comms">
+              <div className="threads" role="list">
+                <h2 className="label">Threads</h2>
+                <Button className={"list-row" + (thread === "all" ? " selected" : "")} onClick={() => setThread("all")}><span className="row-text"><b>All messages</b></span><span className="row-hint">{agentFeed.length}</span></Button>
+                {pairs.map(pair => { const last = [...agentFeed].reverse().find(m => [m.from, m.to].sort().join(" ↔ ") === pair); return <Button key={pair} aria-label={pair.toUpperCase()} className={"list-row" + (thread === pair ? " selected" : "")} onClick={() => setThread(pair)}><span className="row-text"><b>{pair}</b><small>{last?.text.slice(0, 60)}</small></span></Button>; })}
+              </div>
+              <div className="conversation">
+                {agentFeed.length ? agentFeed.filter(m => thread === "all" || [m.from, m.to].sort().join(" ↔ ") === thread).map((m, i) => (
+                  <div className="memo" key={m.id + i}>
+                    <div className="message-meta"><b className={`who c-${agentColor(m.from)}`}>{m.from}</b><span className="message-recipient">to {m.to}</span>{m.time && <time>{new Date(m.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>}</div>
+                    <p>{m.text}</p>
+                  </div>
+                )) : <div className="empty"><h2>No messages yet</h2><p>When agents talk to each other, their threads show up here.</p></div>}
+              </div>
+            </div>
+          ) : view === "providers" ? <Providers focus={providerFocus} />
+          : view === "tools" ? <Tools openMemory={() => setView("memory")} />
+          : view === "memory" ? <Memory />
+          : view === "servers" ? <Servers focus={serverFocus} />
+          : view === "skills" ? <Skills />
+          : view === "share" ? <Share workspace={workspace} openFile={packFile} clearFile={() => setPackFile(null)} openWorkspace={target => openWorkspace(target)} />
+          : view === "templates" ? (
+            <Templates activeBossFile={agentTemplates.boss?.file} hasBoss={agents.includes("boss")} onReloadBoss={async template => {
+              const chosen = await window.army.changeBoss(template);
+              setAgentTemplates(v => ({ ...v, boss: chosen })); setStopped(v => ({ ...v, boss: false }));
+              const list = await window.army.chats.list("boss"); setChatList(list); setActiveChat(list.find(c => c.active)?.id || null); setArchive(null); setSelected("boss"); setView("agent");
+            }} />
+          ) : (
+            <div className="page settings">
+              <h1>Settings</h1>
+              <section className="settings-group">
+                <h2 className="label">General</h2>
+                <div className="setting-row"><div><b>Workspace</b><p>{workspace}</p></div><Button className="secondary" onClick={() => openWorkspace()}>Change</Button></div>
+                <div className="setting-row"><div><b>Language</b><p>Interface language. Chats and agent replies are not translated.</p></div><select aria-label="Language" value={getLang()} onChange={e => setLang(e.target.value as Lang)}><option value="en">English</option><option value="tr">Türkçe</option></select></div>
+              </section>
+              <RemoteSettings />
+              <VoiceSettings openTools={() => setView("tools")} />
+              <MemorySettings open={() => setView("memory")} />
+              <TerminalSettings workspace={workspace} />
+              <section className="settings-group">
+                <h2 className="label">Keyboard shortcuts</h2>
+                {[["Search agents and views", "Ctrl K"], ["Switch chat and terminal", "Ctrl T"], ["Overview", "Ctrl O"], ["Toggle side panel", "Ctrl B"], ["Files and editor", "Ctrl E"], ["Quick open file (editor open)", "Ctrl P"], ["Search in files (editor open)", "Ctrl Shift F"], ["Terminal in this folder", "Ctrl `"], ["Voice typing (works from any app)", "Ctrl Alt Space"], ["Jump to agent 1-9", "Ctrl 1-9"], ["Save template", "Ctrl S"]].map(([label, keys]) => <div className="setting-row compact" key={label}><span>{label}</span><kbd>{keys}</kbd></div>)}
+              </section>
+            </div>
+          )}
+        </div>}
+        {/* The agent page stays mounted while another page is open: coming back does not rebuild the office scene, the terminal or the chat. */}
+        {(agentSeen || onAgentPage) && <div className="view" hidden={!onAgentPage}>
             <div ref={workbench} className={"workbench" + (ide ? " ide-open" : "")} style={{ "--ide-w": Math.max(320, Math.min(ideW, wbWidth - 407)) + "px" } as React.CSSProperties}>
             <div className="ide-slot" aria-hidden={!ide} inert={!ide ? true : undefined}>{ideMounted && <Suspense fallback={<div className="ide-loading">Loading editor…</div>}><IdePanel workspace={workspace} open={ide} request={ideReq} gitFiles={demo ? DEMO_FILES : gitFiles} terminalOpen={termOpen} toggleTerminal={toggleTerminal} close={() => toggleIde()}
               terminal={<Terminals shells={shells} active={shellActive} setActive={setShellActive} onClose={() => setTermOpen(false)} height={termH} setHeight={setTermH} />} /></Suspense>}</div>
@@ -772,72 +848,7 @@ export function App() {
               </div>
             </div>
             </div>
-          ) : view === "overview" ? (
-            <div className="page overview">
-              {agents.length === 0 ? <div className="empty"><h2>No active agents</h2><p>Start an operation to see your team here.</p><Button className="secondary" onClick={() => go("home")}>New operation</Button></div> : (
-                <div className="tile-grid">
-                  {team.map(a => (
-                    <div className="tile" key={a.name}>
-                      <div className="tile-head">
-                        <AgentId agent={a} template={agentTemplates[a.name]} />
-                        <small>{a.model}</small>
-                        <StatusDot tone={a.tone} label={a.status} />
-                        <span className="grow" />
-                        <Button className="ghost" onClick={() => { setSelected(a.name); setView("agent"); setMode("chat"); }}>Message</Button>
-                        <Button className="ghost" onClick={() => openTerminal(a.name)}>Open</Button>
-                      </div>
-                      <Console key={`${a.name}:${epoch}`} name={a.name} mini />
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          ) : view === "comms" ? (
-            <div className="page comms">
-              <div className="threads" role="list">
-                <h2 className="label">Threads</h2>
-                <Button className={"list-row" + (thread === "all" ? " selected" : "")} onClick={() => setThread("all")}><span className="row-text"><b>All messages</b></span><span className="row-hint">{agentFeed.length}</span></Button>
-                {pairs.map(pair => { const last = [...agentFeed].reverse().find(m => [m.from, m.to].sort().join(" ↔ ") === pair); return <Button key={pair} aria-label={pair.toUpperCase()} className={"list-row" + (thread === pair ? " selected" : "")} onClick={() => setThread(pair)}><span className="row-text"><b>{pair}</b><small>{last?.text.slice(0, 60)}</small></span></Button>; })}
-              </div>
-              <div className="conversation">
-                {agentFeed.length ? agentFeed.filter(m => thread === "all" || [m.from, m.to].sort().join(" ↔ ") === thread).map((m, i) => (
-                  <div className="memo" key={m.id + i}>
-                    <div className="message-meta"><b className={`who c-${agentColor(m.from)}`}>{m.from}</b><span className="message-recipient">to {m.to}</span>{m.time && <time>{new Date(m.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>}</div>
-                    <p>{m.text}</p>
-                  </div>
-                )) : <div className="empty"><h2>No messages yet</h2><p>When agents talk to each other, their threads show up here.</p></div>}
-              </div>
-            </div>
-          ) : view === "providers" ? <Providers focus={providerFocus} />
-          : view === "tools" ? <Tools openMemory={() => setView("memory")} />
-          : view === "memory" ? <Memory />
-          : view === "servers" ? <Servers focus={serverFocus} />
-          : view === "skills" ? <Skills />
-          : view === "share" ? <Share workspace={workspace} openFile={packFile} clearFile={() => setPackFile(null)} openWorkspace={target => openWorkspace(target)} />
-          : view === "templates" ? (
-            <Templates activeBossFile={agentTemplates.boss?.file} hasBoss={agents.includes("boss")} onReloadBoss={async template => {
-              const chosen = await window.army.changeBoss(template);
-              setAgentTemplates(v => ({ ...v, boss: chosen })); setStopped(v => ({ ...v, boss: false }));
-              const list = await window.army.chats.list("boss"); setChatList(list); setActiveChat(list.find(c => c.active)?.id || null); setArchive(null); setSelected("boss"); setView("agent");
-            }} />
-          ) : (
-            <div className="page settings">
-              <h1>Settings</h1>
-              <section className="settings-group">
-                <h2 className="label">General</h2>
-                <div className="setting-row"><div><b>Workspace</b><p>{workspace}</p></div><Button className="secondary" onClick={() => openWorkspace()}>Change</Button></div>
-                <div className="setting-row"><div><b>Language</b><p>Interface language. Chats and agent replies are not translated.</p></div><select aria-label="Language" value={getLang()} onChange={e => setLang(e.target.value as Lang)}><option value="en">English</option><option value="tr">Türkçe</option></select></div>
-              </section>
-              <RemoteSettings />
-              <VoiceSettings openTools={() => setView("tools")} />
-              <MemorySettings open={() => setView("memory")} />
-              <section className="settings-group">
-                <h2 className="label">Keyboard shortcuts</h2>
-                {[["Search agents and views", "Ctrl K"], ["Switch chat and terminal", "Ctrl T"], ["Overview", "Ctrl O"], ["Toggle side panel", "Ctrl B"], ["Files and editor", "Ctrl E"], ["Quick open file (editor open)", "Ctrl P"], ["Search in files (editor open)", "Ctrl Shift F"], ["Terminal in this folder", "Ctrl `"], ["Voice typing (works from any app)", "Ctrl Alt Space"], ["Jump to agent 1-9", "Ctrl 1-9"], ["Save template", "Ctrl S"]].map(([label, keys]) => <div className="setting-row compact" key={label}><span>{label}</span><kbd>{keys}</kbd></div>)}
-              </section>
-            </div>
-          )}
-        </div>
+        </div>}
       </main>
       {showSidebar && <Sidebar agents={team} selected={selected} activeView={view === "agent"} menu={agentMenu} setMenu={setAgentMenu}
         select={a => { setSelected(a); setView("agent"); if (attention[a]) setMode("terminal"); }}

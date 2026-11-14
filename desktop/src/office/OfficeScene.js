@@ -1380,6 +1380,8 @@ const clock=new THREE.Clock();
 function animate(){
   if(disposed)return;
   requestAnimationFrame(animate);
+  // Hidden (another page): no work at all until it is shown again.
+  if(!container.offsetParent){clock.getDelta();return;}
   const delta=Math.min(clock.getDelta(),.05);
   const elapsed=clock.getElapsedTime();
   frame++;

@@ -15,7 +15,7 @@ declare global {
       agentAction(name: string, action: string): Promise<boolean>;
       setModel(name: string, model: string): Promise<{ mode: "applied" | "queued" | "saved" | "restarted" | "fresh" }>;
       gitChanges(): Promise<{ path: string; add: number; del: number; status: string }[]>;
-      shells: { list(): Promise<{ name: string; title: string; cwd: string; exited: boolean }[]>; open(): Promise<string>; close(name: string): Promise<boolean>; rename(name: string, title: string): Promise<boolean> };
+      shells: { choices(): Promise<{ id: string; label: string; path: string }[]>; list(): Promise<{ name: string; title: string; cwd: string; exited: boolean }[]>; open(): Promise<string>; close(name: string): Promise<boolean>; rename(name: string, title: string): Promise<boolean> };
       voice: {
         status(): Promise<{ installed: boolean; running: boolean; flavor: string; exe: string; model: string; dir: string; lang: string; mic: string; shortcut: string; shortcuts: string[]; shortcutOk: boolean }>;
         warm(): Promise<boolean>;
