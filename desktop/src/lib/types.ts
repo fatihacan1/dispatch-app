@@ -49,6 +49,7 @@ declare global {
         import(dir: string, items: { name: string; data: ArrayBuffer | null }[]): Promise<number>;
       };
       setEffort(name: string, effort: string): Promise<{ mode: "applied" | "queued" | "saved" | "restarted" | "fresh" }>;
+      setPermission(name: string, permission: string): Promise<{ mode: "saved" | "restarted" | "fresh" }>;
       info(): Promise<{ workspace: string; demo: boolean; operations: any[]; workspaces: string[] }>;
       output(name: string): Promise<string>;
       workspace(target?: string): Promise<string>;
@@ -58,7 +59,7 @@ declare global {
       resetOperation(): Promise<{ name: string; template: any; enlistedBy?: string }[]>;
       changeBoss(template: any, agent?: string): Promise<any>;
       isWorking(name: string): Promise<boolean>;
-      templates: { list(): Promise<{ items: any[]; models: Record<string, string[]>; efforts?: Record<string, string[]> }>; saveAgent(agent: string, name: string, scope: "project" | "global"): Promise<string> };
+      templates: { list(): Promise<{ items: any[]; models: Record<string, string[]>; efforts?: Record<string, string[]>; permissions?: Record<string, string[]> }>; saveAgent(agent: string, name: string, scope: "project" | "global"): Promise<string> };
       attachmentPreview(path: string): Promise<{ name: string; image?: string } | null>;
       pathFor(file: File): string;
       saveAttachments(files: { name: string; data: ArrayBuffer }[]): Promise<string[]>;

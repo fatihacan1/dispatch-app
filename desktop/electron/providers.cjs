@@ -31,6 +31,13 @@ const EFFORTS = {
   codex: ['minimal', 'low', 'medium', 'high', 'xhigh'],
   qoder: ['low', 'medium', 'high'],
 };
+// Permission / approval modes each CLI accepts at launch. '' (default) leaves the CLI's own setting alone.
+// Claude: --permission-mode. Codex: sandbox mode (-s) or approval policy (-a never / bypass). Antigravity: --mode.
+const PERMISSIONS = {
+  claude: ['acceptEdits', 'bypassPermissions', 'plan'],
+  codex: ['read-only', 'workspace-write', 'danger-full-access', 'never', 'bypass'],
+  antigravity: ['accept-edits', 'auto', 'plan'],
+};
 
 const strip =s => String(s || '').replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '');
 function run(spec, args, timeout = 10000) {
@@ -173,4 +180,4 @@ function actionSpec(resolveCommand, id, kind) {
 function withKnown(p, models) { return [...new Set([...p.known.filter(m => m !== 'default' || !models.length), ...models])]; }
 function allModels() { const c = readCache(); const out = {}; for (const p of PROVIDERS) out[p.id] = withKnown(p, c[p.id]?.models?.length ? c[p.id].models : (p.id === 'codex' && codexCachedModels().length ? codexCachedModels() : p.known)); return out; }
 
-module.exports = { PROVIDERS, EFFORTS, check, refreshModels, actionSpec, allModels, updateInfo, parseAuth, parseModels };
+module.exports = { PROVIDERS, EFFORTS, PERMISSIONS, check, refreshModels, actionSpec, allModels, updateInfo, parseAuth, parseModels };

@@ -50,6 +50,14 @@ test('antigravity: /usage json groups', () => {
   assert.strictEqual(u.parseAntigravity({}).windows.length, 0);
 });
 
+test('antigravity: never queries the CLI without an explicit Refresh', async () => {
+  let called = false;
+  const r = await u.getUsage('antigravity', { resolveCommand: () => { called = true; return { file: 'agy', args: [] }; } });
+  assert.strictEqual(called, false);
+  assert.strictEqual(r.errorCode, 'manual');
+  assert.strictEqual(r.windows.length, 0);
+});
+
 test('getUsage never throws and reports unsupported providers', async () => {
   const r = await u.getUsage('opencode');
   assert.strictEqual(r.errorCode, 'unsupported');

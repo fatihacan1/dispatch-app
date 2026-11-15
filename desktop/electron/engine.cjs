@@ -403,6 +403,16 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
     else if (provider === 'qoder') args.push('--reasoning-effort', effort);
     else args.push('--effort', effort);
   }
+  // Permission / approval mode. '' means the CLI's own setting. Codex takes a sandbox mode or an approval policy.
+  const permission = !localProvider && template.permission && (providersLib.PERMISSIONS[provider] || []).includes(template.permission) ? template.permission : '';
+  if (permission) {
+    if (provider === 'codex') {
+      if (permission === 'never') args.push('-a', 'never');
+      else if (permission === 'bypass') args.push('--dangerously-bypass-approvals-and-sandbox');
+      else args.push('-s', permission);
+    } else if (provider === 'claude') args.push('--permission-mode', permission);
+    else if (provider === 'antigravity') args.push('--mode', permission);
+  }
   // Dispatch skills are Claude Code plugins: the boss always gets them, other Claude agents only if the user chose so.
   if (provider === 'claude' && !demo) { const sk = skillStore(); if (name === 'boss' || sk.settings().claudeAgents) for (const dir of sk.pluginDirs()) args.push('--plugin-dir', dir); }
   if (provider === 'claude') args.push('--append-system-prompt', prompt, resumeSession ? '--resume' : '--session-id', session);
@@ -970,7 +980,7 @@ ipcMain.handle('tools:install', (_e, id = 'comfyui', mode = 'install') => {
   terminal.onExit(({ exitCode }) => { watchTools(); notify('tool:done', { id, exitCode, name }); });
   return name;
 });
-ipcMain.handle('templates:list', () => ({ items: templates.list(workspace), efforts: providersLib.EFFORTS, models: { ...templates.MODELS, ...providersLib.allModels(), local: localAI.list().length ? localAI.list().map(item => item.model) : ['default'], ...Object.fromEntries(localAI.list().map(item => ['local:' + encodeURIComponent(item.model), [item.model]])) }, localProviders: localAI.list().map(item => ({ id: 'local:' + encodeURIComponent(item.model), name: item.name, model: item.model, icon: item.icon })) }));
+ipcMain.handle('templates:list', () => ({ items: templates.list(workspace), efforts: providersLib.EFFORTS, permissions: providersLib.PERMISSIONS, models: { ...templates.MODELS, ...providersLib.allModels(), local: localAI.list().length ? localAI.list().map(item => item.model) : ['default'], ...Object.fromEntries(localAI.list().map(item => ['local:' + encodeURIComponent(item.model), [item.model]])) }, localProviders: localAI.list().map(item => ({ id: 'local:' + encodeURIComponent(item.model), name: item.name, model: item.model, icon: item.icon })) }));
 ipcMain.handle('local-ai:get', () => localAI.read());
 ipcMain.handle('local-ai:list', () => localAI.list());
 ipcMain.handle('local-ai:remove', (_e, model) => { const result = localAI.remove(model); notify('templates-changed', null); notify('local-ai-changed', result[0] || null); return result; });
@@ -1135,7 +1145,7 @@ if (!demo) usageLib.setCacheFile(path.join(globalDir(), 'usage.json'));
 // A failed reading (rate limit, timeout, token being refreshed) is retried soon instead of waiting for the next 3-minute poll.
 let usageRetry = null;
 function retryUsageSoon(all) {
-  const failed = Object.values(all || {}).filter(u => u.error && !['unsupported', 'not-installed', 'off'].includes(u.errorCode));
+  const failed = Object.values(all || {}).filter(u => u.error && !['unsupported', 'not-installed', 'off', 'manual'].includes(u.errorCode));
   if (!failed.length || usageRetry) return;
   const wait = Math.min(300, Math.max(30, ...failed.map(u => u.retryAfter || 30)));
   usageRetry = setTimeout(() => { usageRetry = null; if (!host.isActive()) return; usageLib.getAll({ providers: failed.map(u => u.provider), resolveCommand, force: true }).then(shareUsage).catch(() => {}); }, wait * 1000);
@@ -1147,7 +1157,16 @@ function onUsage(all) { if (demo) return; const ids = usageIds(); const mine = O
 // Off until the user turns it on from Home: then no CLI is asked and the Claude sign-in token is never read.
 const usageTracking = () => readUi().usageTracking === true;
 const usageOff = () => Object.fromEntries(usageIds().map(id => [id, { provider: id, windows: [], updatedAt: new Date().toISOString(), source: 'none', error: 'Live usage is off. Turn it on from Home.', errorCode: 'off' }]));
-async function usageAll(force) { if (demo) return usageLib.demo(); if (!usageTracking()) return usageOff(); const all = await usageLib.getAll({ providers: usageIds(), resolveCommand, force }); retryUsageSoon(all); return all; }
+async function usageAll(force) {
+  if (demo) return usageLib.demo();
+  if (!usageTracking()) return usageOff();
+  // Antigravity is manual only (its /usage spends a model turn): automatic polls fetch the free providers and just
+  // carry its last saved reading, so the section can show the last number and when it was read.
+  const auto = usageIds().filter(id => usageLib.AUTO.includes(id));
+  const all = await usageLib.getAll({ providers: auto, resolveCommand, force });
+  if (usageIds().includes('antigravity')) all.antigravity = await usageLib.getUsage('antigravity', { resolveCommand, force: false });
+  retryUsageSoon(all); return all;
+}
 ipcMain.handle('usage:get', () => usageAll(false));
 ipcMain.handle('usage:refresh', async (_e, id) => { if (demo) { const all = usageLib.demo(); notify('usage:update', all); return all; } if (!usageTracking()) { const all = usageOff(); shareUsage(all); return all; } const all = id ? await usageLib.getAll({ providers: [id], resolveCommand, force: true }) : await usageAll(true); shareUsage(all); return all; });
 intervals.push(setInterval(() => { if (usageTracking() && host.isActive() && win && !win.isDestroyed() && win.isVisible() && !win.isMinimized()) usageAll(true).then(shareUsage).catch(() => {}); }, 180000));
@@ -1217,7 +1236,7 @@ ipcMain.handle('templates:save-agent', (_e, agentName, name, scope) => {
   const saved = operation?.agents.find(a => a.name === agentName);
   if (!saved) throw new Error(`Agent ${agentName} is not on this team.`);
   const t = saved.template || {};
-  const file = templates.save(workspace, { name, scope: scope === 'global' ? 'global' : 'project', description: t.description || '', provider: t.provider || 'claude', model: t.model || '', effort: t.effort || '', extra: {}, body: String(t.body || '').split('\n\n## Your team:')[0] });
+  const file = templates.save(workspace, { name, scope: scope === 'global' ? 'global' : 'project', description: t.description || '', provider: t.provider || 'claude', model: t.model || '', effort: t.effort || '', permission: t.permission || '', extra: {}, body: String(t.body || '').split('\n\n## Your team:')[0] });
   notify('templates-changed', null);
   return file;
 });
@@ -1328,6 +1347,19 @@ ipcMain.handle('agent:set-effort', (_e, name, effort) => {
   if (effort && !(providersLib.EFFORTS[saved.template.provider] || []).includes(effort)) throw new Error('This provider does not take that effort level');
   saved.template = { ...saved.template, effort }; saveOperation();
   return applyLive(name, saved, `/effort ${effort || 'auto'}`);
+});
+// Permission mode is a launch flag for every provider; changing it restarts the agent (Claude and Codex resume).
+ipcMain.handle('agent:set-permission', (_e, name, permission) => {
+  const saved = operation?.agents.find(a => a.name === name);
+  if (!saved) throw new Error('Agent not found');
+  permission = String(permission || '');
+  if (permission && !(providersLib.PERMISSIONS[saved.template.provider] || []).includes(permission)) throw new Error('This provider does not take that permission mode');
+  saved.template = { ...saved.template, permission }; saveOperation();
+  const agent = processes.get(name);
+  if (!agent || saved.stopped) return { mode: 'saved' };
+  const fresh = !(['claude', 'codex'].includes(saved.template.provider) && saved.sessionId);
+  agentAction(name, 'restart');
+  return { mode: fresh ? 'fresh' : 'restarted' };
 });
 function applyLive(name, saved, slash) {
   const agent = processes.get(name); const provider = saved.template.provider;

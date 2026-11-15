@@ -21,7 +21,7 @@ function list(workspace) {
   }
   return out;
 }
-const pick = t => t && { name: t.name, description: t.description || '', provider: t.provider, model: t.model || '', effort: t.effort || '', extra: t.extra || {}, body: t.body || '' };
+const pick = t => t && { name: t.name, description: t.description || '', provider: t.provider, model: t.model || '', effort: t.effort || '', permission: t.permission || '', extra: t.extra || {}, body: t.body || '' };
 
 function save(workspace, team, templates) {
   if (!String(team.name || '').trim()) throw new Error('Team name is required.');

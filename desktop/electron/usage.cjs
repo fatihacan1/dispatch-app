@@ -6,8 +6,10 @@ const path = require('node:path');
 const { spawn, execFile } = require('node:child_process');
 
 const TTL = 60000;
-// Antigravity is left out: agy has no way to read its limits without a model turn (see the note below).
-const SUPPORTED = ['claude', 'codex'];
+// Antigravity has no free usage query: reading it sends a prompt to the model (one turn of quota), so it is never
+// included in the automatic poll. The user asks for it with the Refresh button in its usage section.
+const AUTO = ['claude', 'codex'];
+const SUPPORTED = [...AUTO, 'antigravity'];
 const cache = new Map(); // provider -> { at, value, pending }
 // Last good reading per provider, kept on disk so a failed first fetch after a restart (429, expired token) still shows the last numbers.
 let cacheFile = null, saved = null;
@@ -148,7 +150,7 @@ async function fetchCodex(resolveCommand) {
   return { error: `Codex limits are unavailable (${liveError}). Sign in with a ChatGPT plan; API-key use has no session limits.`, errorCode: 'unavailable' };
 }
 
-// --- Antigravity: `agy -p "/usage" --output-format json` (no turn, no quota spent) ---
+// --- Antigravity: `agy -p "/usage" --output-format json` (print mode spends one model turn, so manual refresh only) ---
 const AGY_GROUPS = { 'Gemini Models': 'Gemini', 'Claude and GPT models': 'Claude/GPT' };
 function parseAntigravity(json) {
   const groups = json?.command?.data?.groups; const windows = [];
@@ -160,12 +162,32 @@ function parseAntigravity(json) {
   }
   return { provider: 'antigravity', windows, source: 'agy /usage' };
 }
-// agy 1.5.x has no /usage command in print mode: `agy -p /usage` sent '/usage' to the model as a prompt, so every
-// refresh (every 3 minutes) spent a real turn of the user's quota. Dispatch no longer asks; parseAntigravity stays for
-// a future CLI that can report its limits for free.
+// agy 1.5.x has no /usage command in print mode: `agy -p /usage` sends '/usage' to the model as a prompt, so it spends
+// a real turn of the user's quota. It is only ever called from an explicit Refresh (force), never by the 3-minute poll.
+function run(spec, args, timeout = 30000) {
+  return new Promise((resolve, reject) => {
+    execFile(spec.file, [...spec.args, ...args], { timeout, windowsHide: true, maxBuffer: 8 * 1024 * 1024, env: { ...process.env, NO_COLOR: '1', CI: '1' } },
+      (error, stdout, stderr) => {
+        if (error && !stdout && !stderr) return reject(error);
+        resolve(stripAnsi(String(stdout || '') + String(stderr || '')));
+      });
+  });
+}
+const stripAnsi = s => s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '');
+async function fetchAntigravity(resolveCommand) {
+  let spec; try { spec = resolveCommand('agy'); } catch { return { error: 'Antigravity is not installed.', errorCode: 'not-installed' }; }
+  try {
+    const out = await run(spec, ['-p', '/usage', '--output-format', 'json']);
+    const start = out.indexOf('{'), end = out.lastIndexOf('}');
+    let json = null; try { json = JSON.parse(start >= 0 && end > start ? out.slice(start, end + 1) : out); } catch {}
+    const parsed = parseAntigravity(json);
+    if (parsed.windows.length) return { ...parsed, updatedAt: new Date().toISOString() };
+    return { error: 'Antigravity returned no limit windows. It may have answered as a normal prompt instead of /usage.', errorCode: 'unavailable' };
+  } catch (e) { return { error: `Antigravity usage request failed: ${e.killed ? 'timed out' : e.message}`, errorCode: 'unavailable' }; }
+}
 
 // --- public API ---
-const FETCH = { claude: () => fetchClaude(), codex: r => fetchCodex(r) };
+const FETCH = { claude: () => fetchClaude(), codex: r => fetchCodex(r), antigravity: r => fetchAntigravity(r) };
 
 async function load(provider, resolveCommand) {
   let r;
@@ -181,6 +203,12 @@ async function getUsage(provider, { resolveCommand, force } = {}) {
   if (!SUPPORTED.includes(provider)) return { provider, windows: [], updatedAt: new Date().toISOString(), source: 'none', error: 'Usage limits are not available for this provider.', errorCode: 'unsupported' };
   const hit = cache.get(provider);
   if (hit?.pending) return hit.pending;
+  // Reading Antigravity costs a model turn. Until the user presses Refresh, show the last saved reading (if any) and
+  // make it clear the number is not live.
+  if (provider === 'antigravity' && !force) {
+    const prev = hit?.value?.windows?.length ? hit.value : savedReadings()[provider];
+    return prev?.windows?.length ? { ...prev, stale: true } : { provider, windows: [], updatedAt: new Date().toISOString(), source: 'agy /usage', error: 'Press Refresh to read the Antigravity limit. Reading it spends one model turn.', errorCode: 'manual' };
+  }
   if (!force && hit?.value && Date.now() - hit.at < TTL) return hit.value;
   const pending = load(provider, resolveCommand).then(value => { cache.set(provider, { at: Date.now(), value }); remember(value); return value; });
   cache.set(provider, { ...(hit || { at: 0 }), pending });
@@ -203,4 +231,4 @@ function demo() {
   };
 }
 
-module.exports = { SUPPORTED, setCacheFile, getUsage, getAll, demo, parseClaude, parseCodexLimits, parseCodexRollout, parseAntigravity, minutesLabel };
+module.exports = { AUTO, SUPPORTED, setCacheFile, getUsage, getAll, demo, parseClaude, parseCodexLimits, parseCodexRollout, parseAntigravity, minutesLabel };

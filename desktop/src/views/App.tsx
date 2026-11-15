@@ -125,6 +125,7 @@ function AgentId({ agent, template }: { agent: AgentInfo; template?: any }) {
         <span>Provider</span><b>{labels[agent.provider] || agent.provider.replace(/^local:/, "Local · ")}</b>
         <span>Model</span><b>{agent.model}</b>
         {template?.effort && <><span>Effort</span><b>{template.effort}</b></>}
+        {template?.permission && <><span>Permission</span><b>{PERMISSION_LABEL[template.permission] || template.permission}</b></>}
         <span>Reports to</span><b>{agent.name === "boss" ? "you" : agent.enlistedBy && agent.enlistedBy !== "user" ? agent.enlistedBy : "boss"}</b>
         <span>Status</span><b><StatusDot tone={agent.tone} label={agent.status} /></b>
       </span>
@@ -132,6 +133,11 @@ function AgentId({ agent, template }: { agent: AgentInfo; template?: any }) {
   </span>;
 }
 const clean = (e: unknown) => String(e).replace(/^Error: Error invoking remote method '[^']+': (Error: )?/, "");
+const PERMISSION_LABEL: Record<string, string> = {
+  acceptEdits: "Accept edits", bypassPermissions: "Bypass permissions", plan: "Plan only",
+  "read-only": "Sandbox: read-only", "workspace-write": "Sandbox: workspace write", "danger-full-access": "Sandbox: full access", never: "Never ask for approval", bypass: "Bypass approvals and sandbox",
+  "accept-edits": "Accept edits", auto: "Auto",
+};
 const ago = (date: string) => { const s = (Date.now() - new Date(date).getTime()) / 1000; return s < 60 ? "just now" : s < 3600 ? `${Math.floor(s / 60)} min ago` : s < 86400 ? `${Math.floor(s / 3600)} h ago` : new Date(date).toLocaleDateString(); };
 // Links typed or pasted into the message box: shown blue in the text (a mirror layer under the textarea) and as chips.
 const URL_RE = /\bhttps?:\/\/[^\s<>"'`]+[^\s<>"'`.,;:!?)\]}]/gi;
@@ -291,6 +297,7 @@ export function App() {
   const [localProviders, setLocalProviders] = useState<{ id: string; name: string; model: string }[]>([]);
   const [modelLists, setModelLists] = useState<Record<string, string[]>>({});
   const [effortLists, setEffortLists] = useState<Record<string, string[]>>({});
+  const [permissionLists, setPermissionLists] = useState<Record<string, string[]>>({});
   const [bossFile, setBossFile] = useState("");
   const [bossModel, setBossModel] = useState("");
   const [changingBoss, setChangingBoss] = useState(false);
@@ -303,7 +310,7 @@ export function App() {
       const bosses = result.items.filter((t: any) => t.extra?.role === "boss");
       // A project copy shadows the built-in template of the same name.
       const unique = bosses.filter((t: any, i: number) => bosses.findIndex((x: any) => x.name.toLowerCase() === t.name.toLowerCase()) === i);
-      setBossTemplates(unique); setModelLists(result.models); setEffortLists(result.efforts || {}); setLocalProviders((result as any).localProviders || []);
+      setBossTemplates(unique); setModelLists(result.models); setEffortLists(result.efforts || {}); setPermissionLists((result as any).permissions || {}); setLocalProviders((result as any).localProviders || []);
       const workspaceChanged = bossWorkspace.current !== workspace;
       bossWorkspace.current = workspace;
       const preferred = unique.find((t: any) => t.scope === "project") || unique[0];
@@ -601,6 +608,21 @@ export function App() {
       if (r.mode === "queued") setError(`Effort change queued for ${name}; it applies when the agent is idle.`);
     } catch (e) { setError(String(e)); }
   };
+  const switchPermission = async (name: string, permission: string) => {
+    const tpl = tplOf(name);
+    if (permission === (tpl.permission || "")) return;
+    try {
+      if (!stopped[name]) {
+        const busy = await window.army.isWorking(name);
+        const resumes = ["claude", "codex"].includes(tpl.provider);
+        const description = (busy ? "Agent is working; switching now interrupts the current task. " : "") + (resumes ? "The agent restarts and continues the conversation." : "This provider cannot resume, so the conversation starts fresh.");
+        if (!(await ask.confirm(busy ? "Agent is working; switch now?" : "Change permission mode?", { description, action: "Change" }))) return;
+      }
+      const r = await window.army.setPermission(name, permission);
+      setAgentTemplates(t => ({ ...t, [name]: { ...tplOf(name), ...t[name], permission } }));
+      if (r.mode === "fresh") setError(`Permission mode changed for ${name}; it restarts with a fresh conversation.`);
+    } catch (e) { setError(String(e)); }
+  };
   const openTerminal = (name: string) => { setSelected(name); setView("agent"); setMode("terminal"); setAgentMenu(null); };
   const agentProvider = (a: string) => agentTemplates[a]?.provider || (demo && a === "coder" ? "codex" : demo && a === "scout" ? "antigravity" : provider);
   const agentColor = (name: string) => name === "you" ? "you" : String((agents.indexOf(name) >= 0 ? agents.indexOf(name) : Array.from(name.toLowerCase()).reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) >>> 0, 0)) % 6);
@@ -867,6 +889,7 @@ export function App() {
                   <AgentId agent={team.find(a => a.name === selected) || { name: selected, provider: agentProvider(selected), model: tplOf(selected).model || "default", tone: "idle", status: "Idle" }} template={agentTemplates[selected]} />
                   {!String(tplOf(selected).provider).startsWith("local") ? <select className="model-switch" aria-label="Agent model" title="Switch this agent's model" value={tplOf(selected).model || "default"} onChange={e => void switchModel(selected, e.target.value)}>{Array.from(new Set([...(modelLists[tplOf(selected).provider] || []), tplOf(selected).model || "default"])).map(m => <option key={m} value={m}>{m}</option>)}<option value="__custom">Custom…</option></select> : <small>{tplOf(selected).model}</small>}
                   {(effortLists[tplOf(selected).provider] || []).length > 0 && <select className="model-switch effort-switch" aria-label="Agent effort" title="Reasoning effort for this agent" value={tplOf(selected).effort || ""} onChange={e => void switchEffort(selected, e.target.value)}><option value="">Effort: default</option>{effortLists[tplOf(selected).provider].map(x => <option key={x} value={x}>Effort: {x}</option>)}</select>}
+                  {(permissionLists[tplOf(selected).provider] || []).length > 0 && <select className="model-switch permission-switch" aria-label="Agent permission mode" title="Permission and approval mode for this agent" value={tplOf(selected).permission || ""} onChange={e => void switchPermission(selected, e.target.value)}><option value="">Permission: default</option>{permissionLists[tplOf(selected).provider].map(x => <option key={x} value={x}>Permission: {PERMISSION_LABEL[x] || x}</option>)}</select>}
                 </div>
                 <div className="tabs" role="tablist" aria-label="Agent view" data-active={mode}>
                   <button type="button" role="tab" aria-selected={mode === "chat"} className="tab" onClick={() => setMode("chat")}>Chat</button>

@@ -35,8 +35,12 @@ export function UsageChips({ open }: { open: (provider: string) => void }) {
 }
 
 /** Full detail for the Providers view: every window with a progress bar, reset time, source and refresh. */
-export function UsageDetails({ u, now, loading, refresh }: { u?: ProviderUsage; now: number; loading?: boolean; refresh: () => void }) {
+export function UsageDetails({ u, now, loading, refresh, manual }: { u?: ProviderUsage; now: number; loading?: boolean; refresh: () => void; manual?: boolean }) {
   return <div className="usage-details">
+    {manual && <div className="usage-details-head">
+      <b>Antigravity limits</b>
+      {u?.errorCode !== "off" && <button type="button" className="button secondary usage-refresh" disabled={loading} onClick={refresh} title="Read the Antigravity limit now. It costs one model turn.">{loading ? "Refreshing…" : "Refresh"}</button>}
+    </div>}
     {!u ? <p className="usage-note">Loading usage…</p> : <>
       {u.error && <p className="usage-note usage-error" role="status">{u.error}</p>}
       {u.windows.map(raw => {
@@ -47,8 +51,8 @@ export function UsageDetails({ u, now, loading, refresh }: { u?: ProviderUsage; 
           <small>{w.resetsAt ? `Resets in ${resetIn(w.resetsAt, now)} · ${resetClock(w.resetsAt, now)}` : w.note || "No reset time reported"}</small>
         </div>;
       })}
-      <div className="usage-foot"><small>{u.plan ? `Plan ${u.plan} · ` : ""}Source: {u.source} · updated {ago(u.updatedAt, now)}</small>
-        <button type="button" className="button secondary" disabled={loading} onClick={refresh}>{loading ? "Refreshing…" : "Refresh"}</button></div>
+      <div className="usage-foot"><small>{u.windows.length ? `${u.plan ? `Plan ${u.plan} · ` : ""}Source: ${u.source} · updated ${ago(u.updatedAt, now)}${manual ? " · refreshes only when you press Refresh" : ""}` : ""}</small>
+        {!manual && <button type="button" className="button secondary" disabled={loading} onClick={refresh}>{loading ? "Refreshing…" : "Refresh"}</button>}</div>
     </>}
   </div>;
 }
@@ -63,7 +67,7 @@ export function UsageSwitch() {
     try { await army().ui.set({ usageTracking: next }); await army().usage?.refresh(); } catch { setOn(!next); }
   };
   return <label className="usage-switch">
-    <span className="usage-switch-text"><b>Track my live usage</b><small>Show the session and weekly limits left on Claude Code and Codex. Antigravity cannot report its limits without spending quota; type /usage in its terminal. For Claude, Dispatch asks Anthropic with your Claude Code sign-in. Off until you turn it on.</small>
+    <span className="usage-switch-text"><b>Track my live usage</b><small>Show the session and weekly limits left on Claude Code and Codex. Antigravity's limit is read only when you press Refresh in its section, because reading it spends one model turn. For Claude, Dispatch asks Anthropic with your Claude Code sign-in. Off until you turn it on.</small>
       <span className="usage-preview" aria-hidden="true" title="Example: how the limits show next to your agents">
         {([["claude", 38, "ok"], ["codex", 78, "warn"], ["antigravity", 12, "ok"]] as const).map(([id, used, lvl]) => <span key={id} className={`usage-chip ${lvl}`}><ProviderIcon className="usage-icon" provider={id} alt="" /><span>{used}%</span></span>)}
         <small>Example</small>

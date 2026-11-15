@@ -13,6 +13,8 @@
 .usage-warn { color: var(--text-3); }
 .prov-wrap { flex-wrap: wrap; }
 .usage-details { flex-basis: 100%; display: flex; flex-direction: column; gap: 12px; padding: 4px 0 4px 38px; max-width: 640px; }
+.usage-details-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.usage-refresh { height: 26px; padding: 0 10px; font-size: var(--text-sm); }
 .usage-win { display: flex; flex-direction: column; gap: 4px; }
 .usage-win-head { display: flex; justify-content: space-between; gap: 12px; font-size: var(--text-md); }
 .usage-win-head span, .usage-win small, .usage-foot small { color: var(--text-2); font-size: var(--text-sm); }

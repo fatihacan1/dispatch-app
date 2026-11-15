@@ -9,11 +9,16 @@ import { Teams } from "./Teams";
 type BossProvider = { enabled: boolean; plan: string; note: string };
 type Tpl = {
   file?: string; scope: string; readonly?: boolean; name: string; description: string;
-  provider: string; model: string; effort?: string; body: string; extra?: Record<string, string>;
+  provider: string; model: string; effort?: string; permission?: string; body: string; extra?: Record<string, string>;
 };
 const api = () => (window as any).army.templates;
 const PROVIDERS = ["claude", "codex", "antigravity", "opencode", "qoder", "gemini", "local"];
 const SCOPE_LABEL: Record<string, string> = { project: "Project", global: "Global", claude: "Claude Code", "built-in": "Built-in" };
+const PERMISSION_LABEL: Record<string, string> = {
+  acceptEdits: "Accept edits", bypassPermissions: "Bypass permissions", plan: "Plan only",
+  "read-only": "Sandbox: read-only", "workspace-write": "Sandbox: workspace write", "danger-full-access": "Sandbox: full access", never: "Never ask for approval", bypass: "Bypass approvals and sandbox",
+  "accept-edits": "Accept edits", auto: "Auto",
+};
 const blank = (): Tpl => ({ scope: "project", name: "", description: "", provider: "claude", model: "claude-opus-5-5", body: "You are a focused specialist. Report back with dispatch send when you finish." });
 
 function Section({ title, help, children }: { title: string; help?: string; children: React.ReactNode }) {
@@ -25,6 +30,7 @@ export function Templates({ hasBoss, activeBossFile, onReloadBoss }: { hasBoss: 
   const [localProviders, setLocalProviders] = useState<{id:string;name:string;model:string}[]>([]);
   const [models, setModels] = useState<Record<string, string[]>>({});
   const [efforts, setEfforts] = useState<Record<string, string[]>>({});
+  const [permissions, setPermissions] = useState<Record<string, string[]>>({});
   const [draft, setDraft] = useState<Tpl>(blank());
   const [saved, setSaved] = useState<string>(JSON.stringify(blank()));
   const [status, setStatus] = useState("");
@@ -46,7 +52,7 @@ export function Templates({ hasBoss, activeBossFile, onReloadBoss }: { hasBoss: 
 
   const load = async (selectFile?: string) => {
     const r = await api().list();
-    setItems(r.items); setModels(r.models); setEfforts(r.efforts || {}); setLocalProviders(r.localProviders || []);
+    setItems(r.items); setModels(r.models); setEfforts(r.efforts || {}); setPermissions(r.permissions || {}); setLocalProviders(r.localProviders || []);
     const pick = r.items.find((t: Tpl) => t.file === selectFile);
     if (pick) { setDraft(pick); setSaved(JSON.stringify(pick)); }
   };
@@ -181,7 +187,7 @@ export function Templates({ hasBoss, activeBossFile, onReloadBoss }: { hasBoss: 
           <Section title="Model" help="Which CLI runs this agent and with which model.">
             <div className="tpl-fields two">
               <label className="field">Provider
-                <select aria-label="Provider" value={draft.provider} onChange={e => { setModelSearch(""); set({ provider: e.target.value, model: (models[e.target.value] || ["default"])[0], effort: (efforts[e.target.value] || []).includes(draft.effort || "") ? draft.effort : "" }); }}>
+                <select aria-label="Provider" value={draft.provider} onChange={e => { setModelSearch(""); set({ provider: e.target.value, model: (models[e.target.value] || ["default"])[0], effort: (efforts[e.target.value] || []).includes(draft.effort || "") ? draft.effort : "", permission: (permissions[e.target.value] || []).includes(draft.permission || "") ? draft.permission : "" }); }}>
                   {PROVIDERS.filter(p => p !== "local").map(p => <option key={p} value={p}>{labels[p] || p}</option>)}{localProviders.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}{draft.provider === "local" && <option value="local">Local AI (legacy)</option>}
                 </select>
               </label>
@@ -200,6 +206,12 @@ export function Templates({ hasBoss, activeBossFile, onReloadBoss }: { hasBoss: 
                 <select aria-label="Effort" value={draft.effort || ""} onChange={e => set({ effort: e.target.value })}>
                   <option value="">Default</option>
                   {efforts[draft.provider].map(x => <option key={x} value={x}>{x}</option>)}
+                </select>
+              </label>}
+              {(permissions[draft.provider] || []).length > 0 && <label className="field">Permission mode
+                <select aria-label="Permission mode" value={draft.permission || ""} onChange={e => set({ permission: e.target.value })}>
+                  <option value="">Default</option>
+                  {permissions[draft.provider].map(x => <option key={x} value={x}>{PERMISSION_LABEL[x] || x}</option>)}
                 </select>
               </label>}
             </div>

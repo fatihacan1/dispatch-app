@@ -34,12 +34,13 @@ function parse(text) {
   return { meta, body: m[2].replace(/^\r?\n/, '') };
 }
 
-function serialize({ name, description, provider, model, effort, extra = {}, body }) {
+function serialize({ name, description, provider, model, effort, permission, extra = {}, body }) {
   const q = v => (/: |#|^[\[\]{}>|*&!%@`'"-]|^\s|\s$/.test(String(v)) ? JSON.stringify(String(v)) : String(v));
   const lines = ['---', `name: ${q(name)}`, `description: ${q(description || '')}`, `provider: ${q(provider || 'claude')}`];
   if (model) lines.push(`model: ${q(model)}`);
   if (effort) lines.push(`effort: ${q(effort)}`);
-  for (const [k, v] of Object.entries(extra)) if (!['name', 'description', 'provider', 'model', 'effort'].includes(k)) lines.push(`${k}: ${v}`);
+  if (permission) lines.push(`permission: ${q(permission)}`);
+  for (const [k, v] of Object.entries(extra)) if (!['name', 'description', 'provider', 'model', 'effort', 'permission'].includes(k)) lines.push(`${k}: ${v}`);
   lines.push('---', '', (body || '').trim(), '');
   return lines.join('\n');
 }
@@ -55,7 +56,7 @@ function list(workspace) {
       try {
         const { meta, body } = parse(fs.readFileSync(file, 'utf8'));
         const provider = meta.provider || 'claude';
-        out.push({ file, scope: s.scope, readonly: s.readonly, name: meta.name || f.replace(/\.md$/, ''), description: meta.description || '', provider, model: meta.model || '', effort: meta.effort || '', extra: meta, body });
+        out.push({ file, scope: s.scope, readonly: s.readonly, name: meta.name || f.replace(/\.md$/, ''), description: meta.description || '', provider, model: meta.model || '', effort: meta.effort || '', permission: meta.permission || '', extra: meta, body });
       } catch {}
     }
   }

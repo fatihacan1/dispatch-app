@@ -128,7 +128,7 @@ export function Providers({ focus = "" }: { focus?: string }) {
                 {p.installed && SUPPORTS_USAGE.includes(p.id) && <Button className="secondary" aria-expanded={!!details[p.id]} onClick={() => setDetails(d => ({ ...d, [p.id]: !d[p.id] }))}>{details[p.id] ? "Hide details" : "Show details"}</Button>}
                 {p.installed && <Button className="danger-ghost" title="Uninstall" onClick={() => act(p.id, "uninstall")}>Uninstall</Button>}
               </div>
-              {p.installed && details[p.id] && <UsageDetails u={usage[p.id]} now={now} loading={usageLoading[p.id]} refresh={() => void refreshUsage(p.id)} />}
+              {p.installed && details[p.id] && <UsageDetails u={usage[p.id]} now={now} loading={usageLoading[p.id]} refresh={() => void refreshUsage(p.id)} manual={p.id === "antigravity"} />}
             </div>
           );
         })}
