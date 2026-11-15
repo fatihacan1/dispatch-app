@@ -10,6 +10,7 @@ import { TerminalSettings } from "../components/TerminalSettings";
 import { ProjectTabs } from "./Tabs";
 import { getLang, setLang, type Lang } from "../lib/i18n";
 import { CopyButton } from "../components/CopyButton";
+import { MentionMenu, mentionItems, rankMentions, type MentionItem } from "../components/MentionMenu";
 import { Avatar } from "../components/Avatar";
 import {
   ChatBubbleLeftRightIcon, ChevronDownIcon, Cog6ToothIcon, CpuChipIcon, ServerStackIcon, DocumentIcon, DocumentTextIcon, EnvelopeIcon,
@@ -209,6 +210,28 @@ export function App() {
   const [voiceAnalyser, setVoiceAnalyser] = useState<AnalyserNode | null>(null);
   const dict = useRef<Dictation | null>(null);
   const textArea = useRef<HTMLTextAreaElement>(null);
+  // "@" in the message box: a list of workspace files and folders opens above it; dragging a row from the file tree
+  // drops the same @path. The list is read when the menu first opens and kept for 30 s.
+  const [mention, setMention] = useState<{ start: number; query: string; index: number } | null>(null);
+  const [mentionAll, setMentionAll] = useState<{ items: MentionItem[]; at: number; loading: boolean }>({ items: [], at: 0, loading: false });
+  const mentionList = mention ? rankMentions(mentionAll.items, mention.query) : [];
+  const findMention = (value: string, caret: number) => {
+    const m = /(?:^|\s)@([^\s@]*)$/.exec(value.slice(0, caret));
+    if (!m) { setMention(null); return; }
+    setMention(v => ({ start: caret - m[1].length - 1, query: m[1], index: v && v.query === m[1] ? v.index : 0 }));
+    if (!mentionAll.loading && Date.now() - mentionAll.at > 30000) {
+      setMentionAll(v => ({ ...v, loading: true }));
+      window.army.files.all().then((files: string[]) => setMentionAll({ items: mentionItems(files || []), at: Date.now(), loading: false })).catch(() => setMentionAll(v => ({ ...v, loading: false, at: Date.now() })));
+    }
+  };
+  const insertPath = (path: string, from?: number, to?: number) => {
+    const el = textArea.current; const start = from ?? el?.selectionStart ?? text.length, end = to ?? el?.selectionEnd ?? start;
+    const before = text.slice(0, start), lead = from === undefined && before && !/\s$/.test(before) ? " " : "";
+    const insert = `${lead}@${path} `, next = before + insert + text.slice(end);
+    setText(next); setMention(null);
+    requestAnimationFrame(() => { const t = textArea.current; if (!t) return; t.focus(); const at = start + insert.length; t.setSelectionRange(at, at); });
+  };
+  const pickMention = (item: MentionItem) => { if (!mention) return; insertPath(item.path, mention.start, textArea.current?.selectionStart ?? mention.start + mention.query.length + 1); };
   const vBase = useRef(""), vPos = useRef(0), vPartial = useRef("");
   const showSpoken = () => { const b = vBase.current, p = vPos.current; setText(b.slice(0, p) + joinSpoken(b.slice(0, p), vPartial.current) + b.slice(p)); };
   const startVoice = async () => {
@@ -318,6 +341,8 @@ export function App() {
   const [ide, setIde] = useState(false);
   const [ideMounted, setIdeMounted] = useState(false);
   const [ideW, setIdeW] = useState(640);
+  // Width of the panel while it is only the file tree (no file open): its own size, so the tree resizes too.
+  const [treeW, setTreeW] = useState(260);
   const [ideReq, setIdeReq] = useState<OpenRequest | null>(null);
   // The chat keeps at least 400px: the panel width is clamped to the room there is.
   const workbench = useRef<HTMLDivElement>(null);
@@ -331,7 +356,7 @@ export function App() {
   const [prefs, setPrefs] = useState<{ navIcons?: "mono" | "color"; ideEditorOnFile?: boolean; ideTreeToggle?: boolean }>({});
   const setPref = (patch: Partial<typeof prefs>) => { setPrefs(p => ({ ...p, ...patch })); void window.army.ui?.set(patch).catch(() => {}); };
   const [ideCompact, setIdeCompact] = useState(false);
-  useEffect(() => { void window.army.ui?.get().then((u: any) => { setPrefs({ navIcons: u?.navIcons, ideEditorOnFile: !!u?.ideEditorOnFile, ideTreeToggle: !!u?.ideTreeToggle }); if (u?.ideWidth) setIdeW(u.ideWidth); if (u?.ideOpen) { setIdeMounted(true); setIde(true); } }).catch(() => {}); }, []);
+  useEffect(() => { void window.army.ui?.get().then((u: any) => { setPrefs({ navIcons: u?.navIcons, ideEditorOnFile: !!u?.ideEditorOnFile, ideTreeToggle: !!u?.ideTreeToggle }); if (u?.ideWidth) setIdeW(u.ideWidth); if (u?.ideTreeWidth) setTreeW(u.ideTreeWidth); if (u?.ideOpen) { setIdeMounted(true); setIde(true); } }).catch(() => {}); }, []);
   const toggleIde = (next?: boolean) => setIde(v => { const on = next ?? !v; if (on) setIdeMounted(true); void window.army.ui?.set({ ideOpen: on }); return on; });
   // User terminals (PowerShell in the workspace), shown under the editor.
   const [shells, setShells] = useState<Shell[]>([]);
@@ -347,16 +372,16 @@ export function App() {
   const toggleTerminalRef = useRef(toggleTerminal); toggleTerminalRef.current = toggleTerminal;
   const openInIde = (path: string) => { toggleIde(true); setIdeReq({ path, diff: true, nonce: Date.now() }); };
   const startIdeResize = (e: React.PointerEvent<HTMLDivElement>) => {
-    const startX = e.clientX, start = ideW, box = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
+    const tree = ideCompact, startX = e.clientX, start = tree ? treeW : ideW, box = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
     let last = start;
     // The width goes straight onto the CSS variable while dragging; re-rendering the whole app (chat, office scene) on
     // every mouse move made the handle lag, worst right after the panel opened. React gets the final width on release.
     let frame = 0;
     const move = (ev: PointerEvent) => {
-      last = Math.round(Math.min(box.width * 0.7, Math.max(420, start + ev.clientX - startX)));
-      if (!frame) frame = requestAnimationFrame(() => { frame = 0; workbench.current?.style.setProperty("--ide-w", Math.max(320, Math.min(last, box.width - 407)) + "px"); });
+      last = Math.round(tree ? Math.min(520, Math.max(240, start + ev.clientX - startX)) : Math.min(box.width * 0.7, Math.max(420, start + ev.clientX - startX)));
+      if (!frame) frame = requestAnimationFrame(() => { frame = 0; workbench.current?.style.setProperty("--ide-w", (tree ? last : Math.max(320, Math.min(last, box.width - 407))) + "px"); });
     };
-    const up = () => { cancelAnimationFrame(frame); window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); document.body.classList.remove("resizing", "resizing-x"); setIdeW(last); void window.army.ui?.set({ ideWidth: last }); };
+    const up = () => { cancelAnimationFrame(frame); window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); document.body.classList.remove("resizing", "resizing-x"); if (tree) { setTreeW(last); void window.army.ui?.set({ ideTreeWidth: last }); } else { setIdeW(last); void window.army.ui?.set({ ideWidth: last }); } };
     document.body.classList.add("resizing", "resizing-x"); window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
   };
   const [working, setWorking] = useState<Record<string, boolean>>({});
@@ -411,8 +436,9 @@ export function App() {
     const poll = async () => {
       const entries = await Promise.all(agents.map(async a => [a, await window.army.isWorking(a).catch(() => false)] as const));
       if (!alive) return;
-      setWorking(Object.fromEntries(entries));
-      setWorkSince(prev => Object.fromEntries(entries.filter(([, on]) => on).map(([a]) => [a, prev[a] || Date.now()])));
+      // Same state again must not re-render the whole app (chat, office, sidebar) every 1.2 s: keep the old objects.
+      setWorking(prev => { const next = Object.fromEntries(entries); return Object.keys(next).length === Object.keys(prev).length && entries.every(([a, on]) => prev[a] === on) ? prev : next; });
+      setWorkSince(prev => { const next = Object.fromEntries(entries.filter(([, on]) => on).map(([a]) => [a, prev[a] || Date.now()])); const keys = Object.keys(next); return keys.length === Object.keys(prev).length && keys.every(k => prev[k] === next[k]) ? prev : next; });
     };
     void poll(); const id = window.setInterval(poll, 1200);
     return () => { alive = false; window.clearInterval(id); };
@@ -435,9 +461,11 @@ export function App() {
     const offQuestion = window.army.on("question", ({ name, question }) => setQuestions(v => { const next = { ...v }; if (question) next[name] = question; else delete next[name]; return next; }));
     const offAttention = window.army.on("attention", ({ name, reason }) => setAttention(v => { const next = { ...v }; if (reason) next[name] = reason; else delete next[name]; return next; }));
     const offSendError = window.army.on("send-error", message => setError(String(message)));
-    const offEnlist = window.army.on("enlisted", a => { setAgents(v => [...v, a.name]); setAgentTemplates(v => ({ ...v, [a.name]: a.template })); setEnlistedBy(v => ({ ...v, [a.name]: a.enlistedBy })); });
+    // "Needs you" can miss a clearing event (agent removed, tab switched): check it against the engine now and then.
+    const attentionSync = window.setInterval(() => { window.army.attention.list().then(list => setAttention(v => JSON.stringify(v) === JSON.stringify(list) ? v : list)).catch(() => {}); }, 5000);
+    const offEnlist = window.army.on("enlisted", a => { setAgents(v => v.includes(a.name) ? v : [...v, a.name]); setAgentTemplates(v => ({ ...v, [a.name]: a.template })); setEnlistedBy(v => ({ ...v, [a.name]: a.enlistedBy })); });
     const offAction = window.army.on("agent-action", ({ name, action }) => { if (action === "dismiss") setAgents(v => v.filter(a => a !== name)); else setStopped(v => ({ ...v, [name]: action === "stop" })); });
-    return () => { off(); offEnlist(); offAction(); offSendError(); offAttention(); offQuestion(); };
+    return () => { off(); offEnlist(); offAction(); offSendError(); offAttention(); offQuestion(); window.clearInterval(attentionSync); };
   }, []);
   useEffect(() => { if (agents.includes(selected)) window.army.chats.list(selected).then(list => { setChatList(list); setArchive(null); setActiveChat(list.find(c => c.active)?.id || null); }); }, [selected, agents]);
   useEffect(() => {
@@ -714,12 +742,6 @@ export function App() {
       <ServerApprovals />
       <RailServers open={id => { setServerFocus({ id, n: Date.now() }); setView("servers"); }} />
       <main className="main">
-        {needs > 0 && <div className="attention-bar" role="status">
-          <StatusDot tone="needs" />
-          <strong>{needs} {needs === 1 ? "agent needs" : "agents need"} you</strong>
-          <div className="attention-items">{Object.entries(attention).map(([name, reason]) => <span className="attention-item" key={name}><span>{name} · {reason.toLowerCase()}</span>{reason === "Sign in" ? <Button className="ghost" onClick={() => setView("providers")}>Providers</Button> : reason === "Exited" ? <Button className="ghost" onClick={() => void act(name, "restart")} aria-label={`Restart ${name}`}>Restart</Button> :<Button className="ghost" onClick={() => openTerminal(name)} aria-label={`Open ${name} terminal`}>Open</Button>}</span>)}</div>
-          {trustWaiting.length > 0 && trustLater && <Button className="secondary" onClick={() => setTrustLater(false)}>Trust folder…</Button>}
-        </div>}
         {!onAgentPage && <div className="view" key={showHome ? "home" : view}>
           {showHome ? (
             <div className="page home">
@@ -831,10 +853,10 @@ export function App() {
         </div>}
         {/* The agent page stays mounted while another page is open: coming back does not rebuild the office scene, the terminal or the chat. */}
         {(agentSeen || onAgentPage) && <div className="view" hidden={!onAgentPage}>
-            <div ref={workbench} className={"workbench" + (ide ? " ide-open" : "")} style={{ "--ide-w": (ideCompact ? 260 : Math.max(320, Math.min(ideW, wbWidth - 407))) + "px" } as React.CSSProperties}>
+            <div ref={workbench} className={"workbench" + (ide ? " ide-open" : "")} style={{ "--ide-w": (ideCompact ? treeW : Math.max(320, Math.min(ideW, wbWidth - 407))) + "px" } as React.CSSProperties}>
             <div className="ide-slot" aria-hidden={!ide} inert={!ide ? true : undefined}>{ideMounted && <Suspense fallback={<div className="ide-loading">Loading editor…</div>}><IdePanel workspace={workspace} open={ide} request={ideReq} gitFiles={demo ? DEMO_FILES : gitFiles} terminalOpen={termOpen} toggleTerminal={toggleTerminal} close={() => toggleIde()} editorOnFile={prefs.ideEditorOnFile} treeToggle={prefs.ideTreeToggle} onCompact={setIdeCompact}
               terminal={<Terminals shells={shells} active={shellActive} setActive={setShellActive} onClose={() => setTermOpen(false)} height={termH} setHeight={setTermH} />} /></Suspense>}</div>
-            <div className="ide-resizer" role="separator" aria-orientation="vertical" aria-label="Resize files panel" tabIndex={ide && !ideCompact ? 0 : -1} onPointerDown={e => { if (!ideCompact) startIdeResize(e); }} onKeyDown={e => { if (e.key === "ArrowLeft") setIdeW(w => Math.max(420, w - 32)); if (e.key === "ArrowRight") setIdeW(w => w + 32); }} />
+            <div className="ide-resizer" role="separator" aria-orientation="vertical" aria-label="Resize files panel" tabIndex={ide ? 0 : -1} onPointerDown={startIdeResize} onKeyDown={e => { const d = e.key === "ArrowLeft" ? -32 : e.key === "ArrowRight" ? 32 : 0; if (!d) return; if (ideCompact) setTreeW(w => Math.min(520, Math.max(240, w + d))); else setIdeW(w => Math.max(420, w + d)); }} />
             <div className="chat">
               {office && <><div className="stage" style={{ height: stageH }}><Suspense fallback={null}><Office agents={team.filter(a => a.name !== "boss").map(a => ({ name: a.name, role: a.model }))} messages={messages} working={working} /></Suspense></div>
               <div className="splitter" role="separator" aria-orientation="horizontal" aria-label="Resize office" tabIndex={0} onPointerDown={startResize} onKeyDown={e => { if (e.key === "ArrowUp") setStageH(h => Math.max(160, h - 24)); if (e.key === "ArrowDown") setStageH(h => h + 24); }} /></>}
@@ -884,11 +906,12 @@ export function App() {
               )}
               {archive && <div className="archive-notice"><span>Viewing {archive.title} (read-only)</span><Button className="ghost" onClick={() => setArchive(null)}>Back to current chat</Button></div>}
               <div className={"composer" + (draggingFiles ? " dragging" : "")}
-                onDragOver={e => { if (Array.from(e.dataTransfer.types).includes("Files")) { e.preventDefault(); setDraggingFiles(true); } }}
+                onDragOver={e => { const types = Array.from(e.dataTransfer.types); if (types.includes("application/x-dispatch-path")) { e.preventDefault(); e.dataTransfer.dropEffect = "link"; return; } if (types.includes("Files")) { e.preventDefault(); setDraggingFiles(true); } }}
                 onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDraggingFiles(false); }}
-                onDrop={e => { e.preventDefault(); setDraggingFiles(false); if (!archive && !sending) addFiles(e.dataTransfer.files); }}>
+                onDrop={e => { e.preventDefault(); setDraggingFiles(false); if (archive || sending) return; const path = e.dataTransfer.getData("application/x-dispatch-path"); if (path) insertPath(path); else addFiles(e.dataTransfer.files); }}>
                 {mode === "chat" && !atBottom && <button type="button" className="jump-bottom" aria-label="Scroll to the latest message" title="Latest message" onClick={() => toBottom(true)}><ArrowDownIcon aria-hidden="true" /></button>}
                 {draggingFiles && <div className="drop-hint">Drop files to attach</div>}
+                {mention && !archive && <MentionMenu items={mentionList} index={Math.min(mention.index, Math.max(0, mentionList.length - 1))} query={mention.query} loading={mentionAll.loading} pick={pickMention} hover={i => setMention(v => v && { ...v, index: i })} />}
                 {attachments.length > 0 && <div className="attachment-list">{attachments.map((file, i) => <div className="attachment-chip" key={`${file.name}-${i}`}><AttachmentPreview file={file} /><span title={file.name}>{file.name}</span><button type="button" className="icon-button" aria-label={`Remove ${file.name}`} onClick={() => setAttachments(v => v.filter((_, index) => index !== i))}><XMarkIcon /></button></div>)}</div>}
                 {links.length > 0 && <div className="link-list">{links.map(u => <a key={u} className="link-chip" href={u} target="_blank" rel="noreferrer" title={u}><LinkIcon aria-hidden="true" /><span>{linkLabel(u)}</span></a>)}</div>}
                 <div className={"composer-input" + (links.length ? " has-links" : "")}>
@@ -896,8 +919,18 @@ export function App() {
                 <textarea ref={textArea} onScroll={e => { if (mirror.current) mirror.current.scrollTop = e.currentTarget.scrollTop; }}
                   aria-label="Message" disabled={!!archive || sending} value={text} placeholder={voice === "on" ? "Listening… speak, then Enter to send" : `Message ${selected}…`}
                   onPaste={e => { if (e.clipboardData.files.length) { e.preventDefault(); addFiles(e.clipboardData.files); } }}
-                  onChange={e => { if (dict.current) { vBase.current = e.target.value; vPos.current = e.target.selectionStart; vPartial.current = ""; } setText(e.target.value); }}
-                  onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); } if (e.key === "Escape" && dict.current) { e.preventDefault(); void stopVoice(); } }}
+                  onChange={e => { if (dict.current) { vBase.current = e.target.value; vPos.current = e.target.selectionStart; vPartial.current = ""; } setText(e.target.value); findMention(e.target.value, e.target.selectionStart); }}
+                  onSelect={e => { if (mention) findMention(e.currentTarget.value, e.currentTarget.selectionStart); }}
+                  onBlur={() => setMention(null)}
+                  onKeyDown={e => {
+                    if (mention) {
+                      const n = mentionList.length;
+                      if (e.key === "ArrowDown" && n) { e.preventDefault(); setMention(v => v && { ...v, index: (Math.min(v.index, n - 1) + 1) % n }); return; }
+                      if (e.key === "ArrowUp" && n) { e.preventDefault(); setMention(v => v && { ...v, index: (Math.min(v.index, n - 1) - 1 + n) % n }); return; }
+                      if ((e.key === "Enter" || e.key === "Tab") && n && !e.shiftKey) { e.preventDefault(); pickMention(mentionList[Math.min(mention.index, n - 1)]); return; }
+                      if (e.key === "Escape") { e.preventDefault(); setMention(null); return; }
+                    }
+                    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); } if (e.key === "Escape" && dict.current) { e.preventDefault(); void stopVoice(); } }}
                 />
                 </div>
                 <div className="composer-bar">

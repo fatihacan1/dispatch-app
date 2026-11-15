@@ -123,7 +123,10 @@ function parseAgyStep(type, payload) {
   else if (text) { out.turn = false; out.final = text.trim(); }
   return out;
 }
-function newAgyDb(cwd, since) {
+// Several Antigravity agents started together in one folder each make a new conversation there: the folder alone
+// matched the first agent to the second one's conversation (one showed idle while the other worked). The first
+// message carries "You are <name>.", so a conversation goes to the agent it names; one without any name to any.
+function newAgyDb(cwd, since, name) {
   const uri = 'file:///' + path.resolve(cwd).replace(/\\/g, '/');
   let names = []; try { names = fs.readdirSync(agyDir()).filter(n => /^[\w-]+\.db$/.test(n)); } catch { return null; }
   for (const n of names) {
@@ -131,17 +134,24 @@ function newAgyDb(cwd, since) {
     try {
       if (fs.statSync(full).birthtimeMs < since - 2000) continue;
       const db = openAgy(full); const meta = db.prepare("select data from trajectory_metadata_blob where id = 'main'").get(); db.close();
-      if (meta && Buffer.from(meta.data).toString('latin1').toLowerCase().includes(uri.toLowerCase())) { claimed.add(full); return { file: full, id: n.slice(0, -3) }; }
+      if (!meta || !Buffer.from(meta.data).toString('latin1').toLowerCase().includes(uri.toLowerCase())) continue;
+      if (name) {
+        const db2 = openAgy(full); let first; try { first = db2.prepare('select step_payload from steps where step_type = 14 order by idx limit 1').get(); } finally { db2.close(); }
+        if (!first?.step_payload) continue; // no message yet: decide on a later tick
+        const text = Buffer.from(first.step_payload).toString('latin1');
+        if (/You are [\w-]+\. You report to/.test(text) && !text.includes(`You are ${name}. You report to`)) continue;
+      }
+      claimed.add(full); return { file: full, id: n.slice(0, -3) };
     } catch {}
   }
   return null;
 }
 function openAgy(file) { const { DatabaseSync } = require('node:sqlite'); return new DatabaseSync(file, { readOnly: true }); }
-function watchAgy({ cwd, session, onEvent, onSession }) {
+function watchAgy({ cwd, session, name, onEvent, onSession }) {
   const since = Date.now(); let file = session ? path.join(agyDir(), `${session}.db`) : null, last = null, stopped = false, endedAt = -1;
   const tick = () => {
     if (stopped) return;
-    if (!file) { const hit = newAgyDb(cwd, since); if (!hit) return; file = hit.file; last = -1; onSession?.(hit.id); }
+    if (!file) { const hit = newAgyDb(cwd, since, name); if (!hit) return; file = hit.file; last = -1; onSession?.(hit.id); }
     if (!fs.existsSync(file)) return;
     const db = openAgy(file);
     try {
@@ -165,8 +175,8 @@ function watchAgy({ cwd, session, onEvent, onSession }) {
 }
 
 /** Follow one agent's transcript. onEvent({ steps, turn }) fires for new lines only; onSession(id) when a new Codex session is found. Returns stop(). */
-function watch({ provider, cwd, session, onEvent, onSession }) {
-  if (provider === 'antigravity') return watchAgy({ cwd, session, onEvent, onSession });
+function watch({ provider, cwd, session, name, onEvent, onSession }) {
+  if (provider === 'antigravity') return watchAgy({ cwd, session, name, onEvent, onSession });
   if (!['claude', 'codex'].includes(provider) || (provider === 'claude' && !session)) return () => {};
   const parse = provider === 'claude' ? parseClaude : parseCodex;
   const since = Date.now();

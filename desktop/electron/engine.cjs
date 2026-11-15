@@ -71,7 +71,7 @@ function emitMessage({ from, to, text }) {
 }
 // Agents about to start in the same batch (a team, a reset), so the first ones already know who else is on board.
 let rosterHint = [];
-function switchChat(name, id) { const saved = operation?.agents.find(a => a.name === name); if (!saved) throw new Error('Agent not found'); if (name !== 'boss' && id) throw new Error('Only Boss chats can be resumed'); const target = id ? readChat(name, id) : null; if (id && !target) throw new Error('Chat not found'); if (target && !demo && (!target.sessionId || !['claude','codex'].includes(saved.provider))) throw new Error(`Cannot resume this ${saved.provider} chat: provider session ID or resume support is unavailable.`); const old = processes.get(name); const queued = old ? [...(old.inFlight ? [old.inFlight] : []), ...old.queue] : []; if (old) { clearTimeout(old.timer); processes.delete(name); old.terminal.kill(); } const chat = target || createChat(saved); if (name !== 'boss') { for (const previous of chats(name)) if (previous.id !== chat.id) fs.unlinkSync(chatPath(name, previous.id)); } saved.chatId = chat.id; saved.sessionId = chat.sessionId; saved.stopped = false; saveOperation(); const agent = startAgent(name, saved.template, saved.enlistedBy, saved, !!target); for (const item of queued) if (!agent.queue.some(x => x.file === item.file)) agent.queue.push(item); agent.queue = agent.queue.map(item => ({ ...item, previous: true })); return chat; }
+function switchChat(name, id) { const saved = operation?.agents.find(a => a.name === name); if (!saved) throw new Error('Agent not found'); if (name !== 'boss' && id) throw new Error('Only Boss chats can be resumed'); const target = id ? readChat(name, id) : null; if (id && !target) throw new Error('Chat not found'); if (target && !demo && (!target.sessionId || !['claude','codex'].includes(saved.provider))) throw new Error(`Cannot resume this ${saved.provider} chat: provider session ID or resume support is unavailable.`); const old = processes.get(name); const queued = old ? [...(old.inFlight ? [old.inFlight] : []), ...old.queue] : []; if (old) { clearTimeout(old.timer); setAttention(name, old, null); processes.delete(name); old.terminal.kill(); } const chat = target || createChat(saved); if (name !== 'boss') { for (const previous of chats(name)) if (previous.id !== chat.id) fs.unlinkSync(chatPath(name, previous.id)); } saved.chatId = chat.id; saved.sessionId = chat.sessionId; saved.stopped = false; saveOperation(); const agent = startAgent(name, saved.template, saved.enlistedBy, saved, !!target); for (const item of queued) if (!agent.queue.some(x => x.file === item.file)) agent.queue.push(item); agent.queue = agent.queue.map(item => ({ ...item, previous: true })); return chat; }
 const processes = new Map();
 const pendingAsks = new Set();
 const trustFile = () => path.join(workspace, '.dispatch', 'trust.json');
@@ -161,6 +161,13 @@ function resolveCommand(cmd) {
   throw new Error(`"${cmd}" was not found. Install it or set its path in Settings.`);
 }
 function notify(channel, value) { host.send(channel, value); }
+// Terminal text goes to the window in batches (every 30 ms), not one IPC message per chunk: many busy agents sent
+// hundreds a second and the window stuttered.
+const termBatch = new Map(); let termTimer = null;
+function terminalOut(name, data) {
+  termBatch.set(name, (termBatch.get(name) || '') + data);
+  if (!termTimer) termTimer = setTimeout(() => { termTimer = null; const items = [...termBatch]; termBatch.clear(); for (const [n, d] of items) notify('terminal', { name: n, data: d }); }, 30);
+}
 const bossProviderFile = () => path.join(workspace, '.dispatch', 'boss-providers.json');
 function bossProviders() { try { const data = JSON.parse(fs.readFileSync(bossProviderFile(), 'utf8')); return data && typeof data === 'object' && !Array.isArray(data) ? data : {}; } catch { return {}; } }
 const providerEnabled = (id) => bossProviders()[id]?.enabled !== false;
@@ -316,6 +323,15 @@ function sendMessage(to, text, from = 'you', replyTo = '') {
 }
 function agentAction(name, action) {
   const saved = operation?.agents.find(a => a.name === name);
+  // Already gone from the roster (removed elsewhere) but still on the user's screen: stopping or dismissing it just
+  // clears what is left (a stray process, a "needs you" entry) and takes it off the screen, instead of an error.
+  if (!saved && name !== 'boss' && (action === 'dismiss' || action === 'stop')) {
+    const stray = processes.get(name);
+    if (stray) { clearTimeout(stray.timer); setAttention(name, stray, null); processes.delete(name); try { stray.terminal.kill(); } catch {} }
+    exited.delete(name); notify('attention', { name, reason: null });
+    notify('agent-action', { name, action: 'dismiss' });
+    return true;
+  }
   if (!saved) throw new Error('Agent not found');
   if (action === 'dismiss' && name === 'boss') throw new Error('The boss cannot be dismissed');
   const agent = processes.get(name);
@@ -394,7 +410,7 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
   const terminal = demo ? createDemoTerminal(name, workspace, bin()) : pty.spawn(resolved.file, [...resolved.args, ...args], { name: 'xterm-256color', cols: 100, rows: 30, cwd: workspace, env: { ...process.env, ...mcpConfig.env, ...(memoryOn && provider === 'claude' && mem.settings().disableProviderMemory ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' } : {}), DISPATCH_INDEX_INFO: codeIndexInfo || '', DISPATCH_AGENT: name, MYARMY_AGENT: name, DISPATCH_HOME: path.join(workspace, '.dispatch'), MYARMY_HOME: path.join(workspace, '.dispatch'), PATH: `${path.dirname(bin())}${path.delimiter}${process.env.PATH}` } });
   const agent = { terminal, queue: [], output: '', lastOutput: Date.now(), atPrompt: false, template, session, enlistedBy, command, args, prompt, tracksTurns: direct }; processes.set(name, agent);
   // Transcript: live thinking, tool steps and interim text for the chat, the real turn state, and the reply itself.
-  if (!demo) agent.stopActivity = activity.watch({ provider, cwd: workspace, session, onSession: id => { if (saved && !saved.sessionId) { saved.sessionId = id; agent.session = id; saveOperation(); } }, onEvent: e => {
+  if (!demo) agent.stopActivity = activity.watch({ provider, cwd: workspace, session, name, onSession: id => { if (saved && !saved.sessionId) { saved.sessionId = id; agent.session = id; saveOperation(); } }, onEvent: e => {
     if (processes.get(name) !== agent) return;
     agent.eventAt = Date.now();
     if (e.turn === true) { agent.turn = true; agent.turnKnown = true; agent.toldYou = false; agent.turnAt = Date.now(); agent.lastText = ''; }
@@ -436,12 +452,18 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
     }
   } catch (e) { if (e.code !== 'ENOENT') throw e; }
   fs.writeFileSync(path.join(workspace, '.dispatch', 'agents.json'), JSON.stringify([...processes.keys()]));
-  terminal.onData(data => { agent.sawOutput = true; agent.output = (agent.output + data).slice(-200000);
+  // Busy TUIs (spinners) send dozens of chunks a second per agent. Trimming the 200 KB buffer on every chunk copied
+  // it each time and froze the main process (window could not even be moved) with many agents: trim only past 300 KB.
+  terminal.onData(data => { agent.sawOutput = true; if (provider === 'antigravity' && /[⠁-⣿]/.test(data)) agent.spinAt = Date.now(); agent.output += data; if (agent.output.length > 300000) agent.output = agent.output.slice(-200000);
     agent.promptBuffer = ((agent.promptBuffer || '') + data).slice(-5000);
     // A choice the CLI wants that has one safe answer (Codex: keep the model when the limit is near).
     const nudge = nudgeAnswer(provider, agent.promptBuffer);
     if (nudge && Date.now() - (agent.nudgedAt || 0) > 5000) { agent.nudgedAt = Date.now(); setTimeout(() => { if (processes.get(name) !== agent) return; agent.promptBuffer = ''; try { terminal.write(nudge); } catch {} }, 700); }
-    const detected = attentionFrom(agent.promptBuffer);
+    let detected = attentionFrom(agent.promptBuffer);
+    // "Sign in" text often scrolls by in an agent's own work (a header with a Sign in button, auth code). Once the agent
+    // has worked, only the CLI's own logged-out messages count; a real logout makes Antigravity quit (see onExit).
+    if (!agent.hadTurn && isWorking(name)) agent.hadTurn = true;
+    if (detected === 'Sign in' && agent.hadTurn && !/run \/login|not (?:logged|signed) in|notlogin|waiting for authentication/.test(normalize(agent.promptBuffer.slice(-1500)))) detected = null;
     // Out of quota: the agent will not answer anyone. Say so to whoever gave it work, once, instead of letting them wait.
     if (detected === 'Limit reached' && !agent.limitTold) {
       agent.limitTold = true;
@@ -470,7 +492,7 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
         else if (!agent.trustTimer) agent.trustTimer = setTimeout(() => { agent.trustTimer = null; if (processes.get(name) === agent && agent.held && !agent.awaitingAnswer) setAttention(name, agent, 'Trust folder'); }, 3000);
       } else { setAttention(name, agent, detected); if (detected === 'Trust folder' && trusted()) answerTrust(agent); }
     }
-    agent.lastOutput = Date.now(); const codexState = [...data.matchAll(/\x1b\]7501;state=(idle|working|done):app=codex/g)].at(-1); if (codexState) { agent.codexStateKnown = true; agent.atPrompt = codexState[1] !== 'working'; if (codexState[1] === 'working') agent.turnAt = Date.now(); } else if (provider !== 'codex') agent.atPrompt = /(?:^|[\r\n])\s*[>\u276f$]\s*$/.test(agent.output.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')); if (agent.queue.length && (provider !== 'codex' || agent.atPrompt)) deliver(agent); notify('terminal', { name, data }); });
+    agent.lastOutput = Date.now(); const codexState = [...data.matchAll(/\x1b\]7501;state=(idle|working|done):app=codex/g)].at(-1); if (codexState) { agent.codexStateKnown = true; agent.atPrompt = codexState[1] !== 'working'; if (codexState[1] === 'working') agent.turnAt = Date.now(); } else if (provider !== 'codex') agent.atPrompt = /(?:^|[\r\n])\s*[>\u276f$]\s*$/.test(agent.output.slice(-4000).replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')); if (agent.queue.length && (provider !== 'codex' || agent.atPrompt)) deliver(agent); terminalOut(name, data); });
   terminal.onExit(() => { agent.stopActivity?.(); clearQuestion(name, agent); if (processes.get(name) === agent) {
     processes.delete(name); clearTimeout(agent.timer); setAttention(name, agent, null); notify('exit', name);
     // Died on its own: mark it stopped (card shows it) and tell whoever enlisted it.
@@ -944,7 +966,7 @@ ipcMain.handle('tools:install', (_e, id = 'comfyui', mode = 'install') => {
   processes.get(name)?.terminal.kill(); processes.delete(name);
   const terminal = pty.spawn('powershell.exe', ['-NoProfile', '-Command', script], { name: 'xterm-256color', cols: 100, rows: 24, cwd: os.homedir(), env: process.env });
   const entry = { terminal, queue: [], output: '' }; processes.set(name, entry);
-  terminal.onData(data => { entry.output = (entry.output + data).slice(-200000); notify('terminal', { name, data }); });
+  terminal.onData(data => { entry.output += data; if (entry.output.length > 300000) entry.output = entry.output.slice(-200000); terminalOut(name, data); });
   terminal.onExit(({ exitCode }) => { watchTools(); notify('tool:done', { id, exitCode, name }); });
   return name;
 });
@@ -977,7 +999,7 @@ ipcMain.handle('providers:action', (_e, id, kind) => {
   const spec = providersLib.actionSpec(resolveCommand, id, kind);
   const terminal = pty.spawn(spec.file, spec.args, { name: 'xterm-256color', cols: 100, rows: 24, cwd: os.homedir(), env: process.env });
   const entry = { terminal, queue: [], output: '' }; processes.set(name, entry);
-  terminal.onData(data => { entry.output = (entry.output + data).slice(-200000); notify('terminal', { name, data }); });
+  terminal.onData(data => { entry.output += data; if (entry.output.length > 300000) entry.output = entry.output.slice(-200000); terminalOut(name, data); });
   terminal.onExit(({ exitCode }) => { providerChecks.delete(id); notify('provider:done', { id, kind, exitCode, name }); });
   return name;
 });
@@ -1027,7 +1049,7 @@ ipcMain.handle('shell:open', () => {
   catch (e) { throw new Error(`Could not start ${spec.file}: ${e.message}. Pick another shell in Settings > Terminal.`); }
   const entry = { terminal, output: '', cwd, title: `Terminal ${shellSeq}`, exited: false };
   shells.set(name, entry);
-  terminal.onData(data => { entry.output = (entry.output + data).slice(-400000); notify('terminal', { name, data }); });
+  terminal.onData(data => { entry.output += data; if (entry.output.length > 600000) entry.output = entry.output.slice(-400000); terminalOut(name, data); });
   terminal.onExit(() => { entry.exited = true; notify('shells-changed', null); });
   notify('shells-changed', null);
   return name;
@@ -1062,7 +1084,7 @@ ipcMain.handle('servers:connect', (_e, id) => {
   const entry = { terminal, output: '', cwd: `${s.user ? s.user + '@' : ''}${s.host}`, title: s.name, exited: false, server: s.id };
   shells.set(name, entry);
   const answer = serversLib.answerer(serverPassword(s.id), text => terminal.write(text), () => {});
-  terminal.onData(data => { entry.output = (entry.output + data).slice(-400000); notify('terminal', { name, data }); answer(data); });
+  terminal.onData(data => { entry.output += data; if (entry.output.length > 600000) entry.output = entry.output.slice(-400000); terminalOut(name, data); answer(data); });
   terminal.onExit(() => { entry.exited = true; notify('shells-changed', null); });
   notify('shells-changed', null);
   return name;
@@ -1275,7 +1297,10 @@ ipcMain.handle('agent:working', (_e, name) => isWorking(name));
 function isWorking(name) { const a = processes.get(name); if (!a) return false; if (a.submitting || a.inFlight) return true; const p = a.template?.provider; if (p === 'claude') return !!a.turn; if (p === 'codex') return !!a.codexStateKnown && !a.atPrompt;
   // Antigravity: its transcript says when a turn starts and ends; the prompt-character guess stays on after it finishes.
   // Stopped with Esc, nothing ends the turn in the transcript: back at the prompt and quiet for 20 s means done.
-  if (p === 'antigravity' && a.turnKnown) return !!a.turn && !(a.atPrompt && Date.now() - Math.max(a.eventAt || 0, a.lastOutput) > 20000); return !!a.ready && !a.atPrompt; }
+  // Its spinner (braille dots: "Running command", "Thought for 8m") on screen in the last 3 s also means working: long
+  // thinking writes nothing to the transcript, and its prompt box is always drawn, so the prompt guess said idle.
+  if (p === 'antigravity') { if (Date.now() - (a.spinAt || 0) < 3000) return true; if (a.turnKnown) return !!a.turn && !(a.atPrompt && Date.now() - Math.max(a.eventAt || 0, a.lastOutput) > 20000); }
+  return !!a.ready && !a.atPrompt; }
 ipcMain.handle('boss:change', (_e, template, source) => {
   const saved = operation?.agents.find(a => a.name === 'boss');
   if (!saved) throw new Error('Boss not found');

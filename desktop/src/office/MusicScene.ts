@@ -1,5 +1,5 @@
 // Music scene: a now-playing screen (cover, title, artist, progress, controls) for whatever Windows is playing,
-// with a visualizer fed by the system sound. Same contract as the other scenes; agents show as a small working line.
+// with a visualizer fed by the system sound. Same contract as the other scenes; agents are not shown here.
 import type { OfficeScene, SceneOptions } from "./OfficeScene";
 
 type Track = { none?: boolean; unsupported?: boolean; error?: string; app?: string; title?: string; artist?: string; album?: string; status?: string; position?: number; duration?: number; updated?: number; cover?: string; track?: boolean; canNext?: boolean; canPrev?: boolean };
@@ -45,12 +45,10 @@ export function createOfficeScene(container: HTMLElement, _options?: SceneOption
   const controls = el("div", "music-controls", info);
   const btn = (name: keyof typeof ICON, label: string, cmd: string) => { const b = el("button", "music-btn", controls); b.type = "button"; b.innerHTML = ICON[name]; b.setAttribute("aria-label", label); b.title = label; b.onclick = () => void army()?.media?.control(cmd); return b; };
   const prev = btn("prev", "Previous", "prev"); const play = btn("play", "Play", "toggle"); play.classList.add("main"); const next = btn("next", "Next", "next");
-  const crew = el("p", "music-crew", root);
   const canvas = el("canvas", "music-viz", root); canvas.setAttribute("aria-hidden", "true");
 
   let track: Track = {}, color: [number, number, number] = [140, 180, 255], raf = 0, alive = true;
   let analyser: AnalyserNode | null = null, audio: AudioContext | null = null, stream: MediaStream | null = null;
-  const working = new Map<string, boolean>();
 
   const position = () => {
     if (!track.duration) return 0;
@@ -124,10 +122,9 @@ export function createOfficeScene(container: HTMLElement, _options?: SceneOption
   };
   raf = requestAnimationFrame(frame);
 
-  const showCrew = () => { const on = [...working].filter(([, v]) => v).map(([k]) => k); crew.textContent = on.length ? `Working: ${on.join(", ")}` : ""; };
   return {
     setBoss() {}, setAgents() {}, visit() {},
-    setWorking(name, on) { working.set(name, on); showCrew(); },
+    setWorking() {},
     destroy() {
       alive = false; cancelAnimationFrame(raf); off?.(); void army()?.media?.watch(false);
       stream?.getTracks().forEach(t => t.stop()); void audio?.close().catch(() => {}); root.remove();

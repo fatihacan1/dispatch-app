@@ -6,7 +6,8 @@ const path = require('node:path');
 const { spawn, execFile } = require('node:child_process');
 
 const TTL = 60000;
-const SUPPORTED = ['claude', 'codex', 'antigravity'];
+// Antigravity is left out: agy has no way to read its limits without a model turn (see the note below).
+const SUPPORTED = ['claude', 'codex'];
 const cache = new Map(); // provider -> { at, value, pending }
 // Last good reading per provider, kept on disk so a failed first fetch after a restart (429, expired token) still shows the last numbers.
 let cacheFile = null, saved = null;
@@ -159,20 +160,12 @@ function parseAntigravity(json) {
   }
   return { provider: 'antigravity', windows, source: 'agy /usage' };
 }
-function fetchAntigravity(resolveCommand) {
-  let spec; try { spec = resolveCommand('agy'); } catch { return Promise.resolve({ error: 'Antigravity is not installed.', errorCode: 'not-installed' }); }
-  return new Promise(resolve => {
-    execFile(spec.file, [...spec.args, '-p', '/usage', '--output-format', 'json'], { timeout: 25000, windowsHide: true, maxBuffer: 4e6, env: { ...process.env, NO_COLOR: '1', CI: '1' } }, (err, stdout) => {
-      let json; try { json = JSON.parse(stdout); } catch {}
-      if (!json) return resolve({ error: err ? `agy /usage failed: ${err.killed ? 'timed out' : err.message.split('\n')[0]}` : 'agy /usage returned no JSON.' });
-      const out = parseAntigravity(json);
-      resolve(out.windows.length ? out : { error: 'Antigravity reported no quota buckets (sign in with agy first).', errorCode: 'unavailable' });
-    });
-  });
-}
+// agy 1.5.x has no /usage command in print mode: `agy -p /usage` sent '/usage' to the model as a prompt, so every
+// refresh (every 3 minutes) spent a real turn of the user's quota. Dispatch no longer asks; parseAntigravity stays for
+// a future CLI that can report its limits for free.
 
 // --- public API ---
-const FETCH = { claude: () => fetchClaude(), codex: r => fetchCodex(r), antigravity: r => fetchAntigravity(r) };
+const FETCH = { claude: () => fetchClaude(), codex: r => fetchCodex(r) };
 
 async function load(provider, resolveCommand) {
   let r;

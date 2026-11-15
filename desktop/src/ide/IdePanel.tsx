@@ -267,6 +267,8 @@ export function IdePanel({ workspace, open, request, gitFiles, terminal, termina
     return <React.Fragment key={e.path}>
       <button type="button" data-dir={e.dir ? e.path : e.path.includes("/") ? e.path.slice(0, e.path.lastIndexOf("/")) : ""} className={"ide-row" + (e.dir && dropDir === e.path ? " drop" : "") + (active === e.path ? " selected" : "") + (e.ignored ? " ignored" : "") + (st ? " git-" + st : "")} style={{ paddingLeft: 8 + depth * 12 }}
         onClick={() => e.dir ? toggleDir(e.path) : void openFile(e.path)} title={e.path}
+        // Drag a row onto the message box to put "@path" into the message.
+        draggable onDragStart={ev => { const p = e.dir ? e.path + "/" : e.path; ev.dataTransfer.setData("application/x-dispatch-path", p); ev.dataTransfer.setData("text/plain", "@" + p); ev.dataTransfer.effectAllowed = "copyLink"; }}
         onContextMenu={async ev => {
           ev.preventDefault(); ev.stopPropagation();
           const r = await window.army.files.context?.(e.path, !!e.dir).catch(() => null);
@@ -321,7 +323,7 @@ export function IdePanel({ workspace, open, request, gitFiles, terminal, termina
         <button type="button" className="icon-button" title="Quick open (Ctrl P)" aria-label="Quick open" onClick={async () => { setQuick({ query: "", files: [], index: 0 }); const files = await window.army.files.all().catch(() => []); setQuick(q => q ? { ...q, files } : q); }}><MagnifyingGlassIcon /></button>
         <button type="button" className="icon-button" title="Refresh" aria-label="Refresh files" onClick={() => { for (const d of Object.keys(children)) void loadDir(d); }}><ArrowPathIcon /></button>
         {treeToggle && !compact && <button type="button" className="icon-button" title="Hide the file tree" aria-label="Hide the file tree" onClick={() => setTreeHidden(true)}><ChevronDoubleLeftIcon /></button>}
-        {compact && closeButton}
+        {compact && close && <button type="button" className="icon-button ide-toggle on" aria-pressed="true" aria-label="Hide files" title="Hide files (Ctrl E)" onClick={close}><CodeBracketIcon aria-hidden="true" /></button>}
       </div>
       {side === "files" ? <div className={"ide-tree" + (dropDir === "" ? " drop" : "")} role="tree" aria-label={rootName} data-dir="" onDragOver={onTreeDragOver} onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropDir(null); }} onDrop={e => void onTreeDrop(e)}>
         <div className="ide-root" title={workspace}>{rootName}</div>

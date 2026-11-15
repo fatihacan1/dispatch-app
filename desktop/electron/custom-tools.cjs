@@ -65,12 +65,17 @@ function create({ dir, spawn, platform = process.platform }) {
     const entry = { terminal, output: '', log: header, startedAt: new Date().toISOString(), exitCode: null };
     running.set(id, entry);
     let flush = null;
-    const save = () => { flush = null; try { fs.writeFileSync(logFile(id), entry.log); } catch {} };
+    const save = () => { flush = null; fs.writeFile(logFile(id), entry.log, () => {}); };
+    // Chatty tools (a browser bridge with progress output) send many chunks a second. Running regexes over the whole
+    // 200 KB log and sending one message per chunk blocked the main process and froze the window: strip only the
+    // new text, trim with slack, write the log at most every 0.5 s (async) and send terminal text in 50 ms batches.
+    let pending = '', sendTimer = null;
+    const sendOut = () => { sendTimer = null; const d = pending; pending = ''; if (d) emit('terminal', { name: termName(id), data: d }); };
     terminal.onData(data => {
-      entry.output = (entry.output + data).slice(-LOG_MAX);
-      entry.log = (entry.log + strip(data)).replace(/\n{3,}/g, '\n\n').slice(-LOG_MAX);
+      entry.output += data; if (entry.output.length > LOG_MAX * 1.5) entry.output = entry.output.slice(-LOG_MAX);
+      entry.log += strip(data).replace(/\n{3,}/g, '\n\n'); if (entry.log.length > LOG_MAX * 1.5) entry.log = entry.log.slice(-LOG_MAX);
       if (!flush) flush = setTimeout(save, 500);
-      emit('terminal', { name: termName(id), data });
+      pending += data; if (!sendTimer) sendTimer = setTimeout(sendOut, 50);
     });
     terminal.onExit(({ exitCode }) => { entry.exitCode = exitCode ?? 0; entry.log += `\n[Dispatch] stopped (exit code ${entry.exitCode})\n`; clearTimeout(flush); save(); emit('custom-tools-changed', null); });
     save(); emit('custom-tools-changed', null);

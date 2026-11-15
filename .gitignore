@@ -12,3 +12,4 @@ dist/
 .DS_Store
 desktop/e2e/screens/
 ai-api.md
+.playwright-mcp/

@@ -76,9 +76,9 @@ export function Office({ boss = "boss", agents, messages, working }: Props) {
   return (
     <div className="office-wrap">
       <div className="office" ref={host} aria-label="Office view" role="img" />
+      {/* One quiet pill with the current scene; pointing at it (or tabbing in) slides the other scenes out. */}
       <div className="office-bar" role="group" aria-label="Office scene">
-        {SCENES.map(s => <button key={s.id} type="button" className={"office-seg" + (s.id === kind ? " on" : "")} aria-pressed={s.id === kind} onClick={() => pick(s.id)}>{s.label}</button>)}
-        <button type="button" className="office-seg office-help" aria-label="Show camera controls" title="Camera controls" onClick={() => { setHintFading(false); setHint(h => !h); }}>?</button>
+        {SCENES.map(s => <button key={s.id} type="button" className={"office-seg" + (s.id === kind ? " on" : "")} aria-pressed={s.id === kind} title={s.id === kind ? s.hint : undefined} onClick={() => pick(s.id)}>{s.label}</button>)}
       </div>
       {hint && current && (
         <div className={"office-hint" + (hintFading ? " fading" : "")} role="status">
