@@ -181,6 +181,8 @@ export function App() {
   const [needsFolder, setNeedsFolder] = useState(false);
   const [tabEnter, setTabEnter] = useState(0);
   useEffect(() => (window as any).army.on("tab-shown", () => setTabEnter(n => n + 1)), []);
+  const [macFs, setMacFs] = useState(false);
+  useEffect(() => (window as any).army.on("window-fullscreen", (v: boolean) => setMacFs(!!v)), []);
   const [demo, setDemo] = useState(false);
   const [mock, setMock] = useState(false);
   const [agents, setAgents] = useState<string[]>([]);
@@ -732,7 +734,7 @@ export function App() {
     </div>
   );
   return (
-    <div className={"app " + (navigator.userAgent.includes("Mac") ? "os-mac" : "os-win") + (showSidebar && sidebar ? " with-sidebar" : "")}>
+    <div className={"app " + (navigator.userAgent.includes("Mac") ? "os-mac" : "os-win") + (macFs ? " mac-fs" : "") + (showSidebar && sidebar ? " with-sidebar" : "")}>
       {tabEnter > 0 && <span key={tabEnter} className="tab-flash" aria-hidden="true" />}
       <header className="topbar">
         <div className="brand"><img src="./logo-dispatch.png" alt="" /><strong>Dispatch</strong></div>

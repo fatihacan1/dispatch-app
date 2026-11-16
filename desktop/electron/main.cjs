@@ -15,6 +15,13 @@ const createEngine = require('./engine.cjs');
 for (const key of ['CLAUDECODE', 'CLAUDE_PID', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_MESSAGING_TOKEN', 'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_SSE_PORT']) delete process.env[key];
 app.setName('Dispatch');
 if (process.platform === 'win32') app.setAppUserModelId('com.dispatch.desktop');
+if (process.platform === 'darwin') {
+  try {
+    const shellPath = require('node:child_process').execFileSync(process.env.SHELL || '/bin/zsh', ['-lc', 'printf "%s" "$PATH"'], { timeout: 1500, encoding: 'utf8' }).trim();
+    const extra = [shellPath, process.env.PATH, '/opt/homebrew/bin', '/opt/homebrew/sbin', '/usr/local/bin', path.join(os.homedir(), '.local', 'bin')].filter(Boolean).join(':').split(':');
+    process.env.PATH = [...new Set(extra.filter(Boolean))].join(':');
+  } catch {}
+}
 
 const MAX_TABS = 5;
 const globalDir = () => path.join(process.env.DISPATCH_HOME || os.homedir(), '.dispatch');
@@ -94,6 +101,7 @@ function createTab(folder, { defer = false } = {}) {
   tab.engine.init(folder);
   tabs.push(tab);
   win.contentView.addChildView(view);
+  view.webContents.on('did-finish-load', () => { if (win && !win.isDestroyed()) sendTo(tab, 'window-fullscreen', win.isFullScreen()); });
   view.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:\/\//.test(url)) void shell.openExternal(url); return { action: 'deny' }; });
   // The preload asks remote:target synchronously on load: attach before the first page starts loading.
   if (tabs.length === 1) remote.attach({ webContents: view.webContents }, globalDir(), require('electron'));
@@ -256,7 +264,17 @@ ipcMain.on('overlay:close', () => { overlay?.hide(); overlayOn = false; });
 // ── Tray ──
 function createTray() {
   const { Tray, BrowserWindow, screen } = require('electron');
-  tray = new Tray(nativeImage.createFromPath(path.join(__dirname, '..', app.isPackaged ? 'dist' : 'public', 'tray.png')));
+  const trayFile = path.join(__dirname, '..', app.isPackaged ? 'dist' : 'public', 'tray.png');
+  let trayImg = nativeImage.createFromPath(trayFile);
+  if (process.platform === 'darwin') {
+    try {
+      const retina = nativeImage.createEmpty();
+      retina.addRepresentation({ scaleFactor: 2, width: 16, height: 16, buffer: fs.readFileSync(trayFile) });
+      if (!retina.isEmpty()) trayImg = retina;
+      else trayImg = trayImg.resize({ width: 18, height: 18 });
+    } catch { trayImg = trayImg.resize({ width: 18, height: 18 }); }
+  }
+  tray = new Tray(trayImg);
   tray.setToolTip('Dispatch');
   // Custom right-click menu: one hidden, reused window (opens instantly), placed next to the tray icon.
   trayWin = new BrowserWindow({ width: 280, height: 300, show: false, frame: false, transparent: true, resizable: false, movable: false, minimizable: false, maximizable: false, fullscreenable: false, skipTaskbar: true, alwaysOnTop: true, hasShadow: false, webPreferences: { backgroundThrottling: false, preload: path.join(__dirname, 'tray-preload.cjs'), contextIsolation: true, nodeIntegration: false } });
@@ -314,8 +332,10 @@ app.whenReady().then(() => {
   storage.migrate(process.env.DISPATCH_HOME || os.homedir());
   // DISPATCH_TEST_HIDDEN: e2e runs never show a window or take focus from what the user is doing.
   const hidden = !!process.env.DISPATCH_TEST_HIDDEN;
-  win = new BaseWindow({ show: !hidden, focusable: !hidden, title: 'Dispatch', icon: iconPath(), width: 1280, height: 800, minWidth: 800, minHeight: 560, backgroundColor: '#0d0e10', titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden', ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 12, y: 12 } } : { titleBarOverlay: { color: '#131417', symbolColor: '#a3a6ad', height: 43 } }) });
+  win = new BaseWindow({ show: !hidden, focusable: !hidden, title: 'Dispatch', icon: iconPath(), width: 1280, height: 800, minWidth: 800, minHeight: 560, backgroundColor: '#0d0e10', titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden', ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 14, y: 16 } } : { titleBarOverlay: { color: '#131417', symbolColor: '#a3a6ad', height: 43 } }) });
   win.on('resize', layout);
+  win.on('enter-full-screen', () => broadcast('window-fullscreen', true));
+  win.on('leave-full-screen', () => broadcast('window-fullscreen', false));
   win.on('focus', () => updater.focus());
   // The close button keeps Dispatch (and its agents) running in the tray; Quit in the tray menu ends it.
   win.on('close', e => { if (!quitting && tray && !process.env.DISPATCH_TEST_HOME) { e.preventDefault(); win.hide(); } });
@@ -334,4 +354,5 @@ app.whenReady().then(() => {
 // On quit every project's agents go down with everything they started.
 app.on('before-quit', () => { quitting = true; for (const t of tabs) try { t.engine.dispose(); } catch {} customTools.stopAll(); telegram.stop(); try { tray?.destroy(); } catch {} });
 app.on('will-quit', () => { try { require('electron').globalShortcut.unregisterAll(); } catch {} whisper.stop(); });
+app.on('activate', () => { if (win && !win.isDestroyed()) revealWin(); });
 app.on('window-all-closed', () => app.quit());

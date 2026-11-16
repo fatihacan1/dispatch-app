@@ -4,7 +4,7 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 // events arrive over Server-Sent Events (see electron/remote.cjs). Otherwise everything is plain IPC.
 const target = ipcRenderer.sendSync('remote:target');
 const LOCAL = /^(remote:|overlay:|tray:)/;
-const LOCAL_EVENTS = new Set(['tabs', 'tab-shown', 'voice-toggle', 'voice-result', 'voice-live', 'tray-nav', 'pack-open', 'overlay-start', 'overlay-stop']);
+const LOCAL_EVENTS = new Set(['tabs', 'tab-shown', 'window-fullscreen', 'voice-toggle', 'voice-result', 'voice-live', 'tray-nav', 'pack-open', 'overlay-start', 'overlay-stop']);
 const clientId = crypto.randomUUID();
 const listeners = new Map(), stateFns = new Set();
 let state = target ? 'connecting' : 'local', error = '', base = '', events = null, dialogFn = null, sendChain = Promise.resolve();

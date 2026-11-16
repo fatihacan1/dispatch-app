@@ -170,8 +170,8 @@ input[type=checkbox] { width: 15px; height: 15px; margin: 0; accent-color: var(-
 }
 .app.with-sidebar { grid-template-columns: var(--rail-w) minmax(0, 1fr) var(--sidebar-w); }
 .topbar { grid-area: top; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 16px; border-bottom: var(--border); background: var(--surface); -webkit-app-region: drag; }
-.topbar > *, .topbar button { -webkit-app-region: no-drag; }
-.brand { display: flex; align-items: center; gap: 8px; margin-right: 8px; }
+.topbar > :not(.grow):not(.brand), .topbar button { -webkit-app-region: no-drag; }
+.brand { display: flex; align-items: center; gap: 8px; margin-right: 8px; flex: none; user-select: none; }
 .brand img { width: 22px; height: 22px; border-radius: 5px; }
 .brand strong { font-weight: 600; }
 .workspace-wrap { position: relative; }
@@ -664,6 +664,7 @@ main.main { grid-area: main; overflow: hidden; display: flex; flex-direction: co
 @media (max-width: 1100px) { .tpl-section { grid-template-columns: 1fr; gap: 12px; } .tpl-page { grid-template-columns: 220px 1fr; } }
 .os-win .topbar { padding-right: 150px; }
 .os-mac .topbar { padding-left: 84px; }
+.os-mac.mac-fs .topbar { padding-left: 16px; }
 .send { width: 32px; padding: 0; }
 
 .local-form-collapse.open > .local-form-inner { overflow: visible; }
@@ -1277,7 +1278,8 @@ input[type=checkbox]:focus-visible { outline: 2px solid var(--focus); outline-of
 .ide-keys { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 14px; max-width: 100%; }
 .ide-keys span { white-space: nowrap; }
 
-.folder-gate { height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 16px; text-align: center; background: var(--bg, #0b0b0c); }
+.folder-gate { height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 16px; text-align: center; background: var(--bg, #0b0b0c); -webkit-app-region: drag; }
+.folder-gate button { -webkit-app-region: no-drag; }
 .folder-gate img { width: 64px; height: 64px; }
 .folder-gate h1 { margin: 0; font-size: 22px; }
 .folder-gate p { margin: 0 0 8px; max-width: 420px; opacity: .7; }
