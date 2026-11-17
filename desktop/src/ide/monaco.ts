@@ -53,28 +53,51 @@ monaco.languages.setMonarchTokensProvider("dotenv", {
   },
 });
 
+const h2 = (n: number) => Math.round(Math.min(255, Math.max(0, n))).toString(16).padStart(2, "0");
+/** Monaco only takes #rrggbb / #rrggbbaa. Themes (Frosted Glass) use rgba(), so normalize any CSS color to hex. */
+export function toHex(value: string, fallback = "#000000"): string {
+  const s = value.trim();
+  let m = /^#([0-9a-f]{3,4})$/i.exec(s);
+  if (m) return "#" + [...m[1]].map(c => c + c).join("").toLowerCase();
+  if (/^#(?:[0-9a-f]{6}|[0-9a-f]{8})$/i.test(s)) return s.toLowerCase();
+  m = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)(?:\s*[,/]\s*([\d.]+)(%?))?\s*\)$/i.exec(s);
+  if (m) {
+    const a = m[4] === undefined ? 1 : Number(m[4]) / (m[5] ? 100 : 1);
+    return "#" + h2(+m[1]) + h2(+m[2]) + h2(+m[3]) + (a < 1 ? h2(a * 255) : "");
+  }
+  return fallback;
+}
+
 /** Theme built from tokens.css so the editor matches the app. */
 export function applyTheme() {
+  try { defineDispatchTheme(); monaco.editor.setTheme("dispatch"); }
+  // A color Monaco cannot read must never take the app down: fall back to the stock dark theme.
+  catch (e) { console.error("Editor theme failed", e); monaco.editor.setTheme("vs-dark"); }
+}
+function defineDispatchTheme() {
   const css = getComputedStyle(document.documentElement);
-  const v = (name: string) => css.getPropertyValue(name).trim();
+  // Colors may keep their alpha; token colors (rules) cannot, so `t` drops it and the leading #.
+  const v = (name: string) => toHex(css.getPropertyValue(name));
+  const t = (name: string) => v(name).slice(1, 7);
+  const rgb = (name: string) => v(name).slice(0, 7);
   monaco.editor.defineTheme("dispatch", {
     base: "vs-dark",
     inherit: true,
     rules: [
-      { token: "comment", foreground: v("--text-3").slice(1), fontStyle: "italic" },
-      { token: "keyword", foreground: v("--agent-2").slice(1) },
-      { token: "string", foreground: v("--agent-3").slice(1) },
-      { token: "number", foreground: v("--agent-0").slice(1) },
-      { token: "type", foreground: v("--agent-1").slice(1) },
-      { token: "type.identifier", foreground: v("--agent-1").slice(1) },
-      { token: "regexp", foreground: v("--agent-4").slice(1) },
-      { token: "tag", foreground: v("--agent-1").slice(1) },
-      { token: "attribute.name", foreground: v("--agent-5").slice(1) },
-      { token: "variable.name", foreground: v("--agent-1").slice(1) },
-      { token: "variable", foreground: v("--agent-4").slice(1) },
-      { token: "string.value", foreground: v("--agent-3").slice(1) },
-      { token: "string.escape", foreground: v("--agent-0").slice(1) },
-      { token: "delimiter", foreground: v("--text-2").slice(1) },
+      { token: "comment", foreground: t("--text-3"), fontStyle: "italic" },
+      { token: "keyword", foreground: t("--agent-2") },
+      { token: "string", foreground: t("--agent-3") },
+      { token: "number", foreground: t("--agent-0") },
+      { token: "type", foreground: t("--agent-1") },
+      { token: "type.identifier", foreground: t("--agent-1") },
+      { token: "regexp", foreground: t("--agent-4") },
+      { token: "tag", foreground: t("--agent-1") },
+      { token: "attribute.name", foreground: t("--agent-5") },
+      { token: "variable.name", foreground: t("--agent-1") },
+      { token: "variable", foreground: t("--agent-4") },
+      { token: "string.value", foreground: t("--agent-3") },
+      { token: "string.escape", foreground: t("--agent-0") },
+      { token: "delimiter", foreground: t("--text-2") },
     ],
     colors: {
       "editor.background": v("--bg"),
@@ -94,10 +117,10 @@ export function applyTheme() {
       "scrollbarSlider.background": v("--line-strong"),
       "scrollbarSlider.hoverBackground": v("--selected-line"),
       "scrollbarSlider.activeBackground": v("--selected-line"),
-      "diffEditor.insertedTextBackground": v("--diff-add") + "33",
-      "diffEditor.removedTextBackground": v("--diff-del") + "33",
-      "diffEditor.insertedLineBackground": v("--diff-add") + "1a",
-      "diffEditor.removedLineBackground": v("--diff-del") + "1a",
+      "diffEditor.insertedTextBackground": rgb("--diff-add") + "33",
+      "diffEditor.removedTextBackground": rgb("--diff-del") + "33",
+      "diffEditor.insertedLineBackground": rgb("--diff-add") + "1a",
+      "diffEditor.removedLineBackground": rgb("--diff-del") + "1a",
       "focusBorder": v("--focus"),
       // Suggest list, hovers and other dropdowns in the app's colors instead of Monaco's blue.
       "editorSuggestWidget.background": v("--overlay"),
@@ -117,7 +140,6 @@ export function applyTheme() {
       "quickInput.background": v("--overlay"),
     },
   });
-  monaco.editor.setTheme("dispatch");
 }
 
 export { monaco };
