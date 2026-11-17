@@ -13,6 +13,9 @@ test('observed workspace menus require the complete provider-specific choices', 
 test('sign in and approval remain distinguishable', () => {
  assert.equal(attentionFrom('Waiting for authentication...'), 'Sign in');
  assert.equal(attentionFrom('Sign in to continue'), 'Sign in');
+ // agy's startup greeting, followed by its own automatic sign-in, is not a login screen.
+ assert.equal(attentionFrom(' Welcome to the Antigravity CLI. You are currently not signed in.\n\n ⣷  Signing in...'), null);
+ assert.equal(attentionFrom('Error: not signed in'), 'Sign in');
  assert.equal(attentionFrom('Bash command npm test Do you want to proceed? ❯ 1. Yes 2. Yes, and don\'t ask again for npm test commands 3. No, and tell Claude what to do differently (esc)'), 'Approve command');
 });
 

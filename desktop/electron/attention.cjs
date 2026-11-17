@@ -23,7 +23,9 @@ function progressKey(data) {
   return normalize(String(data || '')).replace(/[⠀-⣿✢-✽·…●◐-◓∙*•]/g, '').replace(/\b\d+h\b|\b\d+m\b|\b\d+(?:\.\d+)?s\b/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
 }
 function attentionFrom(text) {
-  const t = normalize(text);
+  // agy 1.5.10 greets with "You are currently not signed in. Signing in..." and then signs in by itself. A real
+  // logout makes it quit with "not logged into Antigravity" (engine onExit), so this greeting is never a login screen.
+  const t = normalize(text).replace(/you are currently not signed in/g, '');
   // The CLIs' trust questions only: "trust" and "folder" anywhere (an agent working on this very code) held its queue.
   if (/trust (?:the files in )?this (?:folder|workspace|directory|project)\?|yes, i trust this folder|accessing\s*workspace.*safety\s*check/.test(t)) return 'Trust folder';
   // Claude's AskUserQuestion menu (and its "review your answers" step): the agent waits for a choice.
