@@ -3,6 +3,7 @@ import { PlusIcon, ServerStackIcon, PencilSquareIcon, TrashIcon, PhotoIcon, KeyI
 import { Button, Console } from "../components/common";
 import { Dialog } from "../components/Dialog";
 import { ask } from "../components/ask";
+import { TreeMenu } from "../ide/TreeMenu";
 import type { Server, ServerCall, Vpn } from "../lib/types";
 import { VersionBadge } from "./UpdateButton";
 
@@ -197,6 +198,7 @@ export function Servers({ focus }: { focus: { id: string; n: number } | null }) 
   const [selected, setSelected] = useState<string | null>(null);
   const [editing, setEditing] = useState<Partial<Server> | null | false>(false);
   const [editingVpn, setEditingVpn] = useState<Partial<Vpn> | null | false>(false);
+  const [menu, setMenu] = useState<{ x: number; y: number; server: Server } | null>(null);
   const [shells, setShells] = useState<Shell[]>([]);
   const [active, setActive] = useState<string | null>(null);
   const [calls, setCalls] = useState<ServerCall[]>([]);
@@ -208,6 +210,12 @@ export function Servers({ focus }: { focus: { id: string; n: number } | null }) 
     return () => offs.forEach(f => f());
   }, []);
   const connect = async (id: string) => { setError(""); setSelected(id); try { const name = await army().servers.connect(id); setActive(name); } catch (e) { setError(errText(e)); } };
+  const removeServer = async (s: Server) => {
+    if (await ask.confirm(`Delete ${s.name}?`, { description: "Only the saved entry is removed. Nothing changes on the server.", action: "Delete", danger: true })) {
+      await army().servers.remove(s.id);
+      if (selected === s.id) setSelected(null);
+    }
+  };
   const removeVpn = async (v: Vpn) => {
     const usedBy = list.filter(s => s.vpnId === v.id);
     const description = usedBy.length
@@ -236,7 +244,7 @@ export function Servers({ focus }: { focus: { id: string; n: number } | null }) 
         : <div className="rows" role="listbox" aria-label="Servers">{list.map(s => {
           const vpn = s.vpnId ? vpns.find(v => v.id === s.vpnId) : undefined;
           return <div key={s.id} role="option" aria-selected={current?.id === s.id} tabIndex={0} className={"list-row server-row" + (current?.id === s.id ? " selected" : "") + (dragging === s.id ? " dragging" : "")} {...props(s.id)}
-            onClick={() => setSelected(s.id)} onDoubleClick={() => void connect(s.id)} onKeyDown={e => { if (e.key === "Enter") void connect(s.id); }}>
+            onClick={() => setSelected(s.id)} onDoubleClick={() => void connect(s.id)} onContextMenu={e => { e.preventDefault(); setSelected(s.id); setMenu({ x: e.clientX, y: e.clientY, server: s }); }} onKeyDown={e => { if (e.key === "Enter") void connect(s.id); }}>
             <ServerBadge server={s} />
             <span className="row-text"><b>{s.name}</b><small>{s.user ? s.user + "@" : ""}{s.host}{s.port !== 22 ? ":" + s.port : ""}</small></span>
             {vpn && <span className="server-access" title={`VPN: ${vpn.name}`}>VPN</span>}
@@ -265,7 +273,7 @@ export function Servers({ focus }: { focus: { id: string; n: number } | null }) 
           <div className="server-title"><h2>{current.name}</h2><small>{current.user ? current.user + "@" : ""}{current.host}{current.port !== 22 ? ":" + current.port : ""}{currentVpn ? " · VPN: " + currentVpn.name : ""}{current.note ? " · " + current.note : ""}</small></div>
           <span className="grow" />
           <button type="button" className="icon-button" title="Edit" aria-label={`Edit ${current.name}`} onClick={() => setEditing(current)}><PencilSquareIcon /></button>
-          <button type="button" className="icon-button" title="Delete" aria-label={`Delete ${current.name}`} onClick={async () => { if (await ask.confirm(`Delete ${current.name}?`, { description: "Only the saved entry is removed. Nothing changes on the server.", action: "Delete", danger: true })) { await army().servers.remove(current.id); setSelected(null); } }}><TrashIcon /></button>
+          <button type="button" className="icon-button" title="Delete" aria-label={`Delete ${current.name}`} onClick={() => void removeServer(current)}><TrashIcon /></button>
           <Button className="primary" onClick={() => void connect(current.id)}><CommandLineIcon aria-hidden="true" />{mine.some(sh => !sh.exited) ? "New terminal" : "Connect"}</Button>
         </header>
         {error && <p className="setting-note error" role="alert">{error}</p>}
@@ -288,6 +296,13 @@ export function Servers({ focus }: { focus: { id: string; n: number } | null }) 
     </section>
     {editing !== false && <ServerForm initial={editing} vpns={vpns} onClose={saved => { setEditing(false); if (saved) setSelected(saved.id); }} />}
     {editingVpn !== false && <VpnForm initial={editingVpn} onClose={() => setEditingVpn(false)} />}
+    {menu && <TreeMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)} items={[
+      { label: shells.some(sh => sh.server === menu.server.id && !sh.exited) ? "New terminal" : "Connect", action: () => void connect(menu.server.id) },
+      { label: "Edit", action: () => setEditing(menu.server) },
+      { label: "Duplicate", action: () => { const { id: _id, hasPassword: _hp, password: _pw, ...rest } = menu.server; setEditing({ ...rest, name: `${menu.server.name} copy` }); } },
+      "sep",
+      { label: "Delete", action: () => void removeServer(menu.server) },
+    ]} />}
   </div>;
 }
 

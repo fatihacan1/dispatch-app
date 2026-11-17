@@ -3,7 +3,7 @@ const Office = lazy(() => import("../office/Office").then(m => ({ default: m.Off
 const IdePanel = lazy(() => import("../ide/IdePanel"));
 import type { OpenRequest } from "../ide/IdePanel";
 import { Terminals, type Shell } from "../ide/Terminals";
-import { afterFirstPaint, hideBoot, setBootStatus } from "../theme/boot";
+import { afterFirstPaint, hideBoot, setBootStatus, waitForResponsive } from "../theme/boot";
 import { ThemeSettings } from "../theme/ThemeSettings";
 import { Dictation, joinSpoken } from "../voice/dictation";
 import { Visualizer } from "../voice/Visualizer";
@@ -381,6 +381,9 @@ export function App() {
   const startResize = (e: React.PointerEvent<HTMLDivElement>) => { const startY = e.clientY, start = stageH, box = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect(); const move = (ev: PointerEvent) => setStageH(Math.min(box.height - 220, Math.max(160, start + ev.clientY - startY))); const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); document.body.classList.remove("resizing"); }; document.body.classList.add("resizing"); window.addEventListener("pointermove", move); window.addEventListener("pointerup", up); };
   const [office, setOffice] = useState(true);
   const [bootReady, setBootReady] = useState({ main: false, info: false, ui: false, templates: false, office: false, files: false });
+  const [bootResuming, setBootResuming] = useState(false);
+  const [wsLoading, setWsLoading] = useState<string | null>(null);
+  const bootSettling = useRef(false);
   // The 3D/2D office scene is heavy: it mounts after the first paint behind the boot loader.
   const [heavyOk, setHeavyOk] = useState(false);
   useEffect(() => afterFirstPaint(() => setHeavyOk(true), 100), []);
@@ -507,7 +510,7 @@ export function App() {
     else setBootReady(b => b.main ? b : { ...b, main: true });
     window.army.info().then(async x => {
       setNeedsFolder(!!(x as any).needsFolder); setWorkspace(x.workspace); setDemo(x.demo); setMock(!!(x as any).mock); setOperations(x.operations); setWorkspaces(x.workspaces);
-      if (x.operations[0]) { setBootStatus("Resuming operation"); await resume(x.operations[0].id, true); }
+      if (x.operations[0]) { setBootResuming(true); await resume(x.operations[0].id, true); }
     }).catch(() => {}).finally(() => setBootReady(b => b.info ? b : { ...b, info: true }));
     const off = window.army.on("message", (incoming: Message) => setMessages(v => {
       const m: Timed = { ...incoming, time: Date.now() };
@@ -609,10 +612,14 @@ export function App() {
     setWorkspaceMenu(false);
     const first = needsFolder; if (first && next !== workspace) setNeedsFolder(false);
     if (first || next !== workspace) {
-      setWorkspace(next); setAgents([]); setAttention({}); setQuestions({}); setMessages([]);
-      setView("agent"); setAgentTemplates({}); setEnlistedBy({});
-      const info = await window.army.info(); setOperations(info.operations); setWorkspaces(info.workspaces);
-      if (info.operations[0]) await resume(info.operations[0].id, true);
+      setWsLoading("Opening workspace");
+      try {
+        setWorkspace(next); setAgents([]); setAttention({}); setQuestions({}); setMessages([]);
+        setView("agent"); setAgentTemplates({}); setEnlistedBy({});
+        const info = await window.army.info(); setOperations(info.operations); setWorkspaces(info.workspaces);
+        if (info.operations[0]) { setWsLoading("Resuming operation"); await resume(info.operations[0].id, true); }
+        await waitForResponsive({ ready: (window as any).army.ready, onStatus: setWsLoading, timeoutMs: 20000 }).promise;
+      } finally { setWsLoading(null); }
     }
   };
   // Opening a workspace continues its latest operation; Home is only for starting a new one.
@@ -782,10 +789,13 @@ export function App() {
     const needOffice = onAgentPage && office && !needsFolder;
     if (bootReady.ui && !needFiles && !bootReady.files) { setBootReady(b => ({ ...b, files: true })); return; }
     if (bootReady.info && !needOffice && !bootReady.office) { setBootReady(b => ({ ...b, office: true })); return; }
-    if (!bootReady.main || !bootReady.info) setBootStatus("Opening workspace");
-    else if (!bootReady.files || !bootReady.office || !bootReady.templates) setBootStatus("Preparing workspace");
-    else hideBoot();
-  }, [bootReady, onAgentPage, ide, office, needsFolder]);
+    if (!bootReady.main || !bootReady.info) { setBootStatus(bootResuming ? "Resuming operation" : "Opening workspace"); return; }
+    if (!bootReady.files || !bootReady.office || !bootReady.templates) { setBootStatus("Preparing workspace"); return; }
+    if (bootSettling.current) return;
+    bootSettling.current = true;
+    const wait = waitForResponsive({ ready: (window as any).army.ready, onStatus: setBootStatus, timeoutMs: 20000 });
+    void wait.promise.then(() => hideBoot());
+  }, [bootReady, bootResuming, onAgentPage, ide, office, needsFolder]);
   const showSidebar = agents.length > 0 && !showHome && ["agent", "overview", "comms"].includes(view);
   const agentFeed = messages.filter(m => m.from !== "you" && m.to !== "you");
   const pairs = [...new Set(agentFeed.map(m => [m.from, m.to].sort().join(" ↔ ")))];
@@ -798,11 +808,12 @@ export function App() {
       <img src="./logo-dispatch.png" alt="" />
       <h1>Open a folder</h1>
       <p>Choose the project folder your agents will work in. You can switch folders later from the top bar.</p>
-      <Button className="primary" onClick={async () => { try { const next = await window.army.workspace(); const info = await window.army.info(); if (!(info as any).needsFolder) { setNeedsFolder(false); setWorkspace(next); setOperations(info.operations); setWorkspaces(info.workspaces); if (info.operations[0]) await resume(info.operations[0].id, true); } } catch (e) { setError(String(e)); } }}>Open folder</Button>
+      <Button className="primary" onClick={async () => { try { const next = await window.army.workspace(); const info = await window.army.info(); if (!(info as any).needsFolder) { setWsLoading("Opening workspace"); try { setNeedsFolder(false); setWorkspace(next); setOperations(info.operations); setWorkspaces(info.workspaces); if (info.operations[0]) { setWsLoading("Resuming operation"); await resume(info.operations[0].id, true); } await waitForResponsive({ ready: (window as any).army.ready, onStatus: setWsLoading, timeoutMs: 20000 }).promise; } finally { setWsLoading(null); } } } catch (e) { setError(String(e)); } }}>Open folder</Button>
     </div>
   );
   return (
     <div className={"app " + (navigator.userAgent.includes("Mac") ? "os-mac" : "os-win") + (macFs ? " mac-fs" : "") + (showSidebar && sidebar ? " with-sidebar" : "")}>
+      {wsLoading && <div className="boot-overlay" role="status" aria-live="polite" aria-label="Opening workspace"><div className="boot-box"><div className="boot-mark"><img src="./icon-256.png" alt="" width="72" height="72" /><svg className="boot-ring" viewBox="0 0 92 92" aria-hidden="true"><rect className="boot-track" x="1" y="1" width="90" height="90" rx="24" pathLength="100" /><rect className="boot-trace" x="1" y="1" width="90" height="90" rx="24" pathLength="100" /></svg></div><div className="boot-name">Dispatch</div><div className="boot-sub">{wsLoading}</div></div></div>}
       {tabEnter > 0 && <span key={tabEnter} className="tab-flash" aria-hidden="true" />}
       <header className="topbar">
         <div className="brand"><img src="./logo-dispatch.png" alt="" /><strong>Dispatch</strong></div>

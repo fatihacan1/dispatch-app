@@ -137,7 +137,7 @@ export function Providers({ focus = "" }: { focus?: string }) {
       setAccounts(prev => ({ ...prev, [provider]: list }));
       setAccountError("");
       void check(provider);
-    } catch (e) { setAccountError(String(e)); }
+    } catch (e) { setAccountError(String((e as Error)?.message || e).replace(/^.*?Error invoking remote method '[^']+': (?:Error: )?/, "")); }
   };
 
   const addAccount = async () => {

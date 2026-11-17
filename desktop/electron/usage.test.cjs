@@ -78,3 +78,25 @@ test('claude: a failed first reading falls back to the last good one saved on di
     assert.strictEqual(r.windows.length, 1); assert.strictEqual(r.stale, true);
   } finally { u.setCacheFile(null); if (prevHome === undefined) delete process.env.DISPATCH_USAGE_HOME; else process.env.DISPATCH_USAGE_HOME = prevHome; }
 });
+
+test('getAll keys results by provider id and isolates account caches via accountId', async () => {
+  const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-acc-'));
+  const file = path.join(home, 'usage.json');
+  const defDir = path.join(home, '.claude');
+  const emptyDir = path.join(home, 'acc-2');
+  fs.mkdirSync(defDir, { recursive: true });
+  fs.mkdirSync(emptyDir, { recursive: true });
+  // Expired token in default dir falls back to legacy 'claude' saved reading; empty dir stays unsupported.
+  fs.writeFileSync(path.join(defDir, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 't', expiresAt: 1 } }));
+  fs.writeFileSync(file, JSON.stringify({ claude: { provider: 'claude', windows: [{ id: 'session', label: 'Session (5h)', usedPercent: 31, resetsAt: null }], updatedAt: '2026-11-17T10:00:00.000Z', source: 'x' } }));
+  try {
+    u.setCacheFile(file);
+    const empty = await u.getAll({ providers: ['claude'], force: true, forProvider: () => ({ accountDir: emptyDir, accountId: 'acc-2' }) });
+    assert.strictEqual(empty.claude.windows.length, 0);
+    assert.strictEqual(empty.claude.errorCode, 'unsupported');
+    const boss = await u.getAll({ providers: ['claude'], force: true, forProvider: () => ({ accountDir: defDir, accountId: 'default' }) });
+    assert.strictEqual(boss.claude.windows.length, 1);
+    assert.strictEqual(boss.claude.windows[0].usedPercent, 31);
+  } finally { u.setCacheFile(null); }
+});

@@ -73,15 +73,30 @@ function seedAccountDir(provider, srcDir, dstDir) {
   }
 }
 
+// Whether an account dir holds a login: true / false, or null when it cannot be told from files (Claude on macOS keeps
+// its token in the Keychain). A new account has no login until its login terminal finishes; making it active before
+// that left Claude agents and the usage meter on an empty account.
+function hasLogin(provider, dir) {
+  if (!dir) return false;
+  if (provider === 'claude') {
+    try { return !!JSON.parse(fs.readFileSync(path.join(dir, '.credentials.json'), 'utf8'))?.claudeAiOauth?.accessToken; }
+    catch { return process.platform === 'darwin' ? null : false; }
+  }
+  if (provider === 'codex') {
+    try { const a = JSON.parse(fs.readFileSync(path.join(dir, 'auth.json'), 'utf8')); return !!(a?.tokens?.access_token || a?.tokens?.id_token || a?.OPENAI_API_KEY); }
+    catch { return false; }
+  }
+  return null;
+}
+
 // Cheaply read email/plan from local CLI files without spending model quota.
 function readAccountMeta(provider, dir) {
   if (!dir) return { email: '', plan: '' };
   if (provider === 'claude') {
-    try {
-      const j = JSON.parse(fs.readFileSync(path.join(dir, '.credentials.json'), 'utf8'));
-      const plan = String(j?.claudeAiOauth?.subscriptionType || '');
-      return { email: '', plan };
-    } catch { return { email: '', plan: '' }; }
+    let email = '', plan = '';
+    try { email = String(JSON.parse(fs.readFileSync(path.join(dir, '.claude.json'), 'utf8'))?.oauthAccount?.emailAddress || ''); } catch {}
+    try { plan = String(JSON.parse(fs.readFileSync(path.join(dir, '.credentials.json'), 'utf8'))?.claudeAiOauth?.subscriptionType || ''); } catch {}
+    return { email, plan };
   }
   if (provider === 'codex') {
     try {
@@ -143,6 +158,8 @@ function create(globalDir, { userHome = os.homedir() } = {}) {
           plan: typeof a.plan === 'string' ? a.plan : '',
         }));
       const group = [def, ...others];
+      // An added account that never finished its login is not usable: fall back to Default.
+      for (const a of others) if (a.active && hasLogin(provider, a.dir) === false) a.active = false;
       if (!group.some(a => a.active)) group[0].active = true;
       let seenActive = false;
       for (const a of group) {
@@ -189,8 +206,8 @@ function create(globalDir, { userHome = os.homedir() } = {}) {
     const id = 'acc-' + crypto.randomBytes(4).toString('hex');
     const dir = path.join(globalDir, 'accounts', provider, id);
     seedAccountDir(provider, defaultDir(provider, userHome), dir);
-    for (const a of all) if (a.provider === provider) a.active = false;
-    const created = { provider, id, label: clean, dir, active: true, email: '', plan: '' };
+    // Stays inactive until its login succeeds (engine activates it when the login terminal ends signed in).
+    const created = { provider, id, label: clean, dir, active: false, email: '', plan: '' };
     all.push(created);
     writeRaw(all);
     return enrich(created);
@@ -201,6 +218,7 @@ function create(globalDir, { userHome = os.homedir() } = {}) {
     const all = normalizeAll(readRaw());
     const target = all.find(a => a.provider === provider && a.id === id);
     if (!target) throw new Error('Account not found.');
+    if (id !== 'default' && hasLogin(provider, target.dir) === false) throw new Error(`${target.label} is not signed in yet. Finish its login first.`);
     for (const a of all) if (a.provider === provider) a.active = a.id === id;
     writeRaw(all);
     return enrich(target);
@@ -253,4 +271,4 @@ function create(globalDir, { userHome = os.homedir() } = {}) {
   return { list, active, get, add, activate, rename, remove, updateMeta };
 }
 
-module.exports = { PROVIDERS, MAX_ACCOUNTS, ENV_VARS, defaultDir, envFor, dirFor, seedAccountDir, readAccountMeta, create };
+module.exports = { PROVIDERS, MAX_ACCOUNTS, ENV_VARS, defaultDir, envFor, dirFor, seedAccountDir, readAccountMeta, hasLogin, create };

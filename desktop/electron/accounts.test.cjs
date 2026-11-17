@@ -35,7 +35,10 @@ test('accounts: add seeds settings and skills without copying credentials, respe
   const store = accounts.create(globalDir, { userHome: home });
   const added = store.add('claude', 'Work');
   assert.equal(added.label, 'Work');
-  assert.equal(added.active, true);
+  // Not signed in yet: stays inactive, cannot be activated, Default keeps running agents and the usage meter.
+  assert.equal(added.active, false);
+  assert.equal(store.active('claude').id, 'default');
+  if (process.platform !== 'darwin') assert.throws(() => store.activate('claude', added.id), /not signed in/);
   assert.equal(fs.existsSync(path.join(added.dir, 'settings.json')), true);
   assert.equal(fs.existsSync(path.join(added.dir, 'skills', 'my-skill', 'SKILL.md')), true);
   assert.equal(fs.existsSync(path.join(added.dir, '.credentials.json')), false);
@@ -51,8 +54,16 @@ test('accounts: add seeds settings and skills without copying credentials, respe
   // Rename and remove
   store.rename('claude', added.id, 'Work Pro');
   assert.equal(store.get('claude', added.id).label, 'Work Pro');
+  // Its login finished: now it can be the active account.
+  fs.writeFileSync(path.join(added.dir, '.credentials.json'), '{"claudeAiOauth":{"accessToken":"work"}}');
+  assert.equal(accounts.hasLogin('claude', added.dir), true);
   store.activate('claude', added.id);
   assert.equal(store.active('claude').id, added.id);
+  // An active account whose login disappeared falls back to Default.
+  fs.rmSync(path.join(added.dir, '.credentials.json'));
+  if (process.platform !== 'darwin') assert.equal(store.active('claude').id, 'default');
+  fs.writeFileSync(path.join(added.dir, '.credentials.json'), '{"claudeAiOauth":{"accessToken":"work"}}');
+  store.activate('claude', added.id);
   store.remove('claude', added.id);
   assert.equal(store.active('claude').id, 'default');
   assert.equal(fs.existsSync(added.dir), false);

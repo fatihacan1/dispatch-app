@@ -165,16 +165,20 @@ export function Sidebar(p: Props) {
     <div className="side-panes" ref={host}>
     <Section id="team" title="Team" open={panes.team.open} toggle={() => togglePane("team")} style={paneStyle(panes.team)} meta={p.agents.length} action={<button type="button" className="icon-button" aria-label="+ Enlist agent" title="Enlist agent" onClick={p.enlist}><PlusIcon /></button>}>
       <div className="team">
-        {p.agents.map(a => (
-          <div className={"team-row" + (a.status === "Stopped" ? " stopped" : "")} key={a.name} onContextMenu={e => { e.preventDefault(); openMenu(a.name, e.currentTarget.querySelector(".row-more") || e.currentTarget); }} onKeyDown={e => { if (e.key === "Delete" && a.name !== "boss") { e.preventDefault(); p.act(a.name, "dismiss"); } }}>
+        {p.agents.map(a => {
+          const hasSwitch = a.name === "boss" && !!p.switchBoss;
+          const hasActions = a.status === "Stopped" || hasSwitch;
+          return <div className={"team-row" + (a.status === "Stopped" ? " stopped" : "") + (hasActions ? " has-actions" : "")} key={a.name} onContextMenu={e => { e.preventDefault(); openMenu(a.name, e.currentTarget.querySelector(".row-more") || e.currentTarget); }} onKeyDown={e => { if (e.key === "Delete" && a.name !== "boss") { e.preventDefault(); p.act(a.name, "dismiss"); } }}>
             <Button className={"list-row agent " + (p.activeView && p.selected === a.name ? "selected" : "")} onClick={() => p.select(a.name)} aria-label={`${a.name} · ${a.model} · ${a.status.toLowerCase()}`} title={a.status}>
               <ProviderIcon className="provider-icon row-icon" provider={a.provider} alt="" />
               <span className="row-text"><b>{a.name}{tgOwner === a.name && <TelegramMark title="Answers Telegram" />}</b><small>{a.enlistedBy ? `by ${a.enlistedBy} · ` : ""}{a.model}</small></span>
               <StatusDot tone={a.tone} label={a.status} />
             </Button>
             {/* A stopped agent starts again in one click, without opening the menu. */}
-            {a.status === "Stopped" && <Button className="ghost row-start" aria-label={`Start ${a.name}`} title={`Start ${a.name}`} onClick={() => p.act(a.name, "restart")}><PlayIcon aria-hidden="true" />Start</Button>}
-            {a.name === "boss" && p.switchBoss && <Button className="ghost row-start" title="Switch boss account or provider" onClick={p.switchBoss}>Switch</Button>}
+            {hasActions && <span className="row-actions">
+              {a.status === "Stopped" && <Button className="ghost row-start" aria-label={`Start ${a.name}`} title={`Start ${a.name}`} onClick={() => p.act(a.name, "restart")}><PlayIcon aria-hidden="true" />Start</Button>}
+              {hasSwitch && <Button className="ghost row-start" title="Switch boss account or provider" onClick={p.switchBoss}>Switch</Button>}
+            </span>}
             <button type="button" className="icon-button row-more" aria-label={`Actions for ${a.name}`} aria-expanded={p.menu === a.name} onClick={e => p.menu === a.name ? p.setMenu(null) : openMenu(a.name, e.currentTarget)}><EllipsisHorizontalIcon /></button>
             {p.menu === a.name && <div className="popover row-menu" role="menu" style={menuPos}>
               <Button className="menu-item" onClick={() => p.openTerminal(a.name)}>Open terminal</Button>
@@ -184,8 +188,8 @@ export function Sidebar(p: Props) {
               <Button className="menu-item" onClick={() => p.act(a.name, a.status === "Stopped" ? "restart" : "stop")}>{a.status === "Stopped" ? "Restart" : "Stop"}</Button>
               {a.name !== "boss" ? <Button className="menu-item danger" onClick={() => p.act(a.name, "dismiss")}>Dismiss</Button> : <Button className="menu-item" onClick={p.changeBoss}>Change boss…</Button>}
             </div>}
-          </div>
-        ))}
+          </div>;
+        })}
       </div>
       {p.saveTeam && <Button className="ghost save-team" onClick={p.saveTeam} title="Keep this boss and these agents as a team you can start again"><BookmarkIcon aria-hidden="true" />Save as team template</Button>}
     </Section>

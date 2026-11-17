@@ -78,6 +78,37 @@ test('trust: only the CLIs\' trust questions, not text about trusting folders', 
  assert.equal(attentionFrom('The Trust folder dialog shows when the workspace is new; the folder is trusted in .dispatch/trust.json.'), null);
  assert.equal(attentionFrom('Trust this folder? 1. Trust and continue 2. Quit'), 'Trust folder');
 });
+test('after a turn, only the CLI\'s own logged-out screen triggers Sign in and stale attention clears when working or at prompt', () => {
+ const { BLOCKING, shouldClearAttention } = require('./attention.cjs');
+ for (const provider of ['claude', 'codex', 'antigravity', 'gemini']) {
+  assert.equal(attentionFrom('The account is not signed in. Please run /login or waiting for authentication.', { provider, hadTurn: true }), null);
+  assert.equal(attentionFrom('Error: not logged in. Sign in to continue.', { provider, hadTurn: true }), null);
+ }
+ // False Sign in text after a turn does not block delivery of queued user messages.
+ const queue = ['user message'];
+ const detected = attentionFrom('Boss reply: account is not signed in', { provider: 'claude', hadTurn: true });
+ const blocked = BLOCKING.includes(detected);
+ assert.equal(blocked, false);
+ if (!blocked && queue.length) queue.shift();
+ assert.equal(queue.length, 0);
+
+ assert.equal(attentionFrom('Invalid API key · Please run /login', { provider: 'claude', hadTurn: true }), 'Sign in');
+ assert.equal(attentionFrom('Select login method:\n❯ 1. Claude account with subscription\n  2. Anthropic Console account', { provider: 'claude', hadTurn: true }), 'Sign in');
+ assert.equal(attentionFrom('Sign in with ChatGPT\n1. Sign in with ChatGPT\n2. Provide your own OpenAI API key', { provider: 'codex', hadTurn: true }), 'Sign in');
+
+ assert.equal(shouldClearAttention('Sign in', { turn: false }), true);
+ assert.equal(shouldClearAttention('Sign in', { turn: true }), true);
+ assert.equal(shouldClearAttention('Sign in', { hasSteps: true }), true);
+ assert.equal(shouldClearAttention('Sign in', { codexState: 'idle' }), true);
+ assert.equal(shouldClearAttention('Approve command', { hasSteps: true }), false);
+ assert.equal(shouldClearAttention('Approve command', { turn: false }), true);
+ assert.equal(shouldClearAttention('Question', { turn: true }), false);
+ // The tool step is written before the approval menu shows: it must not clear the approval.
+ assert.equal(shouldClearAttention('Approve command', { turn: true }), false);
+ assert.equal(shouldClearAttention('Approve command', { codexState: 'working' }), false);
+ assert.equal(shouldClearAttention('Trust folder', { hasSteps: true }), false);
+ assert.equal(shouldClearAttention('Question', { turn: false }), true);
+});
 test('progress key ignores spinner redraws and elapsed timers, but sees tokens and new text', () => {
  const { progressKey } = require('./attention.cjs');
  const a = progressKey('\x1b[2K\x1b[1G\u273b Thinking\u2026 (21m 58s \u00b7 \u2193 1.2k tokens \u00b7 esc to interrupt)');

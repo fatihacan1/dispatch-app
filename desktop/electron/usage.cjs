@@ -13,7 +13,7 @@ const SUPPORTED = [...AUTO, 'antigravity'];
 const cache = new Map(); // provider -> { at, value, pending }
 // Last good reading per provider, kept on disk so a failed first fetch after a restart (429, expired token) still shows the last numbers.
 let cacheFile = null, saved = null;
-function setCacheFile(file) { cacheFile = file; saved = null; }
+function setCacheFile(file) { cacheFile = file; saved = null; cache.clear(); }
 function savedReadings() { if (saved) return saved; try { saved = cacheFile ? JSON.parse(fs.readFileSync(cacheFile, 'utf8')) || {} : {}; } catch { saved = {}; } return saved; }
 function remember(value) {
   if (!cacheFile || value.error || !value.windows?.length) return;

@@ -11,7 +11,7 @@ const { restartRoster } = require('./roster.cjs');
 const gitLib = require('./git.cjs');
 const { parseMessage } = require('./bus.cjs');
 const { createDemoTerminal } = require('./demo-terminal.cjs');
-const { attentionFrom, trustAnswer, nudgeAnswer, BLOCKING, normalize, progressKey } = require('./attention.cjs');
+const { attentionFrom, shouldClearAttention, trustAnswer, nudgeAnswer, BLOCKING, normalize, progressKey } = require('./attention.cjs');
 const localAI = require('./local-ai.cjs');
 const mcp = require('./mcp.cjs');
 const storage = require('./storage.cjs');
@@ -27,9 +27,10 @@ module.exports = function createEngine(host) {
 const ipcMain = host.ipc, win = host.window;
 let workspace = process.cwd(), watcher, operation = null, needsFolder = false;
 const intervals = [];
-let codeIndexWorker, codeIndexInfo, codeIndexTimer = null;
+let codeIndexWorker, codeIndexInfo, codeIndexTimer = null, codeIndexWorkspace = null;
 function startCodeIndex(target) {
   if (codeIndexWorker) codeIndexWorker.postMessage('close');
+  codeIndexWorkspace = target;
   const dir = path.join(os.tmpdir(), 'dispatch-code-index', crypto.createHash('sha256').update(path.resolve(target)).digest('hex'));
   codeIndexInfo = path.join(dir, `connection-${crypto.randomUUID()}.json`);
   const worker = new Worker(path.join(__dirname, 'code-index-worker.cjs'), { workerData: { root: target, dir, info: codeIndexInfo, token: crypto.randomBytes(24).toString('hex') } });
@@ -82,6 +83,13 @@ function setAttention(name, agent, reason) {
   if (agent.attention === reason) return; if (reason !== 'Trust folder') agent.trustInteracted = false; agent.attention = reason; agent.blocked = BLOCKING.includes(reason);
   if (agent.blocked) hold(agent);
   notify('attention', { name, reason });
+}
+function clearAttention(name, agent) {
+  if (!agent.attention && !agent.blocked && !agent.awaitingAnswer && !agent.held) return;
+  agent.awaitingAnswer = false; agent.held = false; clearTimeout(agent.trustTimer); agent.trustTimer = null;
+  agent.promptBuffer = '';
+  if (agent.attention) setAttention(name, agent, null); else agent.blocked = false;
+  if (!agent.ready) setTimeout(agent.initialize, 1000); else if (agent.queue.length) deliver(agent);
 }
 // Nothing may be pasted while a prompt waits for a key. A message being pasted when the prompt came up must not get
 // its Enter (in Claude's trust menu that picks "No, exit" and the agent quits): it goes back to the front of the queue.
@@ -192,6 +200,7 @@ function bossVisibleTemplates() {
 function watch() {
   watcher?.close();
   clearTimeout(codeIndexTimer);
+  codeIndexWorkspace = null;
   storage.migrate(workspace);
   // Defer full-repo tree-sitter + chokidar indexing until after first paint so boot I/O stays fast.
   const indexTarget = workspace;
@@ -442,13 +451,14 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
     if (e.turn !== undefined) agent.toolsOpen = 0;
     agent.toolsOpen = Math.max(0, (agent.toolsOpen || 0) + tools - (e.answered ? e.answered.length : 0));
     if (e.steps.length) agent.stallNudged = false;
-    if (e.turn === true) { agent.turn = true; agent.turnKnown = true; agent.toldYou = false; agent.turnAt = Date.now(); agent.lastText = ''; }
+    if (e.turn === true) { agent.turn = true; agent.turnKnown = true; agent.hadTurn = true; agent.toldYou = false; agent.turnAt = Date.now(); agent.lastText = ''; }
     const said = e.steps.filter(s => s.kind === 'text').at(-1); if (said) agent.lastText = said.text;
+    if (e.steps.length) agent.hadTurn = true;
     if (e.ask) showQuestion(name, agent, e.ask);
     if (e.answered && agent.question && e.answered.includes(agent.question.id)) clearQuestion(name, agent);
     let dropLastText = false;
     if (e.turn === false) {
-      agent.turn = false; agent.turnKnown = true; agent.turnEndAt = Date.now(); clearQuestion(name, agent);
+      agent.turn = false; agent.turnKnown = true; agent.hadTurn = true; agent.turnEndAt = Date.now(); clearQuestion(name, agent);
       // The reply the agent wrote in its terminal is the chat message, formatting intact. The boss always talks to
       // the user; another agent does when the user was the one who wrote to it.
       const forYou = name === 'boss' || ['you', 'user'].includes(agent.lastFrom);
@@ -468,6 +478,7 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
         }, 2500);
       }
     }
+    if (shouldClearAttention(agent.attention, { turn: e.turn, hasSteps: e.steps.length > 0 })) clearAttention(name, agent);
     notify('activity', { name, steps: e.steps, turn: e.turn, dropLastText });
   } });
   // Messages received while stopped remain on disk; the watcher only emits an
@@ -488,11 +499,8 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
     // A choice the CLI wants that has one safe answer (Codex: keep the model when the limit is near).
     const nudge = nudgeAnswer(provider, agent.promptBuffer);
     if (nudge && Date.now() - (agent.nudgedAt || 0) > 5000) { agent.nudgedAt = Date.now(); setTimeout(() => { if (processes.get(name) !== agent) return; agent.promptBuffer = ''; try { terminal.write(nudge); } catch {} }, 700); }
-    let detected = attentionFrom(agent.promptBuffer);
-    // "Sign in" text often scrolls by in an agent's own work (a header with a Sign in button, auth code). Once the agent
-    // has worked, only the CLI's own logged-out messages count; a real logout makes Antigravity quit (see onExit).
-    if (!agent.hadTurn && isWorking(name)) agent.hadTurn = true;
-    if (detected === 'Sign in' && agent.hadTurn && !/run \/login|not (?:logged|signed) in|notlogin|waiting for authentication/.test(normalize(agent.promptBuffer.slice(-1500)))) detected = null;
+    if (!agent.hadTurn && (agent.turnKnown || isWorking(name))) agent.hadTurn = true;
+    const detected = attentionFrom(agent.promptBuffer, { provider, hadTurn: agent.hadTurn });
     // Out of quota: the agent will not answer anyone. Say so to whoever gave it work, once, instead of letting them wait.
     if (detected === 'Limit reached' && !agent.limitTold) {
       agent.limitTold = true;
@@ -523,7 +531,7 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
         else if (!agent.trustTimer) agent.trustTimer = setTimeout(() => { agent.trustTimer = null; if (processes.get(name) === agent && agent.held && !agent.awaitingAnswer) setAttention(name, agent, 'Trust folder'); }, 3000);
       } else { setAttention(name, agent, detected); if (detected === 'Trust folder' && trusted()) answerTrust(agent); }
     }
-    agent.lastOutput = Date.now(); const codexState = [...data.matchAll(/\x1b\]7501;state=(idle|working|done):app=codex/g)].at(-1); if (codexState) { agent.codexStateKnown = true; agent.atPrompt = codexState[1] !== 'working'; if (codexState[1] === 'working') agent.turnAt = Date.now(); } else if (provider !== 'codex') agent.atPrompt = /(?:^|[\r\n])\s*[>\u276f$]\s*$/.test(agent.output.slice(-4000).replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')); if (agent.queue.length && (provider !== 'codex' || agent.atPrompt)) deliver(agent); terminalOut(name, data); });
+    agent.lastOutput = Date.now(); const codexState = [...data.matchAll(/\x1b\]7501;state=(idle|working|done):app=codex/g)].at(-1); if (codexState) { agent.codexStateKnown = true; agent.atPrompt = codexState[1] !== 'working'; if (codexState[1] === 'working') agent.turnAt = Date.now(); if (shouldClearAttention(agent.attention, { codexState: codexState[1] })) clearAttention(name, agent); } else if (provider !== 'codex') agent.atPrompt = /(?:^|[\r\n])\s*[>\u276f$]\s*$/.test(agent.output.slice(-4000).replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')); if (agent.queue.length && (provider !== 'codex' || agent.atPrompt)) deliver(agent); terminalOut(name, data); });
   terminal.onExit(() => { agent.stopActivity?.(); clearQuestion(name, agent); if (processes.get(name) === agent) {
     processes.delete(name); clearTimeout(agent.timer); setAttention(name, agent, null); notify('exit', name);
     // Died on its own: mark it stopped (card shows it) and tell whoever enlisted it.
@@ -531,7 +539,7 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
     if (entry) { entry.stopped = true; saveOperation(); notify('agent-action', { name, action: 'stop' }); }
     const lead = name === 'boss' ? null : agent.enlistedBy && !['you', 'user'].includes(agent.enlistedBy) && processes.has(agent.enlistedBy) ? agent.enlistedBy : 'boss';
     // Quit because it is not signed in (Antigravity does this): say exactly that, not just "exited".
-    if (!agent.signinTold && (attentionFrom(String(agent.output || '').slice(-8000)) === 'Sign in' || (provider === 'antigravity' && /not logged into antigravity/i.test(String(agent.output || ''))))) { agent.signinTold = true; tellSignIn(name, agent, provider, true); return; }
+    if (!agent.signinTold && (attentionFrom(String(agent.output || '').slice(-8000), { provider, hadTurn: agent.hadTurn }) === 'Sign in' || (provider === 'antigravity' && /not logged into antigravity/i.test(String(agent.output || ''))))) { agent.signinTold = true; tellSignIn(name, agent, provider, true); return; }
     // Nobody can be told (the boss itself died, or the boss is down too): show it to the user in the attention bar and chat.
     if (!lead || !processes.has(lead)) { exited.add(name); notify('attention', { name, reason: 'Exited' }); notify('message', recordMessage({ id: crypto.randomUUID(), from: 'dispatch', to: 'you', text: `${name} exited unexpectedly. Restart it from the bar at the top.`, kind: 'send', time: new Date().toISOString() })); }
     else if (lead !== name) void sendMessage(lead, `${name} exited unexpectedly. dispatch restart ${name} brings it back.`, 'dispatch').catch(() => {});
@@ -625,7 +633,25 @@ function init(target) {
 }
 ipcMain.handle('workspace', async (_e, target) => { if (!target) { const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'] }); if (r.canceled) return workspace; target = r.filePaths[0]; } if (!fs.statSync(target).isDirectory()) throw new Error('Workspace is not a directory'); if (!host.free(target)) { host.focusFolder(target); return workspace; } switchWorkspace(target); host.changed(); return workspace; });
 function switchWorkspace(target) { if (needsFolder || path.resolve(target) !== path.resolve(workspace)) { needsFolder = false; finishOperation(); stopAgents(); if (isMock(workspace) && !isMock(target)) { demo = process.argv.includes('--demo'); mockPrevious = null; } workspace = path.resolve(target); rememberWorkspace(); watch(); } }
-ipcMain.handle('app:ready', () => ({ ok: true, workspace, needsFolder }));
+// Measure main-process event-loop lag so the renderer loader stays up until the main thread is responsive.
+let lastLagTick = performance.now(), lastMainLagAt = lastLagTick;
+intervals.push(setInterval(() => {
+  const now = performance.now();
+  const drift = now - lastLagTick - 100;
+  lastLagTick = now;
+  if (drift >= 50) lastMainLagAt = now;
+}, 100));
+ipcMain.handle('app:ready', () => {
+  const now = performance.now();
+  if (now - lastLagTick - 100 >= 50) lastMainLagAt = now;
+  return {
+    ok: true,
+    workspace,
+    needsFolder,
+    indexStarted: needsFolder || codeIndexWorkspace === workspace,
+    mainQuietMs: Math.round(now - lastMainLagAt),
+  };
+});
 ipcMain.handle('info', () => ({ workspace, needsFolder, demo, mock: isMock(workspace), operations: listOperations(), workspaces: recentWorkspaces() }));
 ipcMain.handle('operations:list', () => listOperations());
 ipcMain.handle('operations:delete', (_e, id) => { if (!/^[\w-]+$/.test(id)) throw new Error('Invalid operation'); if (operation?.id === id) { stopAgents(); operation = null; } fs.rmSync(path.join(operationsDir(), id + '.json'), { force: true }); void fs.promises.rm(path.join(operationsDir(), id), { recursive: true, force: true, maxRetries: 20, retryDelay: 250 }).catch(() => {}); return listOperations(); });
@@ -1103,6 +1129,13 @@ const providerAccountOpts = id => {
   const acc = accountFor(id);
   return acc ? { env: accountsLib.envFor(id, acc), accountDir: acc.dir, account: acc, accountId: acc.id } : {};
 };
+// Usage limits belong to the account the boss is actually running on (if boss uses this provider), even if
+// another unsigned-in account was newly added and auto-activated in Providers.
+const usageAccountOpts = id => {
+  const boss = operation?.agents?.find(a => a.name === 'boss');
+  const acc = boss?.provider === id && boss.accountId ? accountFor(id, boss.accountId) : accountFor(id);
+  return acc ? { env: accountsLib.envFor(id, acc), accountDir: acc.dir, account: acc, accountId: acc.id } : {};
+};
 function checkProvider(id) { const hit = providerChecks.get(id); if (hit && Date.now() - hit.at < 60000) return hit.value; const value = Promise.resolve(providersLib.check(resolveCommand, id, providerAccountOpts(id))); providerChecks.set(id, { at: Date.now(), value }); value.catch(() => providerChecks.delete(id)); return value; }
 ipcMain.handle('providers:check', async (_e, id) => { if (id !== 'local' && !id.startsWith('local:')) return checkProvider(id); const config = localAI.read(id.startsWith('local:') ? decodeURIComponent(id.slice(6)) : undefined); let installed = true; try { resolveCommand('opencode'); } catch { installed = false; } const status = config && installed ? await localAI.check(config) : null; return { id, name: config?.name || 'Custom AI', installed, auth: status?.ok && status.matches ? 'signed-in' : 'error', detail: !installed ? 'OpenCode is required.' : !config ? 'Configure a custom AI provider in Providers.' : !status.ok ? status.error || 'Server is offline.' : !status.matches ? 'Configured model was not found on the server.' : config.baseURL, models: config ? [config.model] : [] }; });
 ipcMain.handle('providers:update-info', (_e, id, version) => providersLib.updateInfo(id, version));
@@ -1134,6 +1167,8 @@ ipcMain.handle('accounts:add', (_e, provider, label) => {
     providerChecks.delete(provider);
     const meta = accountsLib.readAccountMeta(provider, account.dir);
     if (meta.email || meta.plan) accountStore().updateMeta(provider, account.id, meta);
+    // Signed in: switch to it now (that is what "Add account" is for). Not signed in: it stays inactive.
+    if (accountsLib.hasLogin(provider, account.dir) !== false) { try { accountStore().activate(provider, account.id); } catch {} }
     notify('provider:done', { id: provider, kind: 'login', exitCode, name });
     notify('accounts-changed', provider);
     if (usageTracking()) usageAll(true).then(shareUsage).catch(() => {});
@@ -1310,7 +1345,7 @@ function retryUsageSoon(all) {
   const failed = Object.values(all || {}).filter(u => u.error && !['unsupported', 'not-installed', 'off', 'manual'].includes(u.errorCode));
   if (!failed.length || usageRetry) return;
   const wait = Math.min(300, Math.max(30, ...failed.map(u => u.retryAfter || 30)));
-  usageRetry = setTimeout(() => { usageRetry = null; if (!host.isActive()) return; usageLib.getAll({ providers: failed.map(u => u.provider), resolveCommand, force: true, forProvider: providerAccountOpts }).then(shareUsage).catch(() => {}); }, wait * 1000);
+  usageRetry = setTimeout(() => { usageRetry = null; if (!host.isActive()) return; usageLib.getAll({ providers: failed.map(u => u.provider), resolveCommand, force: true, forProvider: usageAccountOpts }).then(shareUsage).catch(() => {}); }, wait * 1000);
 }
 // Limits belong to the account, not the project: a new reading goes to every tab (each keeps only the providers it
 // has enabled), so two tabs never show different numbers for the same limit.
@@ -1325,12 +1360,12 @@ async function usageAll(force) {
   // Antigravity is manual only (its /usage spends a model turn): automatic polls fetch the free providers and just
   // carry its last saved reading, so the section can show the last number and when it was read.
   const auto = usageIds().filter(id => usageLib.AUTO.includes(id));
-  const all = await usageLib.getAll({ providers: auto, resolveCommand, force, forProvider: providerAccountOpts });
-  if (usageIds().includes('antigravity')) all.antigravity = await usageLib.getUsage('antigravity', { resolveCommand, force: false, ...providerAccountOpts('antigravity') });
+  const all = await usageLib.getAll({ providers: auto, resolveCommand, force, forProvider: usageAccountOpts });
+  if (usageIds().includes('antigravity')) all.antigravity = await usageLib.getUsage('antigravity', { resolveCommand, force: false, ...usageAccountOpts('antigravity') });
   retryUsageSoon(all); return all;
 }
 ipcMain.handle('usage:get', () => usageAll(false));
-ipcMain.handle('usage:refresh', async (_e, id) => { if (demo) { const all = usageLib.demo(); notify('usage:update', all); return all; } if (!usageTracking()) { const all = usageOff(); shareUsage(all); return all; } const all = id ? await usageLib.getAll({ providers: [id], resolveCommand, force: true, forProvider: providerAccountOpts }) : await usageAll(true); shareUsage(all); return all; });
+ipcMain.handle('usage:refresh', async (_e, id) => { if (demo) { const all = usageLib.demo(); notify('usage:update', all); return all; } if (!usageTracking()) { const all = usageOff(); shareUsage(all); return all; } const all = id ? await usageLib.getAll({ providers: [id], resolveCommand, force: true, forProvider: usageAccountOpts }) : await usageAll(true); shareUsage(all); return all; });
 intervals.push(setInterval(() => { if (usageTracking() && host.isActive() && win && !win.isDestroyed() && win.isVisible() && !win.isMinimized()) usageAll(true).then(shareUsage).catch(() => {}); }, 180000));
 ipcMain.handle('templates:save', (_e, t) => templates.save(workspace, t));
 ipcMain.handle('templates:delete', (_e, file) => templates.remove(file));

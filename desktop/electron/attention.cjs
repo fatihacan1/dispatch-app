@@ -22,7 +22,23 @@ function approvalPrompt(t) {
 function progressKey(data) {
   return normalize(String(data || '')).replace(/[⠀-⣿✢-✽·…●◐-◓∙*•]/g, '').replace(/\b\d+h\b|\b\d+m\b|\b\d+(?:\.\d+)?s\b/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
 }
-function attentionFrom(text) {
+// Once an agent has worked (hadTurn), its own replies and command output often mention "not signed in"
+// or "run /login". After the first turn, only a provider's real logged-out TUI screen counts as Sign in.
+function signInPrompt(t, { provider, hadTurn } = {}) {
+  if (!hadTurn) {
+    return /select login method|sign[ -]?in with|(?:sign|log)[ -]?in to continue|please (?:sign|log)[ -]?in|not (?:logged|signed) in|waiting for authentication|authentication required|run \/login|notlogin/.test(t);
+  }
+  if (provider === 'claude') {
+    return /invalid api key\s*(?:·|\W)*\s*(?:please )?run \/login/.test(t)
+      || (/select login method/.test(t) && /1\.\s*claude account/.test(t));
+  }
+  if (provider === 'codex') {
+    return (/sign in with chatgpt/.test(t) && /(?:device code|api key|1\.\s*sign in)/.test(t))
+      || /please run ['"`]?codex login['"`]?/.test(t);
+  }
+  return false;
+}
+function attentionFrom(text, opts) {
   // agy 1.5.10 greets with "You are currently not signed in. Signing in..." and then signs in by itself. A real
   // logout makes it quit with "not logged into Antigravity" (engine onExit), so this greeting is never a login screen.
   const t = normalize(text).replace(/you are currently not signed in/g, '');
@@ -31,7 +47,7 @@ function attentionFrom(text) {
   // Claude's AskUserQuestion menu (and its "review your answers" step): the agent waits for a choice.
   if ((/chat about this/.test(t) && /enter to select/.test(t) && /arrow keys to navigate/.test(t)) || /ready to submit your answers\?/.test(t)) return 'Question';
   // A real login screen, not an agent that merely writes about logins while it works on auth code.
-  if (/select login method|sign[ -]?in with|(?:sign|log)[ -]?in to continue|please (?:sign|log)[ -]?in|not (?:logged|signed) in|waiting for authentication|authentication required|run \/login|notlogin/.test(t)) return 'Sign in';
+  if (signInPrompt(t, opts)) return 'Sign in';
   if (approvalPrompt(t)) return 'Approve command';
   if (/(?:rate limit|usage limit|quota).{0,80}(?:reached|exceeded|exhausted|try again)|(?:reached|exceeded|exhausted).{0,80}(?:rate limit|usage limit|quota)|too many requests|(?:hit|reached) your (?:usage|rate) limit/.test(t)) return 'Limit reached';
   // "error:" in an agent's output is ordinary work (a failing test, a compiler message), not a reason to stop it.
@@ -39,6 +55,17 @@ function attentionFrom(text) {
 }
 // Prompts that wait for a key: nothing may be pasted into them. Anything else is only shown to the user.
 const BLOCKING = ['Trust folder', 'Sign in', 'Approve command', 'Question'];
+// If the CLI is clearly back at its prompt or working, a stale attention must not hold the queue forever.
+function shouldClearAttention(attention, { turn, hasSteps, codexState } = {}) {
+  // Only a Sign in can be proven stale by the transcript. Claude and agy write the tool step BEFORE they show the
+  // approval or question menu, so clearing those here would type queued messages into the menu (approve or reject
+  // a command by accident). Trust folder stays with the screen logic.
+  // A finished turn (back at the prompt) means no menu is open any more, whatever was detected.
+  if (!attention) return false;
+  if (turn === false || codexState === 'idle' || codexState === 'done') return true;
+  if (attention !== 'Sign in') return false;
+  return turn === true || !!hasSteps || codexState === 'working';
+}
 // Codex offers a cheaper model when the limit is near and waits for a choice; Enter would switch the model.
 // Answer "2. Keep current model" (Down, Enter) so the agent goes on with the model the user chose.
 function nudgeAnswer(provider, text) {
@@ -54,4 +81,4 @@ function trustAnswer(provider, text) {
   if (provider === 'gemini' && t.includes('do you trust the files in this folder?') && /1\.\s*trust folder/.test(t) && /2\.\s*trust parent folder/.test(t) && /3\.\s*don.t trust/.test(t)) return '\r';
   return null;
 }
-module.exports = { approvalPrompt, progressKey, attentionFrom, trustAnswer, nudgeAnswer, BLOCKING, normalize };
+module.exports = { approvalPrompt, progressKey, attentionFrom, shouldClearAttention, trustAnswer, nudgeAnswer, BLOCKING, normalize };
