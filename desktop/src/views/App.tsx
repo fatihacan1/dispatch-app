@@ -187,6 +187,10 @@ export function App() {
   const [agentTemplates, setAgentTemplates] = useState<Record<string, any>>({});
   const [workspace, setWorkspace] = useState("");
   const [needsFolder, setNeedsFolder] = useState(false);
+  useLayoutEffect(() => {
+    document.documentElement.classList.toggle("has-topbar", !needsFolder);
+    return () => { document.documentElement.classList.remove("has-topbar"); };
+  }, [needsFolder]);
   const [tabEnter, setTabEnter] = useState(0);
   useEffect(() => (window as any).army.on("tab-shown", () => setTabEnter(n => n + 1)), []);
   const [macFs, setMacFs] = useState(false);
@@ -426,13 +430,14 @@ export function App() {
   const [shells, setShells] = useState<Shell[]>([]);
   const [shellActive, setShellActive] = useState<string | null>(null);
   const [termOpen, setTermOpen] = useState(false);
+  const [termFocus, setTermFocus] = useState(0);
   const [termH, setTermH] = useState(260);
   useEffect(() => { const load = () => window.army.shells.list().then(setShells).catch(() => {}); void load(); return window.army.on("shells-changed", load); }, []);
-  const openShell = async (name?: string) => {
-    const target = name || (await window.army.shells.open());
-    setShellActive(target); setTermOpen(true); setView("agent"); toggleIde(true);
+  const openShell = async (name?: string, cwd?: string) => {
+    const target = name || (await window.army.shells.open(cwd));
+    setShellActive(target); setTermOpen(true); setView("agent"); toggleIde(true); setTermFocus(n => n + 1);
   };
-  const toggleTerminal = () => { if (termOpen) { setTermOpen(false); return; } setView("agent"); if (shells.length) { setTermOpen(true); toggleIde(true); } else void openShell(); };
+  const toggleTerminal = () => { if (termOpen) { setTermOpen(false); return; } setView("agent"); if (shells.length) { setTermOpen(true); toggleIde(true); setTermFocus(n => n + 1); } else void openShell(); };
   const toggleTerminalRef = useRef(toggleTerminal); toggleTerminalRef.current = toggleTerminal;
   const openInIde = (path: string) => { toggleIde(true); setIdeReq({ path, diff: true, nonce: Date.now() }); };
   const startIdeResize = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -968,8 +973,8 @@ export function App() {
         {/* The agent page stays mounted while another page is open: coming back does not rebuild the office scene, the terminal or the chat. */}
         {(agentSeen || onAgentPage) && <div className="view" hidden={!onAgentPage}>
             <div ref={workbench} className={"workbench" + (ide ? " ide-open" : "")} style={{ "--ide-w": (ideCompact ? treeW : Math.max(320, Math.min(ideW, wbWidth - 407))) + "px" } as React.CSSProperties}>
-            <div className="ide-slot" aria-hidden={!ide} inert={!ide ? true : undefined}>{ideMounted && <Suspense fallback={<div className="ide-loading">Loading editor…</div>}><IdePanel workspace={workspace} open={ide} request={ideReq} gitFiles={demo ? DEMO_FILES : gitFiles} terminalOpen={termOpen} toggleTerminal={toggleTerminal} close={() => toggleIde()} editorOnFile={prefs.ideEditorOnFile} treeToggle={prefs.ideTreeToggle} onCompact={setIdeCompact} onReady={() => setBootReady(b => b.files ? b : { ...b, files: true })}
-              terminal={<Terminals shells={shells} active={shellActive} setActive={setShellActive} onClose={() => setTermOpen(false)} height={termH} setHeight={setTermH} />} /></Suspense>}</div>
+            <div className="ide-slot" aria-hidden={!ide} inert={!ide ? true : undefined}>{ideMounted && <Suspense fallback={<div className="ide-loading">Loading editor…</div>}><IdePanel workspace={workspace} open={ide} request={ideReq} gitFiles={demo ? DEMO_FILES : gitFiles} terminalOpen={termOpen} toggleTerminal={toggleTerminal} openTerminal={cwd => void openShell(undefined, cwd)} close={() => toggleIde()} editorOnFile={prefs.ideEditorOnFile} treeToggle={prefs.ideTreeToggle} onCompact={setIdeCompact} onReady={() => setBootReady(b => b.files ? b : { ...b, files: true })}
+              terminal={<Terminals shells={shells} active={shellActive} setActive={setShellActive} onClose={() => setTermOpen(false)} height={termH} setHeight={setTermH} focusNonce={termFocus} />} /></Suspense>}</div>
             <div className="ide-resizer" role="separator" aria-orientation="vertical" aria-label="Resize files panel" tabIndex={ide ? 0 : -1} onPointerDown={startIdeResize} onKeyDown={e => { const d = e.key === "ArrowLeft" ? -32 : e.key === "ArrowRight" ? 32 : 0; if (!d) return; if (ideCompact) setTreeW(w => Math.min(520, Math.max(240, w + d))); else setIdeW(w => Math.max(420, w + d)); }} />
             <div className="chat">
               {office && <><div className="stage" style={{ height: stageH }}><Suspense fallback={null}>{heavyOk && <Office agents={team.filter(a => a.name !== "boss").map(a => ({ name: a.name, role: a.model }))} messages={messages} working={working} onReady={() => setBootReady(b => b.office ? b : { ...b, office: true })} />}</Suspense></div>

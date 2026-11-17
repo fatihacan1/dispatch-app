@@ -27,7 +27,7 @@ declare global {
       agentAction(name: string, action: string): Promise<boolean>;
       setModel(name: string, model: string): Promise<{ mode: "applied" | "queued" | "saved" | "restarted" | "fresh" }>;
       gitChanges(): Promise<{ path: string; add: number; del: number; status: string }[]>;
-      shells: { choices(): Promise<{ id: string; label: string; path: string }[]>; list(): Promise<{ name: string; title: string; cwd: string; exited: boolean }[]>; open(): Promise<string>; close(name: string): Promise<boolean>; rename(name: string, title: string): Promise<boolean> };
+      shells: { choices(): Promise<{ id: string; label: string; path: string }[]>; list(): Promise<{ name: string; title: string; cwd: string; exited: boolean }[]>; open(cwd?: string): Promise<string>; close(name: string): Promise<boolean>; rename(name: string, title: string): Promise<boolean> };
       voice: {
         status(): Promise<{ installed: boolean; running: boolean; flavor: string; exe: string; model: string; dir: string; lang: string; mic: string; shortcut: string; shortcuts: string[]; shortcutOk: boolean }>;
         warm(): Promise<boolean>;
@@ -49,7 +49,7 @@ declare global {
         watch(on: boolean): Promise<boolean>;
         reveal(rel: string): Promise<boolean>;
         context?(rel: string, isDir: boolean): Promise<"open" | "deleted" | null>;
-        act(action: "reveal" | "open" | "terminal" | "copy-path" | "copy-rel" | "copy-name" | "trash", rels: string[]): Promise<string[]>;
+        act(action: "reveal" | "open" | "copy-path" | "copy-rel" | "copy-name" | "trash", rels: string[]): Promise<string[]>;
         import(dir: string, items: { name: string; data: ArrayBuffer | null }[]): Promise<number>;
       };
       setEffort(name: string, effort: string): Promise<{ mode: "applied" | "queued" | "saved" | "restarted" | "fresh" }>;

@@ -1445,6 +1445,8 @@ input[type=checkbox]:focus-visible { outline: 2px solid var(--focus); outline-of
 
 /* Boot loader: shown by index.html until the app has painted. Opacity and transform only. */
 #boot, .boot-overlay { position: fixed; inset: 0; z-index: 9999; display: grid; place-items: center; background: var(--bg); transition: opacity 260ms var(--ease-out); }
+/* With the header on screen the loader covers only what is below it: the project tabs stay usable while a tab loads. */
+html.has-topbar #boot, html.has-topbar .boot-overlay { top: var(--topbar-h); z-index: 25; }
 #boot.done { opacity: 0; pointer-events: none; }
 html[data-theme="frosted"] #boot, html[data-theme="frosted"] .boot-overlay { background: var(--overlay); -webkit-backdrop-filter: blur(var(--glass-blur)); backdrop-filter: blur(var(--glass-blur)); }
 .boot-box { display: flex; flex-direction: column; align-items: center; animation: boot-in 520ms var(--ease-out) both; }

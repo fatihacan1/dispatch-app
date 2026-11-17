@@ -136,14 +136,13 @@ function parseAgyStep(type, payload) {
 // matched the first agent to the second one's conversation (one showed idle while the other worked). The first
 // message carries "You are <name>.", so a conversation goes to the agent it names; one without any name to any.
 function newAgyDb(cwd, since, name, accountDir) {
-  const uri = 'file:///' + path.resolve(cwd).replace(/\\/g, '/');
   let names = []; try { names = fs.readdirSync(agyDir(accountDir)).filter(n => /^[\w-]+\.db$/.test(n)); } catch { return null; }
   for (const n of names) {
     const full = path.join(agyDir(accountDir), n); if (claimed.has(full)) continue;
     try {
       if (fs.statSync(full).birthtimeMs < since - 2000) continue;
       const db = openAgy(full); const meta = db.prepare("select data from trajectory_metadata_blob where id = 'main'").get(); db.close();
-      if (!meta || !Buffer.from(meta.data).toString('latin1').toLowerCase().includes(uri.toLowerCase())) continue;
+      if (!meta || !agyMetaHasFolder(meta.data, cwd)) continue;
       if (name) {
         const db2 = openAgy(full); let first; try { first = db2.prepare('select step_payload from steps where step_type = 14 order by idx limit 1').get(); } finally { db2.close(); }
         if (!first?.step_payload) continue; // no message yet: decide on a later tick
@@ -155,6 +154,22 @@ function newAgyDb(cwd, since, name, accountDir) {
     } catch {}
   }
   return null;
+}
+// agy stores the folder as a percent-encoded URI ("file:///D:/Kodlar/Peach%20Cord", "Masa%C3%BCst%C3%BC"). Compared
+// with the plain path, a folder with a space or a non-ASCII letter never matched: the chat stayed on "Thinking" for
+// good while the agent answered in its terminal. Each file:/// URI in the metadata is decoded and compared as a path
+// (one copy ends cleanly; others run into protobuf bytes, so only an exact match counts).
+function agyMetaHasFolder(data, cwd) {
+  const norm = p => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  const want = norm(path.resolve(cwd));
+  const buf = Buffer.from(data);
+  for (const text of [buf.toString('utf8'), buf.toString('latin1')]) {
+    for (const m of text.matchAll(/file:\/\/\/([^\x00-\x20"'<>]+)/g)) {
+      let p = m[1]; try { p = decodeURIComponent(p); } catch {}
+      if (norm(p) === want) return true;
+    }
+  }
+  return false;
 }
 function agyMatchesAgent(payload, name) {
   const text = Buffer.from(payload).toString('latin1').replace(/\0/g, '');
@@ -249,4 +264,4 @@ function questionKeys(questions, answers) {
   });
 }
 
-module.exports = { watch, parseClaude, parseCodex, parseAgyStep, agyMatchesAgent, antigravityWorking, claudeFile, questionKeys };
+module.exports = { watch, parseClaude, parseCodex, parseAgyStep, agyMatchesAgent, agyMetaHasFolder, antigravityWorking, claudeFile, questionKeys };

@@ -49,7 +49,7 @@ const parent = (p: string) => p.includes("/") ? p.slice(0, p.lastIndexOf("/")) :
 
 // editorOnFile (Settings > Appearance): with no file open the panel is only the tree, the editor appears with the first file.
 // treeToggle: a button that folds the tree away so the editor gets the whole panel.
-export function IdePanel({ workspace, open, request, gitFiles, terminal, terminalOpen, toggleTerminal, close, editorOnFile, treeToggle, onCompact, onReady }: { close?: () => void; workspace: string; open: boolean; request: OpenRequest | null; gitFiles: GitFile[] | null; terminal?: React.ReactNode; terminalOpen?: boolean; toggleTerminal?: () => void; editorOnFile?: boolean; treeToggle?: boolean; onCompact?: (compact: boolean) => void; onReady?: () => void }) {
+export function IdePanel({ workspace, open, request, gitFiles, terminal, terminalOpen, toggleTerminal, openTerminal, close, editorOnFile, treeToggle, onCompact, onReady }: { close?: () => void; workspace: string; open: boolean; request: OpenRequest | null; gitFiles: GitFile[] | null; terminal?: React.ReactNode; terminalOpen?: boolean; toggleTerminal?: () => void; openTerminal?: (cwd?: string) => void; editorOnFile?: boolean; treeToggle?: boolean; onCompact?: (compact: boolean) => void; onReady?: () => void }) {
   const onReadyRef = useRef(onReady); onReadyRef.current = onReady;
   const [children, setChildren] = useState<Record<string, Entry[]>>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set([""]));
@@ -281,12 +281,13 @@ export function IdePanel({ workspace, open, request, gitFiles, terminal, termina
   };
   const menuItems = (paths: string[]): MenuItem[] => {
     const one = paths.length === 1; const file = one && !isDirPath(paths[0]);
-    const act = (a: "reveal" | "open" | "terminal" | "copy-path" | "copy-rel" | "copy-name") => () => void window.army.files.act(a, paths);
+    const act = (a: "reveal" | "open" | "copy-path" | "copy-rel" | "copy-name") => () => void window.army.files.act(a, paths);
+    const termCwd = one ? (isDirPath(paths[0]) ? paths[0] : parent(paths[0]) || ".") : ".";
     return [
       ...(file ? [{ label: "Open", action: () => void openFile(paths[0]) }, "sep" as const] : []),
       ...(one ? [{ label: MAC ? "Reveal in Finder" : "Reveal in File Explorer", hint: MAC ? "\u2325\u2318R" : "Shift+Alt+R", action: act("reveal") }] : []),
       { label: "Open with default app", action: act("open") },
-      ...(one ? [{ label: "Open terminal here", action: act("terminal") }] : []),
+      ...(one && openTerminal ? [{ label: "Open terminal here", action: () => openTerminal(termCwd) }] : []),
       "sep" as const,
       { label: one ? "Copy path" : "Copy paths", hint: MAC ? "\u2325\u2318C" : "Shift+Alt+C", action: act("copy-path") },
       { label: one ? "Copy relative path" : "Copy relative paths", action: act("copy-rel") },

@@ -5,9 +5,10 @@ import { Console } from "../components/common";
 export type Shell = { name: string; title: string; cwd: string; exited: boolean };
 
 /** Terminal area under the editor: one row of shell tabs, the active shell below. */
-export function Terminals({ shells, active, setActive, onClose, height, setHeight }: { shells: Shell[]; active: string | null; setActive: (name: string) => void; onClose: () => void; height: number; setHeight: (h: number) => void }) {
+export function Terminals({ shells, active, setActive, onClose, height, setHeight, focusNonce = 0 }: { shells: Shell[]; active: string | null; setActive: (name: string) => void; onClose: () => void; height: number; setHeight: (h: number) => void; focusNonce?: number }) {
   const [renaming, setRenaming] = useState<string | null>(null);
-  const open = async () => { const name = await window.army.shells.open(); setActive(name); };
+  const [localFocus, setLocalFocus] = useState(0);
+  const open = async () => { const name = await window.army.shells.open(); setActive(name); setLocalFocus(n => n + 1); };
   const close = async (name: string) => { await window.army.shells.close(name); if (active === name) { const rest = shells.filter(s => s.name !== name); if (rest.length) setActive(rest[rest.length - 1].name); else onClose(); } };
   const resize = (e: React.PointerEvent<HTMLDivElement>) => {
     const startY = e.clientY, start = height, box = (e.currentTarget.parentElement?.parentElement as HTMLElement).getBoundingClientRect();
@@ -30,6 +31,6 @@ export function Terminals({ shells, active, setActive, onClose, height, setHeigh
       <span className="grow" />
       <button type="button" className="icon-button" aria-label="Hide terminal" title="Hide terminal (Ctrl `)" onClick={onClose}><XMarkIcon /></button>
     </div>
-    <div className="term-body">{current ? <Console key={current.name} name={current.name} /> : <div className="ide-blank"><p>No terminal open</p></div>}</div>
+    <div className="term-body">{current ? <Console key={current.name} name={current.name} focusNonce={focusNonce + localFocus} /> : <div className="ide-blank"><p>No terminal open</p></div>}</div>
   </div>;
 }

@@ -79,3 +79,30 @@ test('antigravity: loading or signing in is not working; a delivered message or 
  // Stopped with Esc: the turn never ended in the transcript, but it is back at its prompt and quiet.
  assert.equal(antigravityWorking({ turn: true, atPrompt: true, eventAt: now - 30000, lastOutput: now - 25000 }, now), false);
 });
+test('agy conversation folder: percent-encoded URIs, spaces and non-ASCII letters match', () => {
+  const { agyMetaHasFolder } = require('./activity.cjs');
+  const meta = Buffer.concat([Buffer.from([0x0a, 0x30]), Buffer.from('file:///C:/Users/kerem/OneDrive/Masa%C3%BCst%C3%BC/Kerem%20CV'), Buffer.from([0x12, 0x05]), Buffer.from('file:///C:/Users/kerem/OneDrive/Masa%C3%BCst%C3%BC/Kerem%20CVz'), Buffer.from([0xff])]);
+  assert.equal(agyMetaHasFolder(meta, 'C:/Users/kerem/OneDrive/Masaüstü/Kerem CV'), true);
+  assert.equal(agyMetaHasFolder(meta, 'C:/Users/kerem/OneDrive/Masaüstü/Kerem'), false);
+  assert.equal(agyMetaHasFolder(Buffer.from('\x0afile:///D:/Fatih/Kodlar/Dispatch\x12'), 'D:/Fatih/Kodlar/Dispatch'), true);
+  assert.equal(agyMetaHasFolder(Buffer.from('\x0afile:///D:/Fatih/Kodlar/Dispatch2\x12'), 'D:/Fatih/Kodlar/Dispatch'), false);
+});
+test('agy: a conversation in a folder with a space and Turkish letters is found (chat no longer stuck on Thinking)', async () => {
+  const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+  const { DatabaseSync } = require('node:sqlite');
+  const { watch } = require('./activity.cjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-'));
+  const cwd = path.join(root, 'Masaüstü', 'Kerem CV'); fs.mkdirSync(cwd, { recursive: true });
+  const conv = path.join(root, 'account', 'conversations'); fs.mkdirSync(conv, { recursive: true });
+  // What agy writes: the folder as a percent-encoded URI in the metadata, the first user message as step type 14.
+  const uri = 'file:///' + cwd.split(path.sep).join('/').split('/').map((s, i) => (i === 0 ? s : encodeURIComponent(s))).join('/');
+  const db = new DatabaseSync(path.join(conv, 'c1.db'));
+  db.exec('create table trajectory_metadata_blob (id text, data blob); create table steps (idx integer, step_type integer, status integer, step_payload blob)');
+  db.prepare("insert into trajectory_metadata_blob values ('main', ?)").run(Buffer.concat([Buffer.from([0x0a, uri.length]), Buffer.from(uri), Buffer.from([0x12, 0x01, 0x7a])]));
+  db.prepare('insert into steps values (0, 14, 3, ?)').run(Buffer.from('You are boss. You report to you'));
+  db.close();
+  let session = null;
+  const stop = watch({ provider: 'antigravity', cwd, name: 'boss', accountDir: path.join(root, 'account'), onEvent: () => {}, onSession: id => { session = id; } });
+  try { for (let i = 0; i < 30 && !session; i++) await new Promise(r => setTimeout(r, 100)); } finally { stop(); fs.rmSync(root, { recursive: true, force: true }); }
+  assert.equal(session, 'c1');
+});

@@ -1291,10 +1291,14 @@ function shellSpec(ui) {
 }
 ipcMain.handle('shell:list', () => [...shells.entries()].map(([name, s]) => ({ name, title: s.title, cwd: s.cwd, exited: s.exited, server: s.server || null })));
 ipcMain.handle('terminal:shells', () => shellChoices());
-ipcMain.handle('shell:open', () => {
+const isDir = p => { try { return !!p && fs.statSync(p).isDirectory(); } catch { return false; } };
+ipcMain.handle('shell:open', (_e, requestedCwd) => {
   const name = `shell-${++shellSeq}`, ui = readUi();
-  const wanted = ui.terminalCwd && (() => { try { return fs.statSync(ui.terminalCwd).isDirectory(); } catch { return false; } })() ? ui.terminalCwd : null;
-  const cwd = wanted || workspace || os.homedir();
+  const explicit = typeof requestedCwd === 'string' && requestedCwd.trim()
+    ? (path.isAbsolute(requestedCwd) ? path.resolve(requestedCwd) : (workspace ? path.resolve(workspace, requestedCwd) : null))
+    : null;
+  const wanted = ui.terminalCwd && isDir(ui.terminalCwd) ? ui.terminalCwd : null;
+  const cwd = (explicit && isDir(explicit) ? explicit : null) || wanted || workspace || os.homedir();
   const spec = shellSpec(ui);
   let terminal;
   try { terminal = pty.spawn(spec.file, spec.args, { name: 'xterm-256color', cols: 100, rows: 24, cwd, env: { ...process.env, ...spec.env } }); }
@@ -1592,10 +1596,8 @@ ipcMain.handle('files:context', (_e, rel, isDir) => new Promise(resolve => {
 // Tree actions on one or many selected items (renderer draws the menu). Delete goes to the OS trash.
 ipcMain.handle('files:act', async (_e, action, rels) => {
   const list = (Array.isArray(rels) ? rels : []).map(String); const fulls = list.map(r => filesLib.resolve(workspace, r)); if (!fulls.length) return [];
-  const dirOf = f => { try { return fs.statSync(f).isDirectory() ? f : path.dirname(f); } catch { return path.dirname(f); } };
   if (action === 'reveal') shell.showItemInFolder(fulls[0]);
   else if (action === 'open') for (const f of fulls) await shell.openPath(f);
-  else if (action === 'terminal') { const cwd = dirOf(fulls[0]); if (process.platform === 'win32') spawn('cmd.exe', ['/c', 'start', 'powershell.exe', '-NoExit'], { cwd, detached: true, stdio: 'ignore' }).unref(); else if (process.platform === 'darwin') spawn('open', ['-a', 'Terminal', cwd], { detached: true, stdio: 'ignore' }).unref(); }
   else if (action === 'copy-path') clipboard.writeText(fulls.join('\n'));
   else if (action === 'copy-rel') clipboard.writeText(list.map(r => r.replace(/\\/g, '/')).join('\n'));
   else if (action === 'copy-name') clipboard.writeText(fulls.map(f => path.basename(f)).join('\n'));

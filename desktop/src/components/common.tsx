@@ -33,8 +33,9 @@ export function StatusDot({ tone, label }: { tone: Tone; label?: string }) {
   return <span className={"status status-" + tone}><i aria-hidden="true" />{label && <span>{label}</span>}</span>;
 }
 const token = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-export function Console({ name, mini = false }: { name: string; mini?: boolean }) {
+export function Console({ name, mini = false, focusNonce }: { name: string; mini?: boolean; focusNonce?: number }) {
   const el = useRef<HTMLDivElement>(null);
+  const termRef = useRef<Terminal | null>(null);
   useEffect(() => {
     if (!el.current) return;
     const term = new Terminal({
@@ -48,6 +49,7 @@ export function Console({ name, mini = false }: { name: string; mini?: boolean }
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(el.current);
+    termRef.current = term;
 
     // One fit per frame at most: a panel sliding open fires the observer on every frame.
     let frame = 0, cols = 0, rows = 0;
@@ -78,7 +80,12 @@ export function Console({ name, mini = false }: { name: string; mini?: boolean }
     const onMenu = (e: MouseEvent) => { e.preventDefault(); if (!copy()) paste(); };
     el.current.addEventListener("contextmenu", onMenu);
     const host = el.current;
-    return () => { disposed = true; cancelAnimationFrame(frame); host.removeEventListener("contextmenu", onMenu); off(); observer.disconnect(); term.dispose(); };
+    return () => { disposed = true; termRef.current = null; cancelAnimationFrame(frame); host.removeEventListener("contextmenu", onMenu); off(); observer.disconnect(); term.dispose(); };
   }, [name, mini]);
+  useEffect(() => {
+    if (!focusNonce) return;
+    const frame = requestAnimationFrame(() => termRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [focusNonce, name]);
   return <div className="terminal" ref={el} />;
 }
