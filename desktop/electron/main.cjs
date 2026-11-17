@@ -194,17 +194,37 @@ const telegram = require('./telegram.cjs').create({
     if (!body.trim() && !files.length) { tgDefault = target.id; broadcastTabs(); await telegram.send(`Now talking to ${tabName(target)}.`); return; }
     await target.engine.telegramIn(body, files);
   },
+  // The "/" menu in Telegram (the bot sets it itself).
+  commands: [['projects', 'Open projects: tap one to talk to it'], ['status', 'What every agent is doing'], ['use', 'Talk to a project: /use <number or name>'], ['help', 'How to use this chat']],
   onCommand: async (cmd, arg) => {
     const list = openTabs(), def = tgTarget();
-    if (cmd === 'projects' || cmd === 'where') return list.length ? `Open projects (write @name to talk to one; replies go back to the project of the message you answer):\n${list.map((t, i) => `${i + 1}. @${tabName(t)} · ${t.engine.owner()} answers${t === def ? '  ← default' : ''}`).join('\n')}\n\nSet the default with /use <number>.` : 'No project is open in Dispatch.';
+    // Telegram suggests no custom words after @: projects are buttons instead.
+    const pick = () => list.map(t => [{ text: `${t === def ? '● ' : ''}${tabName(t)}`, data: `use:${t.id}` }]);
+    if (cmd === 'projects' || cmd === 'where') return list.length ? { text: `Open projects. Tap one to talk to it; ${def ? `now: ${tabName(def)}` : 'none chosen'}.\nA reply to a message goes back to that message's project.`, buttons: pick() } : 'No project is open in Dispatch.';
     if (cmd === 'use') {
+      if (!arg) return list.length ? { text: 'Which project?', buttons: pick() } : 'No project is open in Dispatch.';
       const n = Number(arg); const t = Number.isInteger(n) && n >= 1 ? list[n - 1] : findTab(arg);
       if (!t) return `No open project "${arg}". Send /projects to see them.`;
       tgDefault = t.id; broadcastTabs();
-      return `Messages without @name now go to ${tabName(t)} (${t.engine.owner()} answers).`;
+      return `Messages now go to ${tabName(t)} (${t.engine.owner()} answers).`;
     }
-    if (cmd === 'help') return 'Write anything and the default project answers.\n@name message: talk to another open project\nReply to a message: the answer goes to that project\n/projects: open projects\n/use <number>: change the default';
+    if (cmd === 'status') {
+      if (!list.length) return 'No project is open in Dispatch.';
+      return list.map(t => { let team = []; try { team = t.engine.teamStatus(); } catch {} return `${tabName(t)}${t === def ? ' (now)' : ''}\n${team.length ? team.map(a => `  ${a.name}: ${a.state}`).join('\n') : '  no team'}`; }).join('\n\n');
+    }
+    if (cmd === 'help') return { text: `Write anything and ${def ? tabName(def) : 'the open project'} answers.\nTap / for commands. /projects switches project; @name message also works.\nReply to a message: the answer goes to that project.\nWhen an agent waits 20 s for a command approval, it comes here with Approve / Deny buttons.`, buttons: list.length > 1 ? pick() : [] };
     return null;
+  },
+  onButton: async data => {
+    const use = /^use:(.+)$/.exec(data);
+    if (use) {
+      const t = openTabs().find(x => String(x.id) === use[1]);
+      if (!t) return { toast: 'That project is no longer open.' };
+      tgDefault = t.id; broadcastTabs();
+      return { toast: `Now: ${tabName(t)}`, text: `Messages now go to ${tabName(t)} (${t.engine.owner()} answers).` };
+    }
+    for (const t of openTabs()) { let r = null; try { r = t.engine.telegramButton(data); } catch (e) { return { toast: e.message }; } if (r) return r; }
+    return { toast: 'This is no longer open.' };
   },
 });
 telegram.onChange(s => { broadcast('telegram', s); for (const t of tabs) try { t.engine.onTelegramChange(); } catch {} });

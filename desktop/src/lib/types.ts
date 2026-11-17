@@ -1,7 +1,8 @@
 export type Message = { id: string; from: string; to: string; text: string; chats?: Record<string, string> };
 export type AgentQuestion = { id: string; at: string; questions: { question: string; header: string; multiSelect: boolean; options: { label: string; description: string }[] }[] };
 export type CustomTool = { id: string; name: string; command: string; cwd: string; note: string; autostart: boolean; agents: boolean; stopped?: boolean; terminal: string; log: string; running: boolean; exitCode: number | null; startedAt: string | null };
-export type QuestionAnswer = { picks: number[]; other?: string };
+export type TaskCard = { id: string; agent: string; lead: string; title: string; text: string; startedAt: string; status: "working" | "waiting" | "stalled" | "done" | "stopped"; endedAt: string | null; reason?: string | null; waitReason?: string; stalledAt?: string };
+export type QuestionAnswer ={ picks: number[]; other?: string };
 export type Server = { id: string; name: string; host: string; port: number; user: string; key: string; note: string; icon: string; access: "off" | "ask" | "on"; vpnId?: string; hasPassword?: boolean; password?: string };
 export type Vpn = { id: string; name: string; type: "wireguard" | "proxy" | "jump"; config?: string; hasKey?: boolean; clearKey?: boolean; protocol?: "socks5" | "http"; host?: string; port?: number; user?: string; hasPassword?: boolean; password?: string };
 export type Account = { provider: "claude" | "codex" | "antigravity"; id: string; label: string; dir: string; active: boolean; isDefault?: boolean; email?: string; plan?: string };
@@ -59,6 +60,7 @@ declare global {
       operations: { list(): Promise<any[]>; resume(id: string): Promise<any>; remove(id: string): Promise<any[]> };
       start(template: any, team?: string): Promise<string[]>;
       teams: { list(): Promise<any[]>; save(team: any): Promise<string>; saveCurrent(name: string, scope: string): Promise<string>; remove(file: string): Promise<boolean> };
+      tasks: { list(): Promise<TaskCard[]> };
       resetOperation(): Promise<{ name: string; template: any; enlistedBy?: string; stopped?: boolean; error?: string }[]>;
       changeBoss(template: any, agent?: string): Promise<any>;
       isWorking(name: string): Promise<boolean>;

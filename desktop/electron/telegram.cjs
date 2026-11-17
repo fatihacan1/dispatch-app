@@ -8,7 +8,7 @@ const crypto = require('node:crypto');
 const TOKEN_RE = /^\d{5,}:[A-Za-z0-9_-]{30,}$/;
 const IMAGE_EXT = /\.(png|jpe?g|webp|gif)$/i;
 
-function create({ dir, onMessage, onCommand = async () => null, log = () => {} }) {
+function create({ dir, onMessage, onCommand = async () => null, onButton = async () => null, commands = [], log = () => {} }) {
   const file = path.join(dir, 'telegram.json');
   // Only one Dispatch may poll the bot (Telegram refuses two getUpdates at once and messages would land on either).
   // The poller holds telegram.lock (pid + heartbeat); another copy waits and takes over when it goes away.
@@ -48,7 +48,7 @@ function create({ dir, onMessage, onCommand = async () => null, log = () => {} }
     const me = await api('getMe', {}, token);
     stop();
     cfg = { token, bot: { username: me.username, name: me.first_name }, code: crypto.randomBytes(6).toString('hex') };
-    write(cfg); lastError = ''; start(); changed();
+    write(cfg); lastError = ''; commandsSet = false; start(); changed();
     return status();
   }
 
@@ -62,11 +62,26 @@ function create({ dir, onMessage, onCommand = async () => null, log = () => {} }
   function disconnect() { stop(); cfg = {}; try { fs.unlinkSync(file); } catch {} lastError = ''; changed(); return status(); }
   function unlink() { delete cfg.chatId; delete cfg.chatName; cfg.code = crypto.randomBytes(6).toString('hex'); write(cfg); changed(); return status(); }
 
-  async function send(text) {
+  // buttons: rows of { text, data } shown under the (last part of the) message; a tap comes back through onButton.
+  const keyboard = buttons => (buttons?.length ? { reply_markup: { inline_keyboard: buttons.map(row => row.map(b => ({ text: String(b.text).slice(0, 60), callback_data: String(b.data).slice(0, 64) }))) } } : {});
+  async function send(text, { buttons } = {}) {
     if (!cfg.chatId) throw new Error('Telegram is not connected. Connect it in Dispatch under Tools, Telegram.');
     const body = String(text || '').trim() || '(empty)';
-    for (let i = 0; i < body.length; i += 4000) await api('sendMessage', { chat_id: cfg.chatId, text: body.slice(i, i + 4000), disable_web_page_preview: true });
+    let last = null;
+    for (let i = 0; i < body.length; i += 4000) last = await api('sendMessage', { chat_id: cfg.chatId, text: body.slice(i, i + 4000), disable_web_page_preview: true, ...(i + 4000 >= body.length ? keyboard(buttons) : {}) });
+    return last?.message_id ?? true;
+  }
+  // Replaces a sent message's text and buttons (a tapped Approve turns into "Approved").
+  async function edit(messageId, text, { buttons } = {}) {
+    if (!cfg.chatId || !messageId) return false;
+    await api('editMessageText', { chat_id: cfg.chatId, message_id: messageId, text: String(text).slice(0, 4000), disable_web_page_preview: true, ...keyboard(buttons) }).catch(() => {});
     return true;
+  }
+  // The "/" menu in Telegram: set by the bot itself, so nothing has to be done in BotFather.
+  let commandsSet = false;
+  async function setCommands() {
+    if (commandsSet || !cfg.token || !commands.length) return;
+    try { await api('setMyCommands', { commands: commands.map(([command, description]) => ({ command, description })) }); commandsSet = true; } catch (e) { log(`telegram: setMyCommands ${e.message}`); }
   }
   async function sendFile(filePath, caption = '') {
     if (!cfg.chatId) throw new Error('Telegram is not connected. Connect it in Dispatch under Tools, Telegram.');
@@ -114,7 +129,21 @@ function create({ dir, onMessage, onCommand = async () => null, log = () => {} }
     return `Updated the bot's ${done.join(', ')}.`;
   }
 
+  // A command answer is text, or { text, buttons }.
+  const reply = r => (typeof r === 'string' ? send(r) : send(r.text, { buttons: r.buttons }));
+  async function handleButton(q) {
+    const answer = text => api('answerCallbackQuery', { callback_query_id: q.id, ...(text ? { text: String(text).slice(0, 190) } : {}) }).catch(() => {});
+    if (!cfg.chatId || q.message?.chat?.id !== cfg.chatId) { await answer('This bot is private.'); return; }
+    let r = null;
+    try { r = await onButton(String(q.data || ''), q.message.message_id); } catch (e) { await answer(e.message); return; }
+    // r: { toast, text, buttons }: toast pops up briefly; text replaces the tapped message (its buttons go unless given again).
+    await answer(r?.toast || '');
+    if (r?.text) await edit(q.message.message_id, r.text, { buttons: r.buttons });
+    else if (r?.reply) await reply(r.reply);
+  }
+
   async function handle(update) {
+    if (update.callback_query) return handleButton(update.callback_query);
     const m = update.message; if (!m?.chat) return;
     const text = String(m.text || m.caption || '').trim();
     const start = text.match(/^\/start(?:@\w+)?\s*(\S*)/);
@@ -126,14 +155,14 @@ function create({ dir, onMessage, onCommand = async () => null, log = () => {} }
       return;
     }
     if (m.chat.id !== cfg.chatId) { await api('sendMessage', { chat_id: m.chat.id, text: 'This bot is private.' }).catch(() => {}); return; }
-    if (start) { await api('sendMessage', { chat_id: m.chat.id, text: 'Already connected. Write your message for the boss. Start with @project to talk to another open project; /projects lists them.' }).catch(() => {}); return; }
+    if (start) { await setCommands(); try { const r = await onCommand('help', ''); if (r) { await reply(r); return; } } catch {} await send('Already connected. Write your message for the boss.').catch(() => {}); return; }
     // Photos, files, voice notes, videos: passed on as files the agent can open.
     const files = [];
     if (m.photo?.length) files.push({ id: m.photo.at(-1).file_id, name: `photo-${m.message_id}.jpg` });
     for (const [k, ext] of [['document', ''], ['video', '.mp4'], ['voice', '.ogg'], ['audio', '.mp3'], ['video_note', '.mp4'], ['animation', '.mp4']]) if (m[k]) files.push({ id: m[k].file_id, name: m[k].file_name || `${k}-${m.message_id}${ext}`, size: m[k].file_size });
     if (!text && !files.length) { await api('sendMessage', { chat_id: m.chat.id, text: 'That kind of message is not supported. Send text, a photo, a file, a voice note or a video.' }).catch(() => {}); return; }
     const cmd = text.match(/^\/(\w+)(?:@\w+)?\s*([\s\S]*)$/);
-    if (cmd) { try { const r = await onCommand(cmd[1].toLowerCase(), cmd[2].trim()); if (r) { await send(r); return; } } catch (e) { await send(e.message).catch(() => {}); return; } }
+    if (cmd) { try { const r = await onCommand(cmd[1].toLowerCase(), cmd[2].trim()); if (r) { await reply(r); return; } } catch (e) { await send(e.message).catch(() => {}); return; } }
     // A reply to one of the bot's messages carries that message's text: its [project] tag says where the answer goes.
     const replyTo = m.reply_to_message?.from?.is_bot ? String(m.reply_to_message.text || m.reply_to_message.caption || '') : '';
     try { await onMessage(text, files, replyTo); } catch (e) { await send(`Could not reach the boss: ${e.message}`).catch(() => {}); }
@@ -147,7 +176,8 @@ function create({ dir, onMessage, onCommand = async () => null, log = () => {} }
       if (standby) { standby = false; cfg = read(); if (!cfg.token) { running = false; dropLock(); changed(); break; } changed(); }
       abort = new AbortController();
       try {
-        const updates = await api('getUpdates', { offset: cfg.offset || 0, timeout: 25, allowed_updates: ['message'] }, cfg.token, abort.signal);
+        if (cfg.chatId) void setCommands();
+        const updates = await api('getUpdates', { offset: cfg.offset || 0, timeout: 25, allowed_updates: ['message', 'callback_query'] }, cfg.token, abort.signal);
         backoff = 1000; if (lastError) { lastError = ''; changed(); }
         for (const u of updates) { cfg.offset = u.update_id + 1; write(cfg); await handle(u).catch(e => log(`telegram: ${e.message}`)); }
       } catch (e) {
@@ -162,7 +192,7 @@ function create({ dir, onMessage, onCommand = async () => null, log = () => {} }
   function start() { if (running || !cfg.token) return; running = true; void loop(); changed(); }
   function stop() { running = false; try { abort?.abort(); } catch {} dropLock(); }
 
-  return { status, setToken, linkUrl, disconnect, unlink, send, sendFile, download, setProfile, start, stop, onChange: fn => { listeners.add(fn); return () => listeners.delete(fn); }, connected: () => !!cfg.chatId };
+  return { status, setToken, linkUrl, disconnect, unlink, send, edit, sendFile, download, setProfile, start, stop, onChange: fn => { listeners.add(fn); return () => listeners.delete(fn); }, connected: () => !!cfg.chatId };
 }
 
 const looksLikeToken = t => TOKEN_RE.test(String(t || '').trim());

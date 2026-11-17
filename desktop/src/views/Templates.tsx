@@ -5,6 +5,7 @@ import { Dialog } from "../components/Dialog";
 import { ask } from "../components/ask";
 import { labels } from "../lib/data";
 import { Teams } from "./Teams";
+import { Workflows } from "./Workflows";
 
 type BossProvider = { enabled: boolean; plan: string; note: string };
 type Tpl = {
@@ -48,7 +49,8 @@ export function Templates({ hasBoss, activeBossFile, onReloadBoss }: { hasBoss: 
   const [providerReady, setProviderReady] = useState(false);
   const [mcpStatus, setMcpStatus] = useState<Record<string, boolean> | null>(null);
   const [providersExpanded, setProvidersExpanded] = useState(false);
-  const [mode, setMode] = useState<"agents" | "teams">("agents");
+  const [mode, setMode] = useState<"agents" | "teams" | "workflows">("agents");
+  const [workflowList, setWorkflowList] = useState<{ name: string; description: string; scope: string }[]>([]);
 
   const load = async (selectFile?: string) => {
     const r = await api().list();
@@ -59,6 +61,8 @@ export function Templates({ hasBoss, activeBossFile, onReloadBoss }: { hasBoss: 
   useEffect(() => {
     void load().catch((e: unknown) => setError(String(e)));
     const bridge = (window as any).army;
+    const loadWorkflows = () => { if (bridge.workflows) bridge.workflows.list().then(setWorkflowList).catch(() => {}); };
+    loadWorkflows(); const offWorkflows = bridge.on("workflows-changed", loadWorkflows);
     if (bridge.mcpStatus) bridge.mcpStatus().then(setMcpStatus).catch(() => {});
     if (bridge.bossProviders) {
       bridge.bossProviders.get().then((value: Record<string, BossProvider>) => { setProviderSettings(value); setProviderReady(true); }).catch((e: unknown) => setError(String(e)));
@@ -72,7 +76,8 @@ export function Templates({ hasBoss, activeBossFile, onReloadBoss }: { hasBoss: 
     } else {
       setError("Restart Dispatch to enable boss visibility settings.");
     }
-    return window.army.on("templates-changed", () => { void load().catch((e: unknown) => setError(String(e))); });
+    const offTemplates = window.army.on("templates-changed", () => { void load().catch((e: unknown) => setError(String(e))); });
+    return () => { offTemplates?.(); offWorkflows?.(); };
   }, []);
   const toggleVisibility = async (file: string, enabled: boolean) => {
     const current = visibleToBoss ?? items.filter(t => t.extra?.role !== "boss").map(t => t.file).filter((value): value is string => !!value);
@@ -131,8 +136,10 @@ export function Templates({ hasBoss, activeBossFile, onReloadBoss }: { hasBoss: 
   const tabs = <div className="tabs tpl-tabs" role="tablist" aria-label="Template kind" data-active={mode}>
     <button type="button" role="tab" className="tab" aria-selected={mode === "agents"} onClick={() => setMode("agents")}>Agents</button>
     <button type="button" role="tab" className="tab" aria-selected={mode === "teams"} onClick={() => setMode("teams")}>Teams</button>
+    <button type="button" role="tab" className="tab" aria-selected={mode === "workflows"} onClick={() => setMode("workflows")}>Workflows</button>
     <span className="tab-indicator" aria-hidden="true" />
   </div>;
+  if (mode === "workflows") return <div className="page tpl-page"><Workflows tabs={tabs} templates={items} hasBoss={hasBoss} /></div>;
   if (mode === "teams") return <div className="page tpl-page"><Teams tabs={tabs} templates={items} models={models} editTemplate={file => { const t = items.find(x => x.file === file); setMode("agents"); if (t) void open(t); }} /></div>;
 
   return (
@@ -223,6 +230,14 @@ export function Templates({ hasBoss, activeBossFile, onReloadBoss }: { hasBoss: 
             <div className="option-list" aria-label="Agent tools">{[{ id: "rustxng", name: "RustXNG", description: "Web search and page reading" }, { id: "ddgs", name: "DDGS", description: "Images, videos and news" }, { id: "comfyui", name: "ComfyUI", description: "Generate images, video, audio, music and 3D with local workflows" }, { id: "voicestudio", name: "VoiceStudio", description: "Clone voices, generate speech, transcribe audio" }, { id: "blender", name: "Blender", description: "Clean up, texture and export 3D models in Blender" }, { id: "unreal", name: "Unreal Engine", description: "Work in the open Unreal editor: Blueprints, actors, levels, C++ and tests" }].map(tool => { const enabled = (draft.extra?.dispatch_mcp || "").split(",").includes(tool.id); return <label className="option-row" key={tool.id}><input type="checkbox" aria-label={`Enable ${tool.name}`} checked={enabled} onChange={e => { const ids = (draft.extra?.dispatch_mcp || "").split(",").filter(Boolean).filter(id => id !== tool.id); if (e.target.checked) ids.push(tool.id); set({ extra: { ...draft.extra, dispatch_mcp: ids.join(",") } }); }} /><span className="tool-copy"><b>{tool.name}</b><small>{tool.description}</small></span><em>{mcpStatus === null ? "Restart Dispatch to check" : mcpStatus[tool.id] ? "Installed" : "Not installed"}</em></label>; })}</div>
             <div className="option-list" aria-label="Approvals"><label className="option-row"><input type="checkbox" aria-label="Auto-approve commands" checked={draft.extra?.dispatch_approve === "auto"} onChange={e => { const extra = { ...draft.extra }; if (e.target.checked) extra.dispatch_approve = "auto"; else delete extra.dispatch_approve; set({ extra }); }} /><span className="tool-copy"><b>Auto-approve commands</b><small>The agent runs commands and edits files without stopping for a yes/no in its terminal. Claude Code, Codex, Antigravity and Gemini CLI.</small></span></label></div>
           </Section>
+          {draft.extra?.role !== "boss" && <Section title="Workflows" help="Saved workflows this agent follows. Their steps are added to its role prompt when it starts.">
+            {(() => {
+              const mounted = (draft.extra?.workflows || "").split(",").map(s => s.trim()).filter(Boolean);
+              const names = [...new Set([...workflowList.map(w => w.name), ...mounted])];
+              if (!names.length) return <p className="tpl-visibility-help">No workflows yet. Create one in the Workflows tab.</p>;
+              return <div className="option-list" aria-label="Agent workflows">{names.map(n => { const w = workflowList.find(x => x.name === n); return <label className="option-row" key={n}><input type="checkbox" aria-label={`Follow workflow ${n}`} checked={mounted.includes(n)} onChange={e => { const next = e.target.checked ? [...mounted, n] : mounted.filter(x => x !== n); const extra = { ...draft.extra }; if (next.length) extra.workflows = next.join(", "); else delete extra.workflows; set({ extra }); }} /><span className="tool-copy"><b>{n}</b><small>{w ? w.description || (w.scope === "global" ? "Global" : "Project") : "Not found"}</small></span></label>; })}</div>;
+            })()}
+          </Section>}
           {draft.extra?.role === "boss" && <Section title="Agents visible to boss" help="Agents this boss can enlist. Project setting, applies after the boss restarts.">
             <label className="boss-built-in-toggle"><input type="checkbox" checked={showBuiltInAgents} onChange={e => setShowBuiltInAgents(e.target.checked)} /> Show built-in agents in this list</label>
             <div className="boss-visibility-list">{items.filter(t => t.extra?.role !== "boss" && (showBuiltInAgents || t.scope !== "built-in")).map(t => <label className="boss-visibility-option" key={t.file}><input type="checkbox" disabled={!visibilityLoaded || !t.file} aria-label={`Show ${t.name} (${SCOPE_LABEL[t.scope] || t.scope}) to boss`} checked={visibleToBoss === null || !!t.file && visibleToBoss.includes(t.file)} onChange={e => t.file && void toggleVisibility(t.file, e.target.checked)} /><span><b>{t.name}</b><small>{SCOPE_LABEL[t.scope] || t.scope} · {localProviders.find(p => p.id === t.provider)?.name || labels[t.provider] || t.provider}</small></span></label>)}</div>

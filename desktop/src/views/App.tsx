@@ -16,7 +16,7 @@ import { MentionMenu, mentionItems, rankMentions, type MentionItem } from "../co
 import { Avatar } from "../components/Avatar";
 import {
   ChatBubbleLeftRightIcon, ChevronDownIcon, Cog6ToothIcon, CpuChipIcon, ServerStackIcon, DocumentIcon, DocumentTextIcon, EnvelopeIcon,
-  CheckIcon, CodeBracketIcon, FolderIcon, LinkIcon, MicrophoneIcon, HomeIcon, MagnifyingGlassIcon, PaperAirplaneIcon, PaperClipIcon, PlusIcon, Squares2X2Icon, StopIcon, CubeIcon, WrenchScrewdriverIcon, PuzzlePieceIcon, TrashIcon, XMarkIcon, BookOpenIcon, ArrowsRightLeftIcon, CircleStackIcon, BeakerIcon,
+  CheckIcon, CodeBracketIcon, FolderIcon, LinkIcon, MicrophoneIcon, HomeIcon, MagnifyingGlassIcon, PaperAirplaneIcon, PaperClipIcon, PlusIcon, Squares2X2Icon, StopIcon, CubeIcon, WrenchScrewdriverIcon, PuzzlePieceIcon, TrashIcon, XMarkIcon, BookOpenIcon, ArrowsRightLeftIcon, CircleStackIcon, BeakerIcon, ViewColumnsIcon,
 } from "@heroicons/react/16/solid";
 import { ArrowDownIcon } from "@heroicons/react/20/solid";
 import { Skills } from "./Skills";
@@ -34,6 +34,8 @@ import { Templates } from "./Templates";
 import { Providers } from "./Providers";
 import { Tools } from "./Tools";
 import { Memory, MemorySettings } from "./Memory";
+import { Tasks, needsLook } from "./Tasks";
+import type { TaskCard } from "../lib/types";
 import { RemoteRailButton, RemoteSettings } from "./Remote";
 import { Servers, RailServers, ServerApprovals } from "./Servers";import { Markdown, firstSentence } from "../components/Markdown";
 import { Sidebar, type AgentInfo } from "./Sidebar";
@@ -159,6 +161,7 @@ const NAV: [string, string, string, React.ComponentType<React.SVGProps<SVGSVGEle
   ["agent", "Chat", "Operation", ChatBubbleLeftRightIcon],
   ["overview", "Overview", "Overview", Squares2X2Icon],
   ["comms", "Messages", "Messages", EnvelopeIcon],
+  ["tasks", "Tasks", "Task board", ViewColumnsIcon],
   ["templates", "Templates", "Agent templates", DocumentTextIcon],
   ["providers", "Providers", "Providers", CpuChipIcon],
   ["tools", "Tools", "Tools", WrenchScrewdriverIcon],
@@ -562,6 +565,9 @@ export function App() {
   const [teams, setTeams] = useState<{ file: string; name: string; members: any[]; boss?: any }[]>([]);
   const [homeTeam, setHomeTeam] = useState("");
   useEffect(() => { const load = () => window.army.teams.list().then(setTeams).catch(() => {}); void load(); return window.army.on("teams-changed", load); }, [workspace]);
+  const [tasks, setTasks] = useState<TaskCard[]>([]);
+  useEffect(() => { void window.army.tasks.list().then(setTasks).catch(() => {}); return window.army.on("tasks", (list: TaskCard[]) => setTasks(list)); }, [workspace, view === "tasks"]);
+  const tasksNeedLook = needsLook(tasks);
   async function start(teamFile?: string) {
     try {
       const chosen = selectedBoss();
@@ -833,7 +839,7 @@ export function App() {
       <nav className="rail" aria-label="Views">
         {NAV.map(([id, short, label, Icon]) => {
           const active = id === "home" ? showHome : !showHome && view === id;
-          return <button type="button" key={id} className={"rail-item" + (active ? " active" : "")} aria-current={active ? "page" : undefined} aria-label={label} title={label} disabled={id === "agent" && agents.length === 0} onClick={() => go(id)}>{prefs.navIcons === "color" ? <img className="rail-color" src={`./nav-color/${id}.svg`} alt="" aria-hidden="true" /> : <Icon aria-hidden="true" />}<span>{short}</span></button>;
+          return <button type="button" key={id} className={"rail-item" + (active ? " active" : "")} aria-current={active ? "page" : undefined} aria-label={label} title={label} disabled={id === "agent" && agents.length === 0} onClick={() => go(id)}>{prefs.navIcons === "color" ? <img className="rail-color" src={`./nav-color/${id}.svg`} alt="" aria-hidden="true" /> : <Icon aria-hidden="true" />}<span>{short}</span>{id === "tasks" && tasksNeedLook > 0 && <span className="rail-count" aria-label={`${tasksNeedLook} waiting or stalled`}>{tasksNeedLook}</span>}</button>;
         })}
         <RemoteRailButton />
         {(import.meta as any).env?.DEV &&<button type="button" className={"rail-item rail-dev" + (mock ? " active" : "")} aria-label={mock ? "Mock data is loaded (dev only)" : "Fill with mock data (dev only)"} title="Dev only: a mock workspace with agents, messages, memory, skills, schedules and outputs" onClick={async () => {
@@ -919,6 +925,7 @@ export function App() {
           ) : view === "providers" ? <Providers focus={providerFocus} />
           : view === "tools" ? <Tools openMemory={() => setView("memory")} />
           : view === "memory" ? <Memory />
+          : view === "tasks" ? <Tasks tasks={tasks} openAgent={name => { setSelected(name); setView("agent"); setMode("chat"); }} />
           : view === "servers" ? <Servers focus={serverFocus} />
           : view === "skills" ? <Skills />
           : view === "mcp" ? <Connectors />

@@ -49,6 +49,13 @@ test('claude trust menu (No, exit first): Down then Enter trusts', () => {
  assert.equal(attentionFrom(screen), 'Trust folder');
  assert.equal(trustAnswer('claude', screen), '\x1b[B\r');
 });
+test('approvalSummary: the command and question, readable', () => {
+ const { approvalSummary } = require('./attention.cjs');
+ const s = approvalSummary('old ❯ 1. Yes 2. No (esc)\r\n╭───╮\r\nBash command\r\n  npm run build\r\nDo you want to proceed?\r\n❯ 1. Yes\r\n  3. No, and tell Claude what to do differently (esc)');
+ assert.equal(s, 'Bash command npm run build\nDo you want to proceed?');
+ assert.equal(approvalSummary('Would you like to run the following command? $ npm test › 1. Yes'), 'Would you like to run the following command?');
+ assert.equal(approvalSummary('nothing here'), '');
+});
 test('approval: only the CLIs\' real approval menus', () => {
  const { approvalPrompt, normalize } = require('./attention.cjs');
  const real = [

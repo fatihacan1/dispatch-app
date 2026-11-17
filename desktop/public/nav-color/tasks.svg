@@ -1,0 +1,19 @@
+<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+<rect x="2.5" y="3" width="5.5" height="18" rx="1.75" fill="url(#paint0_linear_tasks)"/>
+<rect x="9.25" y="3" width="5.5" height="13" rx="1.75" fill="url(#paint1_linear_tasks)"/>
+<rect x="16" y="3" width="5.5" height="8.5" rx="1.75" fill="url(#paint2_linear_tasks)"/>
+<defs>
+<linearGradient id="paint0_linear_tasks" x1="2.5" y1="3" x2="10.5" y2="19" gradientUnits="userSpaceOnUse">
+<stop stop-color="#B9C0C7"/>
+<stop offset="1" stop-color="#889096"/>
+</linearGradient>
+<linearGradient id="paint1_linear_tasks" x1="9.25" y1="3" x2="15.5" y2="16" gradientUnits="userSpaceOnUse">
+<stop stop-color="#55595E"/>
+<stop offset="1" stop-color="#383B3D"/>
+</linearGradient>
+<linearGradient id="paint2_linear_tasks" x1="21.5" y1="11.5" x2="15.5" y2="3" gradientUnits="userSpaceOnUse">
+<stop stop-color="#2764E7"/>
+<stop offset="1" stop-color="#36DFF1"/>
+</linearGradient>
+</defs>
+</svg>

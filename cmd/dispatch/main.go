@@ -26,7 +26,7 @@ import (
 func usage() {
 	fmt.Println(`dispatch - agent orchestration terminal
 
-Usage: dispatch [--demo|--new|-c|--continue|--resume ID] | sessions | workspaces | doctor | spawn | send | ask | reply | list | status | log | kill | template | schedule | telegram | outputs
+Usage: dispatch [--demo|--new|-c|--continue|--resume ID] | sessions | workspaces | doctor | spawn | send | ask | reply | list | status | log | tasks | kill | template | schedule | telegram | outputs
 Run dispatch COMMAND --help for command flags.`)
 }
 func fatal(e error) {
@@ -467,6 +467,9 @@ func main() {
 			}
 		}
 		fatal(sc.Err())
+	case "tasks":
+		// The task board of the current operation (kept by the app in tasks.json): open cards, one per line.
+		fatal(printTasks(filepath.Join(b.Root, "tasks.json"), len(args) > 1 && args[1] == "--all", time.Now(), os.Stdout))
 	case "template":
 		fatal(template.Defaults(template.Dir()))
 		if len(args) < 2 {

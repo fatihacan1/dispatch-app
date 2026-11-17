@@ -11,7 +11,7 @@ const { restartRoster } = require('./roster.cjs');
 const gitLib = require('./git.cjs');
 const { parseMessage } = require('./bus.cjs');
 const { createDemoTerminal } = require('./demo-terminal.cjs');
-const { attentionFrom, shouldClearAttention, trustAnswer, nudgeAnswer, BLOCKING, normalize, progressKey } = require('./attention.cjs');
+const { attentionFrom, shouldClearAttention, trustAnswer, nudgeAnswer, BLOCKING, normalize, progressKey, approvalSummary } = require('./attention.cjs');
 const localAI = require('./local-ai.cjs');
 const mcp = require('./mcp.cjs');
 const storage = require('./storage.cjs');
@@ -21,8 +21,10 @@ const os = require('node:os');
 const providersLib = require('./providers.cjs');
 const accountsLib = require('./accounts.cjs');
 const templates = require('./templates.cjs');
+const workflowsLib = require('./workflows.cjs');
 const tools = require('./tools.cjs');
 const teams = require('./teams.cjs');
+const { createTaskBoard } = require('./tasks.cjs');
 module.exports = function createEngine(host) {
 const ipcMain = host.ipc, win = host.window;
 let workspace = process.cwd(), watcher, operation = null, needsFolder = false;
@@ -83,6 +85,47 @@ function setAttention(name, agent, reason) {
   if (agent.attention === reason) return; if (reason !== 'Trust folder') agent.trustInteracted = false; agent.attention = reason; agent.blocked = BLOCKING.includes(reason);
   if (agent.blocked) hold(agent);
   notify('attention', { name, reason });
+  if (reason === 'Approve command') tgApprovalSoon(name, agent); else if (agent.tgApproval) tgApprovalGone(name, agent);
+}
+// ── Command approvals on the phone: a menu still open after 20 s (nobody at the desk) goes to Telegram with
+// Approve / Deny buttons. Every menu of the three CLIs starts on "1. Yes": Enter approves, Esc declines. ──
+function tgApprovalSoon(name, agent) {
+  if (agent.tgApproval || !telegram.connected()) return;
+  const a = agent.tgApproval = { nonce: crypto.randomBytes(5).toString('hex'), summary: '', messageId: null };
+  a.timer = setTimeout(async () => {
+    if (agent.tgApproval !== a) return;
+    if (processes.get(name) !== agent || agent.attention !== 'Approve command') { agent.tgApproval = null; return; }
+    a.summary = approvalSummary(agent.promptBuffer) || 'A command waits for approval.';
+    a.head = `[${path.basename(workspace)} · ${name}] needs your approval:`;
+    try { a.messageId = await telegram.send(`${a.head}\n${a.summary}`, { buttons: [[{ text: 'Approve', data: `ap:${a.nonce}:y` }, { text: 'Deny', data: `ap:${a.nonce}:n` }]] }); } catch { agent.tgApproval = null; }
+  }, 20e3);
+}
+// The menu went away (answered in Dispatch, or the screen redrew). Checked again after a moment: the detection
+// flickers while the TUI redraws, and a flicker must not mark the phone's message answered.
+function tgApprovalGone(name, agent) {
+  const a = agent.tgApproval; if (!a || a.answered) return;
+  setTimeout(() => {
+    if (agent.tgApproval !== a || (processes.get(name) === agent && agent.attention === 'Approve command')) return;
+    clearTimeout(a.timer); agent.tgApproval = null;
+    if (a.messageId) void telegram.edit(a.messageId, `${a.head}\n${a.summary}\n\nAnswered in Dispatch.`);
+  }, 3000);
+}
+function telegramButton(data) {
+  const m = /^ap:([0-9a-f]+):([yn])$/.exec(data); if (!m) return null;
+  const entry = [...processes.entries()].find(([, ag]) => ag.tgApproval?.nonce === m[1]); if (!entry) return null;
+  const [name, agent] = entry, a = agent.tgApproval, yes = m[2] === 'y';
+  if (agent.attention !== 'Approve command' || a.answered) { agent.tgApproval = null; return { toast: 'Already answered.', text: `${a.head}\n${a.summary}\n\nAlready answered.` }; }
+  a.answered = true; clearTimeout(a.timer);
+  agent.promptBuffer = ''; agent.awaitingAnswer = true; typeKeys(agent, yes ? '\r' : '\x1b', 0);
+  setTimeout(() => { if (agent.tgApproval === a) agent.tgApproval = null; }, 5000);
+  emitMessage({ from: 'you', to: name, text: `[via Telegram] ${yes ? 'Approved' : 'Denied'}: ${a.summary.split('\n')[0]}` });
+  // Declined, the CLI stops its turn and waits: the lead must know, or it waits for a report that never comes.
+  if (!yes && name !== 'boss') { const lead = agent.enlistedBy && processes.has(agent.enlistedBy) ? agent.enlistedBy : processes.has('boss') ? 'boss' : null; if (lead) void sendMessage(lead, `${name}: the user denied its command from Telegram (${a.summary.split('\n')[0]}). It has stopped; give it new instructions.`, 'dispatch').catch(() => {}); }
+  return { toast: yes ? 'Approved' : 'Denied', text: `${a.head}\n${a.summary}\n\n${yes ? 'Approved' : 'Denied'} from Telegram.` };
+}
+// One line per agent for /status on Telegram.
+function teamStatus() {
+  return (operation?.agents || []).map(a => { const p = processes.get(a.name); let s = 'stopped'; if (p) { let w = false; try { w = isWorking(a.name); } catch {} s = p.attention ? p.attention.toLowerCase() : w ? 'working' : 'idle'; } return { name: a.name, state: s }; });
 }
 function clearAttention(name, agent) {
   if (!agent.attention && !agent.blocked && !agent.awaitingAnswer && !agent.held) return;
@@ -170,7 +213,22 @@ function resolveCommand(cmd) {
   }
   throw new Error(`"${cmd}" was not found. Install it or set its path in Settings.`);
 }
-function notify(channel, value) { host.send(channel, value); }
+function notify(channel, value) { host.send(channel, value); taskEvent(channel, value); }
+// Task board (tasks.cjs): work a lead hands an agent, as cards. Fed by the same events the window gets.
+const leadOf = name => {
+  const saved = name !== 'boss' && operation?.agents.find(a => a.name === name); if (!saved) return null;
+  const by = saved.enlistedBy || processes.get(name)?.enlistedBy;
+  return by && !['you', 'user'].includes(by) && operation.agents.some(a => a.name === by) ? by : 'boss';
+};
+const taskBoard = createTaskBoard({ file: () => operation ? path.join(operationsDir(), operation.id, 'tasks.json') : null, leadOf, onChange: list => host.send('tasks', list), mirror: () => path.join(workspace, '.dispatch', 'tasks.json') });
+function taskEvent(channel, value) {
+  try {
+    if (channel === 'message') taskBoard.message(value);
+    else if (channel === 'attention' && value?.name) taskBoard.attention(value.name, value.reason);
+    else if (channel === 'exit') taskBoard.stopped(value, 'Exited');
+    else if (channel === 'agent-action' && ['stop', 'dismiss', 'restart'].includes(value?.action)) taskBoard.stopped(value.name, value.action === 'restart' ? 'Restarted' : 'Stopped');
+  } catch (error) { console.error('Task board:', error.message); }
+}
 // Terminal text goes to the window in batches (every 30 ms), not one IPC message per chunk: many busy agents sent
 // hundreds a second and the window stuttered.
 const termBatch = new Map(); let termTimer = null;
@@ -386,9 +444,10 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
   // Claude and Codex keep a transcript Dispatch can read, so their own replies go to the chat as written.
   const direct = !demo && ['claude', 'codex', 'antigravity'].includes(provider);
   const catalogue = bossVisibleTemplates().map(t => `${t.name}: ${t.description} (${t.provider}, ${t.model || 'default'}; Dispatch tools: ${mcp.selected(t).join(', ') || 'none'})`).join('\n');
-  const prompt = `${template.body || ''}\nCode index (saves tokens): this workspace has a symbol index. Reading whole files and running broad searches costs many tokens, so look things up in the index first: to find a function, class, type or component, run dispatch index search <name>; it returns file paths and line numbers. Then read only those lines (offset/limit), not the whole file. If the command fails, finds nothing, or you need text that is not a symbol name, fall back to your usual way (grep, glob, reading files). The index may lag edits made in the last seconds, so check the lines you open.\nYou are ${name}. You report to ${name === 'boss' ? 'you (the user)' : enlistedBy && enlistedBy !== 'user' ? enlistedBy : 'boss'}. Squad: ${[...new Set([...operation.agents.map(a => a.name), ...rosterHint, name])].map(n => `${n} (${operation.agents.find(a => a.name === n)?.stopped ? 'stopped' : processes.has(n) || n === name ? 'running' : 'starting'})`).join(', ')}. ${direct
+  const allWorkflows = workflowsLib.list(workspace);
+  const prompt = `${template.body || ''}${workflowsLib.promptFor(template, allWorkflows)}\nCode index (saves tokens): this workspace has a symbol index. Reading whole files and running broad searches costs many tokens, so look things up in the index first: to find a function, class, type or component, run dispatch index search <name>; it returns file paths and line numbers. Then read only those lines (offset/limit), not the whole file. If the command fails, finds nothing, or you need text that is not a symbol name, fall back to your usual way (grep, glob, reading files). The index may lag edits made in the last seconds, so check the lines you open.\nYou are ${name}. You report to ${name === 'boss' ? 'you (the user)' : enlistedBy && enlistedBy !== 'user' ? enlistedBy : 'boss'}. Squad: ${[...new Set([...operation.agents.map(a => a.name), ...rosterHint, name])].map(n => `${n} (${operation.agents.find(a => a.name === n)?.stopped ? 'stopped' : processes.has(n) || n === name ? 'running' : 'starting'})`).join(', ')}. ${direct
     ? `The user reads your replies in the Dispatch chat exactly as you write them here, rendered as Markdown. ${name === 'boss' ? 'To talk to the user' : 'When a message is from you (the user)'}, simply write your answer as your normal final reply: use short paragraphs, headings, lists, tables and code blocks where they help. Never run dispatch send --to you; that would show the user a second, unformatted copy. Use dispatch send only for other agents: when another agent gave you the task or you need its input, report with dispatch send --to <agent> "<report>".`
-    : `When you finish a task or need input, report to the requester using dispatch send --to <requester> "<short report>". For a message from you, run dispatch send --to you "<short report>"; for a message from another agent, use that agent's name.`} A message with line breaks, quotes or backticks gets cut by the shell: write it to a file and send it with dispatch send --to <agent> --file <path> (dispatch spawn takes --task-file <path> the same way). Keep reports to other agents short. Use dispatch list to see the squad.${name === 'boss' ? `\nAvailable providers (plan and notes are supplied by the user):\n${providerInfo}\nTemplate catalogue:\n${catalogue}\nUse dispatch spawn --template <name> --name <id> --task <task> and dispatch template create --name <name> --provider <provider> --description <description> --role <prompt>.\n${SCHEDULE_HELP}${telegramHelp()}` : (tgOwner() === name ? telegramHelp(name) : '')}\nShared outputs: save every finished deliverable (images, video, audio, documents, exports) in ${path.join(workspace, '.dispatch', 'outputs', name)} so the user and the other agents can find it. Run dispatch outputs [agent] to see what the squad has produced and reuse those files by path. To show an image in the chat, save it in that folder and write ![short description](<full path>) in your reply; the user sees the image itself.${host.customTools?.prompt() || ''}${mcpConfig.connected.length ? `\nConnected apps (MCP, signed in by the user in Dispatch): ${mcpConfig.connected.join(', ')}. Their tools come from the mcp_* servers; use them when a task involves these apps.` : ''}${memoryText}`;
+    : `When you finish a task or need input, report to the requester using dispatch send --to <requester> "<short report>". For a message from you, run dispatch send --to you "<short report>"; for a message from another agent, use that agent's name.`} A message with line breaks, quotes or backticks gets cut by the shell: write it to a file and send it with dispatch send --to <agent> --file <path> (dispatch spawn takes --task-file <path> the same way). Keep reports to other agents short. Use dispatch list to see the squad.${name === 'boss' ? ' Use dispatch tasks to see what each agent is doing instead of reading logs.' : ''}${name === 'boss' ? `\nAvailable providers (plan and notes are supplied by the user):\n${providerInfo}\nTemplate catalogue:\n${catalogue}\nUse dispatch spawn --template <name> --name <id> --task <task> and dispatch template create --name <name> --provider <provider> --description <description> --role <prompt>.${workflowsLib.catalogueFor(allWorkflows)}\n${SCHEDULE_HELP}${telegramHelp()}` : (tgOwner() === name ? telegramHelp(name) : '')}\nShared outputs: save every finished deliverable (images, video, audio, documents, exports) in ${path.join(workspace, '.dispatch', 'outputs', name)} so the user and the other agents can find it. Run dispatch outputs [agent] to see what the squad has produced and reuse those files by path. To show an image in the chat, save it in that folder and write ![short description](<full path>) in your reply; the user sees the image itself.${host.customTools?.prompt() || ''}${mcpConfig.connected.length ? `\nConnected apps (MCP, signed in by the user in Dispatch): ${mcpConfig.connected.join(', ')}. Their tools come from the mcp_* servers; use them when a task involves these apps.` : ''}${memoryText}`;
   if (!saved) { saved = { name, template, provider, model: template.model || '', enlistedBy }; operation.agents.push(saved); createChat(saved); resumeSession = false; } else if (!saved.chatId) { const previousSession = saved.sessionId; const chat = createChat(saved); if (previousSession) { chat.sessionId = previousSession; saved.sessionId = previousSession; writeChat(name, chat); saveOperation(); } }
   const account = accountsLib.PROVIDERS.includes(provider) ? accountFor(provider, saved.accountId) : null;
   if (account) saved.accountId = account.id;
@@ -494,7 +553,7 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
   fs.writeFileSync(path.join(workspace, '.dispatch', 'agents.json'), JSON.stringify([...processes.keys()]));
   // Busy TUIs (spinners) send dozens of chunks a second per agent. Trimming the 200 KB buffer on every chunk copied
   // it each time and froze the main process (window could not even be moved) with many agents: trim only past 300 KB.
-  terminal.onData(data => { agent.sawOutput = true; noteProgress(agent, data); if (provider === 'antigravity' && /[⠁-⣿]/.test(data)) agent.spinAt = Date.now(); agent.output += data; if (agent.output.length > 300000) agent.output = agent.output.slice(-200000);
+  terminal.onData(data => { agent.sawOutput = true; noteProgress(agent, data, name); if (provider === 'antigravity' && /[⠁-⣿]/.test(data)) agent.spinAt = Date.now(); agent.output += data; if (agent.output.length > 300000) agent.output = agent.output.slice(-200000);
     agent.promptBuffer = ((agent.promptBuffer || '') + data).slice(-5000);
     // A choice the CLI wants that has one safe answer (Codex: keep the model when the limit is near).
     const nudge = nudgeAnswer(provider, agent.promptBuffer);
@@ -563,11 +622,11 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
 // Watchdog: an agent that got a task, then went quiet (idle at its prompt, or no terminal output for minutes)
 // without sending a single message back. Its requester would wait forever, so tell the requester (or the user).
 // Real progress on screen (spinner redraws and elapsed timers do not count), for the stall watchdog below.
-function noteProgress(agent, data) {
+function noteProgress(agent, data, name) {
   const key = progressKey(data); if (!key) return;
   const seen = agent.seenKeys || (agent.seenKeys = new Set()); if (seen.has(key)) return;
   seen.add(key); if (seen.size > 300) seen.delete(seen.values().next().value);
-  agent.progressAt = Date.now();
+  agent.progressAt = Date.now(); if (name) taskBoard.progress(name);
 }
 // Stall watchdog: the CLI still shows "working" (its spinner and timer keep redrawing, so lastOutput never goes quiet)
 // but neither its transcript nor its screen has moved for minutes: the API stream died. Seen: the boss "thinking" for
@@ -588,7 +647,7 @@ intervals.push(setInterval(() => {
     const since = Math.max(agent.progressAt || 0, agent.eventAt || 0, agent.turnAt || 0);
     const quiet = Date.now() - since, tool = agent.toolsOpen > 0;
     if (quiet < (tool ? STALL_TOOL : STALL_THINKING) || (agent.stallToldAt || 0) > since) continue;
-    agent.stallToldAt = Date.now();
+    agent.stallToldAt = Date.now(); taskBoard.stalled(name);
     const provider = agent.template?.provider, nudge = !tool && !agent.stallNudged && ['claude', 'codex'].includes(provider);
     const note = `${name} looks stuck: it shows as working, but nothing has changed in its terminal or transcript for ${Math.round(quiet / 60000)} min${tool ? ' (a command is still running)' : ''}.${nudge ? ' Dispatch pressed Esc and sent "continue" to it.' : ` Check its terminal; Esc then "continue" usually gets it going.`}`;
     if (nudge) nudgeStalled(agent);
@@ -596,13 +655,15 @@ intervals.push(setInterval(() => {
     if (lead && lead !== name) void sendMessage(lead, note, 'dispatch').catch(() => {}); else emitMessage({ from: 'dispatch', to: 'you', text: note });
   }
 }, 20000));
+// A card waiting 3 min (approval, question, sign in) is told to its lead once; stalls are told by the watchdog above.
+intervals.push(setInterval(() => { for (const n of taskBoard.dueNotices()) if (processes.has(n.lead)) void sendMessage(n.lead, n.text, 'dispatch').catch(() => {}); }, 20000));
 const QUIET_IDLE = 60000, QUIET_ANY = 4 * 60000;
 intervals.push(setInterval(() => {
   for (const [name, agent] of processes) {
     const owes = agent.owes; if (!owes || agent.attention || name === 'boss' && owes.to === 'you' && ['claude', 'codex'].includes(agent.command)) continue;
     const silent = Date.now() - (agent.lastOutput || owes.at);
     if (Date.now() - owes.at < QUIET_IDLE || !(agent.atPrompt ? silent > QUIET_IDLE : silent > QUIET_ANY)) continue;
-    agent.owes = null;
+    agent.owes = null; taskBoard.stalled(name);
     const tail = String(agent.output || '').replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '').replace(/\x1b\][^\x07]*\x07/g, '').split(/\r?\n/).map(l => l.trim()).filter(Boolean).slice(-6).join(' | ').slice(-500);
     const note = `${name} stopped working without reporting back (${agent.atPrompt ? 'idle at its prompt' : `no output for ${Math.round(silent / 60000)} min`}). Last lines in its terminal: ${tail || '(none)'}`;
     const to = owes.to === 'you' || owes.to === 'user' || !processes.has(owes.to) ? null : owes.to;
@@ -1378,6 +1439,9 @@ ipcMain.handle('usage:refresh', async (_e, id) => { if (demo) { const all = usag
 intervals.push(setInterval(() => { if (usageTracking() && host.isActive() && win && !win.isDestroyed() && win.isVisible() && !win.isMinimized()) usageAll(true).then(shareUsage).catch(() => {}); }, 180000));
 ipcMain.handle('templates:save', (_e, t) => templates.save(workspace, t));
 ipcMain.handle('templates:delete', (_e, file) => templates.remove(file));
+ipcMain.handle('workflows:list', () => workflowsLib.list(workspace));
+ipcMain.handle('workflows:save', (_e, w) => { const file = workflowsLib.save(workspace, w); notify('workflows-changed', null); return file; });
+ipcMain.handle('workflows:remove', (_e, file) => { workflowsLib.remove(file); notify('workflows-changed', null); return true; });
 ipcMain.handle('templates:reveal', (_e, file) => { require('electron').shell.showItemInFolder(file); return true; });
 ipcMain.handle('output', (_e, name) => processes.get(name)?.output || shells.get(name)?.output || host.customTools?.output(name) || '');
 ipcMain.handle('start', (_e, template, teamFile) => {
@@ -1465,6 +1529,11 @@ ipcMain.handle('teams:save-current', (_e, name, scope) => {
   return file;
 });
 ipcMain.handle('teams:list', () => teams.list(workspace));
+ipcMain.handle('tasks:list', () => {
+  // Cards left open for agents that were stopped or removed meanwhile (e.g. while the app was closed).
+  if (operation) taskBoard.reconcile(name => !processes.has(name) && (operation.agents.find(a => a.name === name)?.stopped ?? true));
+  return taskBoard.list();
+});
 ipcMain.handle('teams:save', (_e, team) => { const file = teams.save(workspace, team, templates.list(workspace)); notify('teams-changed', null); return file; });
 ipcMain.handle('teams:remove', (_e, file) => { teams.remove(workspace, file); notify('teams-changed', null); return true; });
 ipcMain.handle('git:changes', () => workspace ? gitLib.changes(workspace) : []);
@@ -1703,6 +1772,7 @@ function status() {
   const names = (operation?.agents || []).map(a => a.name).filter(n => processes.has(n));
   return { running: names.length, needs: exited.size + names.filter(n => processes.get(n).attention).length, working: names.filter(n => { try { return isWorking(n); } catch { return false; } }).length };
 }
-return { init, dispose, status, telegramIn, onTelegramChange, onUsage, workspace: () => workspace, needsFolder: () => needsFolder, owner: () => tgOwner() };
+return { init, dispose, status, telegramIn, telegramButton, teamStatus, onTelegramChange, onUsage, workspace: () => workspace, needsFolder: () => needsFolder, owner: () => tgOwner() };
 };
+
 

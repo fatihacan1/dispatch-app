@@ -81,4 +81,15 @@ function trustAnswer(provider, text) {
   if (provider === 'gemini' && t.includes('do you trust the files in this folder?') && /1\.\s*trust folder/.test(t) && /2\.\s*trust parent folder/.test(t) && /3\.\s*don.t trust/.test(t)) return '\r';
   return null;
 }
-module.exports = { approvalPrompt, progressKey, attentionFrom, shouldClearAttention, trustAnswer, nudgeAnswer, BLOCKING, normalize };
+// What an approval menu asks, readable on a phone: the tool line and command before the question, plus the question.
+// Case and symbols kept (normalize() lowercases); box-drawing frames and menu rows dropped.
+function approvalSummary(text) {
+  const t = String(text || '').replace(/\x1b\[\d*C/g, ' ').replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '').replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '').replace(/[─-╿▀-▟]/g, ' ').replace(/\s+/g, ' ');
+  const re = /(?:do you want to|would you like to) (?:proceed|run|make|create|allow|apply|delete|overwrite|execute|write|edit)[^?]{0,200}\?|allow (?:execution|this|command|tool)[^?]{0,200}\?|apply this change\?/gi;
+  let m, last = null; while ((m = re.exec(t))) last = m;
+  if (!last) return '';
+  // Only the stretch after the previous menu or prompt marker, so an old screen does not leak in.
+  const before = t.slice(Math.max(0, last.index - 300), last.index).split(/[❯›●]|\(esc\)/).pop().trim();
+  return `${before}${before ? '\n' : ''}${last[0].trim()}`.slice(-400);
+}
+module.exports = { approvalPrompt, approvalSummary, progressKey, attentionFrom, shouldClearAttention, trustAnswer, nudgeAnswer, BLOCKING, normalize };
