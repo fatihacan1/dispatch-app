@@ -1,6 +1,6 @@
 {
   "name": "dispatch-desktop",
-  "version": "0.1.19",
+  "version": "0.1.20",
   "private": true,
   "main": "electron/main.cjs",
   "scripts": {
@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run && node --test electron/*.test.cjs",
     "e2e": "playwright test",
-    "dist": "npm run build:core && npm run build && electron-builder",
+    "dist": "npm run build:core && npm run build && electron-builder && node scripts/clean-release.cjs",
+    "clean:release": "node scripts/clean-release.cjs",
     "postinstall": "node scripts/postinstall.cjs"
   },
   "dependencies": {

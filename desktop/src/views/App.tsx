@@ -3,6 +3,8 @@ const Office = lazy(() => import("../office/Office").then(m => ({ default: m.Off
 const IdePanel = lazy(() => import("../ide/IdePanel"));
 import type { OpenRequest } from "../ide/IdePanel";
 import { Terminals, type Shell } from "../ide/Terminals";
+import { afterFirstPaint } from "../theme/boot";
+import { ThemeSettings } from "../theme/ThemeSettings";
 import { Dictation, joinSpoken } from "../voice/dictation";
 import { Visualizer } from "../voice/Visualizer";
 import { VoiceSettings } from "../voice/VoiceSettings";
@@ -346,6 +348,9 @@ export function App() {
   const [stageH, setStageH] = useState(380);
   const startResize = (e: React.PointerEvent<HTMLDivElement>) => { const startY = e.clientY, start = stageH, box = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect(); const move = (ev: PointerEvent) => setStageH(Math.min(box.height - 220, Math.max(160, start + ev.clientY - startY))); const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); document.body.classList.remove("resizing"); }; document.body.classList.add("resizing"); window.addEventListener("pointermove", move); window.addEventListener("pointerup", up); };
   const [office, setOffice] = useState(true);
+  // The 3D/2D office scene is heavy: it mounts after the first paint, so the boot loader animates smoothly.
+  const [heavyOk, setHeavyOk] = useState(false);
+  useEffect(() => afterFirstPaint(() => setHeavyOk(true)), []);
   // IDE panel left of the chat. Mounted on first open and kept, so tabs survive closing it.
   const [ide, setIde] = useState(false);
   const [ideMounted, setIdeMounted] = useState(false);
@@ -489,6 +494,7 @@ export function App() {
       if (k === "j") { e.preventDefault(); setOffice(v => !v); }
       if (k === "e") { e.preventDefault(); setView("agent"); toggleIde(); }
       if (e.key === "`") { e.preventDefault(); toggleTerminalRef.current(); }
+      if (k === "n" && !e.shiftKey && !e.altKey && agents.length) { e.preventDefault(); void newChatRef.current(); }
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
@@ -543,7 +549,7 @@ export function App() {
         await window.army.send(outgoing.to, outgoing.text);
         if (spoken === undefined) { setText(""); setAttachments([]); }
         // Show the agent as thinking straight away; its transcript takes over within a second or two.
-        if (!demo && !stopped[outgoing.to] && ["claude", "codex"].includes(agentProvider(outgoing.to))) setTrail(t => t[outgoing.to]?.live ? t : { ...t, [outgoing.to]: { steps: [], live: true, since: Date.now() } });
+        if (!demo && !stopped[outgoing.to] && ["claude", "codex", "antigravity"].includes(agentProvider(outgoing.to))) setTrail(t => t[outgoing.to]?.live ? t : { ...t, [outgoing.to]: { steps: [], live: true, since: Date.now() } });
       }
       catch (e) { setMessages(v => v.filter(m => m.id !== outgoing.id)); throw e; }
     } catch (e) { setError(String(e)); }
@@ -691,11 +697,16 @@ export function App() {
       const roster = await window.army.resetOperation();
       setAgents(roster.map(a => a.name)); setAgentTemplates(Object.fromEntries(roster.map(a => [a.name, a.template])));
       setEnlistedBy(Object.fromEntries(roster.filter(a => a.enlistedBy).map(a => [a.name, a.enlistedBy as string])));
-      setMessages([]); setStopped({}); setTrail({}); setArchive(null); setText(""); setEpoch(v => v + 1);
-      if (!roster.some(a => a.name === selected)) setSelected("boss");
+      // Stopped agents stay stopped in the new chat; one whose CLI could not start is stopped too, and said so.
+      setMessages([]); setStopped(Object.fromEntries(roster.filter(a => a.stopped).map(a => [a.name, true]))); setTrail({}); setWorking({}); setArchive(null); setText(""); setEpoch(v => v + 1);
+      if (!roster.some(a => a.name === selected && !a.stopped)) setSelected("boss");
+      setMode("chat"); setView("agent");
+      const failed = roster.filter(a => a.error).map(a => a.error);
+      if (failed.length) setError(failed.join(" "));
       setOperations(await window.army.operations.list());
     } catch (e) { setError(clean(e)); }
   };
+  const newChatRef = useRef(newChat); newChatRef.current = newChat;
   const saveTeam = async () => {
     if (!savingTeam?.name.trim()) return;
     try {
@@ -857,6 +868,7 @@ export function App() {
               </section>
               <section className="settings-group">
                 <h2 className="label">Appearance</h2>
+                <ThemeSettings />
                 <div className="setting-row"><div><b>Menu icons</b><p>{prefs.navIcons === "color" ? <>Colored icons from Fluent UI System Icons by Microsoft (MIT license, <a href="https://github.com/microsoft/fluentui-system-icons" target="_blank" rel="noreferrer">github.com/microsoft/fluentui-system-icons</a>).</> : "Icons in the left menu. Colored icons are an open-source set by Microsoft, credited here once you pick them."}</p></div>
                   <select aria-label="Menu icons" value={prefs.navIcons || "mono"} onChange={e => setPref({ navIcons: e.target.value as "mono" | "color" })}><option value="mono">Monochrome</option><option value="color">Colored (Fluent)</option></select></div>
                 <label className="setting-row"><div><b>Open the editor with the first file</b><p>With no file open, Files shows only the tree in a narrow panel. Off: the editor area is always there.</p></div>
@@ -882,7 +894,7 @@ export function App() {
               terminal={<Terminals shells={shells} active={shellActive} setActive={setShellActive} onClose={() => setTermOpen(false)} height={termH} setHeight={setTermH} />} /></Suspense>}</div>
             <div className="ide-resizer" role="separator" aria-orientation="vertical" aria-label="Resize files panel" tabIndex={ide ? 0 : -1} onPointerDown={startIdeResize} onKeyDown={e => { const d = e.key === "ArrowLeft" ? -32 : e.key === "ArrowRight" ? 32 : 0; if (!d) return; if (ideCompact) setTreeW(w => Math.min(520, Math.max(240, w + d))); else setIdeW(w => Math.max(420, w + d)); }} />
             <div className="chat">
-              {office && <><div className="stage" style={{ height: stageH }}><Suspense fallback={null}><Office agents={team.filter(a => a.name !== "boss").map(a => ({ name: a.name, role: a.model }))} messages={messages} working={working} /></Suspense></div>
+              {office && <><div className="stage" style={{ height: stageH }}><Suspense fallback={null}>{heavyOk && <Office agents={team.filter(a => a.name !== "boss").map(a => ({ name: a.name, role: a.model }))} messages={messages} working={working} />}</Suspense></div>
               <div className="splitter" role="separator" aria-orientation="horizontal" aria-label="Resize office" tabIndex={0} onPointerDown={startResize} onKeyDown={e => { if (e.key === "ArrowUp") setStageH(h => Math.max(160, h - 24)); if (e.key === "ArrowDown") setStageH(h => h + 24); }} /></>}
               <div className="chat-pane">
               <div className="chat-head">
@@ -899,7 +911,7 @@ export function App() {
                   <span className="tab-indicator" aria-hidden="true" />
                 </div>
                 <span className="grow" />
-                <Button className="ghost new-chat" aria-label="New chat" onClick={() => void newChat()} title="Clear the whole team's conversation and start over with the same agents"><PlusIcon aria-hidden="true" />New chat</Button>
+                <Button className="ghost new-chat" aria-label="New chat" onClick={() => void newChat()} title="Clear the whole team's conversation and start over with the same agents (Ctrl N)"><PlusIcon aria-hidden="true" />New chat</Button>
                 <button type="button" className={"icon-button" + (office ? " on" : "")} onClick={() => setOffice(!office)} aria-pressed={office} aria-label={office ? "Hide office" : "Show office"} title="Office view (Ctrl J)"><CubeIcon /></button>
                 <button type="button" className="icon-button" onClick={() => setSidebar(!sidebar)} aria-expanded={sidebar} aria-controls="agent-activity" aria-label={sidebar ? "Hide side panel" : "Show side panel"} title="Side panel (Ctrl B)"><PanelIcon open={sidebar} /></button>
               </div>

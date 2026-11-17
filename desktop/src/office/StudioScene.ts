@@ -1,6 +1,7 @@
 ﻿// @ts-nocheck
 // 3D "Studio" scene: Kenney Furniture Kit + Kenney Mini Characters (both CC0, see THIRD_PARTY_LICENSES.md).
 import * as THREE from "three";
+import { agentColors, sceneColor } from "../theme/theme";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { clone as cloneSkinned } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { createFlyCamera } from "./FlyCamera";
@@ -10,7 +11,6 @@ const BASE = "./scenes/studio/";
 const FS = 2.4; // furniture scale (kit models are about one meter)
 const CHAR_H = 2.5; // character height in scene units
 const CHARS = ["male-a", "female-a", "male-b", "female-b", "male-c", "female-c", "male-d", "female-d"];
-const COLORS = ["#e9a46a", "#7fb4ff", "#c79cf2", "#6fd0b0", "#f08fb0", "#d6c66a", "#7fd0e0", "#e5846a"];
 const loader = new GLTFLoader();
 const cache = new Map<string, Promise<any>>();
 const load = (url: string) => { if (!cache.has(url)) cache.set(url, loader.loadAsync(url)); return cache.get(url)!; };
@@ -28,12 +28,12 @@ function labelTexture(name: string, role: string, color: string) {
   x.font = "600 34px Geist, system-ui, sans-serif"; const nw = x.measureText(name).width;
   x.font = "400 24px Geist, system-ui, sans-serif"; const rw = role ? x.measureText(role).width : 0;
   const w = Math.min(W - 8, Math.max(nw, rw) + 76), h = role ? 100 : 64, l = (W - w) / 2, t = (H - h) / 2;
-  x.fillStyle = "#131417"; x.strokeStyle = "#30333a"; x.lineWidth = 2;
+  x.fillStyle = sceneColor("surface"); x.strokeStyle = sceneColor("line-strong"); x.lineWidth = 2;
   x.beginPath(); x.roundRect(l, t, w, h, 18); x.fill(); x.stroke();
   const cy = t + (role ? 34 : h / 2);
   x.fillStyle = color; x.beginPath(); x.arc(l + 30, cy, 8, 0, Math.PI * 2); x.fill();
-  x.textAlign = "left"; x.textBaseline = "middle"; x.fillStyle = "#ebecee"; x.font = "600 34px Geist, system-ui, sans-serif"; x.fillText(name, l + 50, cy + 1, w - 62);
-  if (role) { x.fillStyle = "#a3a6ad"; x.font = "400 24px Geist, system-ui, sans-serif"; x.fillText(role, l + 50, t + 72, w - 62); }
+  x.textAlign = "left"; x.textBaseline = "middle"; x.fillStyle = sceneColor("text"); x.font = "600 34px Geist, system-ui, sans-serif"; x.fillText(name, l + 50, cy + 1, w - 62);
+  if (role) { x.fillStyle = sceneColor("text-2"); x.font = "400 24px Geist, system-ui, sans-serif"; x.fillText(role, l + 50, t + 72, w - 62); }
   const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace; return tex;
 }
 function bubbleTexture(text: string) {
@@ -43,10 +43,10 @@ function bubbleTexture(text: string) {
   const words = text.split(/\s+/); const lines: string[] = []; let cur = "";
   for (const w of words) { const t = cur ? cur + " " + w : w; if (x.measureText(t).width > W - 70 && cur) { lines.push(cur); cur = w; } else cur = t; }
   lines.push(cur); const shown = lines.slice(0, 2); if (lines.length > 2) shown[1] = shown[1].replace(/.{0,2}$/, "…");
-  x.fillStyle = "#ebecee"; x.strokeStyle = "#30333a"; x.lineWidth = 3;
+  x.fillStyle = sceneColor("text"); x.strokeStyle = sceneColor("line-strong"); x.lineWidth = 3;
   x.beginPath(); x.roundRect(8, 8, W - 16, H - 40, 22); x.fill(); x.stroke();
   x.beginPath(); x.moveTo(W / 2 - 16, H - 33); x.lineTo(W / 2, H - 6); x.lineTo(W / 2 + 16, H - 33); x.fill();
-  x.fillStyle = "#131417"; x.textAlign = "center"; x.textBaseline = "middle";
+  x.fillStyle = sceneColor("surface"); x.textAlign = "center"; x.textBaseline = "middle";
   shown.forEach((l, i) => x.fillText(l, W / 2, 8 + (H - 40) / 2 + (i - (shown.length - 1) / 2) * 44));
   const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace; return tex;
 }
@@ -173,11 +173,11 @@ export function createOfficeScene(container: HTMLElement, options: SceneOptions 
   const api: OfficeScene = {
     setBoss(name, role) {
       bossName = name; bossRole = role || "Boss";
-      if (boss) { (boss.label.material as THREE.SpriteMaterial).map = labelTexture(name, bossRole, "#ebe7dc"); boss.name = name; return; }
+      if (boss) { (boss.label.material as THREE.SpriteMaterial).map = labelTexture(name, bossRole, sceneColor("boss")); boss.name = name; return; }
       if (bossLoading) return; bossLoading = true;
-      makeChar("worker", name, bossRole, "#ebe7dc").then(a => {
+      makeChar("worker", name, bossRole, sceneColor("boss")).then(a => {
         if (disposed) return; boss = a; a.root.position.copy(bossSpot); a.root.rotation.y = Math.PI; a.state = "sitting"; play(a, "idle");
-        (a.label.material as THREE.SpriteMaterial).map = labelTexture(bossName, bossRole, "#ebe7dc");
+        (a.label.material as THREE.SpriteMaterial).map = labelTexture(bossName, bossRole, sceneColor("boss"));
       });
     },
     setAgents(list) {
@@ -187,7 +187,7 @@ export function createOfficeScene(container: HTMLElement, options: SceneOptions 
         if (agents.has(item.name)) return;
         const slot = slots.findIndex(s => !s); if (slot < 0) return;
         const reserved = { name: item.name, slot } as Agent; slots[slot] = reserved;
-        makeChar(CHARS[slot], item.name, item.role || "", COLORS[slot]).then(a => {
+        makeChar(CHARS[slot], item.name, item.role || "", agentColors()[slot]).then(a => {
           if (disposed || slots[slot] !== reserved) { world.remove(a.root); return; }
           a.slot = slot; slots[slot] = a; agents.set(item.name, a);
           a.root.position.copy(spawn()); a.busy = true;

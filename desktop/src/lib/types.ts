@@ -46,6 +46,7 @@ declare global {
         watch(on: boolean): Promise<boolean>;
         reveal(rel: string): Promise<boolean>;
         context?(rel: string, isDir: boolean): Promise<"open" | "deleted" | null>;
+        act(action: "reveal" | "open" | "terminal" | "copy-path" | "copy-rel" | "copy-name" | "trash", rels: string[]): Promise<string[]>;
         import(dir: string, items: { name: string; data: ArrayBuffer | null }[]): Promise<number>;
       };
       setEffort(name: string, effort: string): Promise<{ mode: "applied" | "queued" | "saved" | "restarted" | "fresh" }>;
@@ -56,7 +57,7 @@ declare global {
       operations: { list(): Promise<any[]>; resume(id: string): Promise<any>; remove(id: string): Promise<any[]> };
       start(template: any, team?: string): Promise<string[]>;
       teams: { list(): Promise<any[]>; save(team: any): Promise<string>; saveCurrent(name: string, scope: string): Promise<string>; remove(file: string): Promise<boolean> };
-      resetOperation(): Promise<{ name: string; template: any; enlistedBy?: string }[]>;
+      resetOperation(): Promise<{ name: string; template: any; enlistedBy?: string; stopped?: boolean; error?: string }[]>;
       changeBoss(template: any, agent?: string): Promise<any>;
       isWorking(name: string): Promise<boolean>;
       templates: { list(): Promise<{ items: any[]; models: Record<string, string[]>; efforts?: Record<string, string[]>; permissions?: Record<string, string[]> }>; saveAgent(agent: string, name: string, scope: "project" | "global"): Promise<string> };

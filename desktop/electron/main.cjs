@@ -66,6 +66,26 @@ let lastTabs = '';
 function broadcastTabs(from) { const state = tabsState(from); lastTabs = JSON.stringify({ ...state, from: null }); broadcast('tabs', state); updateTitle(); }
 // Running / working / needs-you dots on background tabs.
 setInterval(() => { if (!tabs.length) return; const s = JSON.stringify(tabsState()); if (s !== lastTabs) { lastTabs = s; broadcast('tabs', JSON.parse(s)); } }, 1500).unref?.();
+// Frosted Glass: native blur behind the window (Windows acrylic, macOS vibrancy) where the system has it; the page then draws
+// translucent panels. Without a material the renderer falls back to an opaque tint (data-material is absent).
+let materialOn = false;
+function setWindowTheme(id) {
+  if (!win || win.isDestroyed()) return;
+  const frosted = id === 'frosted';
+  let ok = false;
+  try {
+    if (frosted && process.platform === 'win32' && typeof win.setBackgroundMaterial === 'function') { win.setBackgroundMaterial('acrylic'); ok = true; }
+    else if (frosted && process.platform === 'darwin' && typeof win.setVibrancy === 'function') { win.setVibrancy('under-window'); ok = true; }
+    else { if (process.platform === 'win32' && typeof win.setBackgroundMaterial === 'function') win.setBackgroundMaterial('none'); if (process.platform === 'darwin' && typeof win.setVibrancy === 'function') win.setVibrancy(null); }
+  } catch {}
+  materialOn = ok;
+  const light = id === 'light';
+  const bg = ok ? '#00000000' : light ? '#f4f4f2' : '#0d0e10';
+  try { win.setBackgroundColor(bg); } catch {}
+  for (const t of tabs) try { t.view.setBackgroundColor(bg); } catch {}
+  if (process.platform !== 'darwin') try { win.setTitleBarOverlay({ color: ok ? '#00000000' : light ? '#ffffff' : '#131417', symbolColor: light ? '#55585f' : '#a3a6ad', height: 43 }); } catch {}
+  broadcast('material', ok);
+}
 function updateTitle() { if (win && !win.isDestroyed() && active) win.setTitle(`${tabName(active)} · Dispatch`); }
 function layout() {
   if (!win || win.isDestroyed()) return;
@@ -82,7 +102,7 @@ function rendererUrl(view, hash) {
 function loadTab(tab) { if (tab.loaded) return; tab.loaded = true; void rendererUrl(tab.view); }
 function createTab(folder, { defer = false } = {}) {
   const view = new WebContentsView({ webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } });
-  view.setBackgroundColor('#0d0e10');
+  view.setBackgroundColor(materialOn ? '#00000000' : readUi().theme === 'light' ? '#f4f4f2' : '#0d0e10');
   const tab = { id: ++tabSeq, view };
   const host = {
     id: 'tab' + tab.id, ipc: ipcFor(tab), window: win, telegram,
@@ -93,6 +113,7 @@ function createTab(folder, { defer = false } = {}) {
     isActive: () => active === tab,
     usage: all => { for (const t of tabs) try { t.engine?.onUsage(all); } catch {} },
     customTools,
+    material: () => materialOn, setTheme: id => setWindowTheme(id),
     voiceKeyOk: () => voiceKeyOk, registerVoiceKey,
     takePendingPack: () => { const f = pendingPack; pendingPack = null; return f; },
   };
@@ -334,6 +355,7 @@ app.whenReady().then(() => {
   const hidden = !!process.env.DISPATCH_TEST_HIDDEN;
   win = new BaseWindow({ show: !hidden, focusable: !hidden, title: 'Dispatch', icon: iconPath(), width: 1280, height: 800, minWidth: 800, minHeight: 560, backgroundColor: '#0d0e10', titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden', ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 14, y: 16 } } : { titleBarOverlay: { color: '#131417', symbolColor: '#a3a6ad', height: 43 } }) });
   win.on('resize', layout);
+  setWindowTheme(readUi().theme);
   win.on('enter-full-screen', () => broadcast('window-fullscreen', true));
   win.on('leave-full-screen', () => broadcast('window-fullscreen', false));
   win.on('focus', () => updater.focus());

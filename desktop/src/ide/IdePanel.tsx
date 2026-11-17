@@ -1,6 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDoubleLeftIcon, ChevronDoubleRightIcon, ChevronRightIcon, DocumentIcon, FolderIcon, FolderOpenIcon, MagnifyingGlassIcon, XMarkIcon, ArrowsRightLeftIcon, ArrowPathIcon, CommandLineIcon, CodeBracketIcon } from "@heroicons/react/16/solid";
 import { monaco, applyTheme } from "./monaco";
+import { TreeMenu, DeleteDialog, type MenuItem } from "./TreeMenu";
+
+const MAC = typeof navigator !== "undefined" && /Mac/i.test(navigator.platform);
 
 type Entry = { name: string; path: string; dir: boolean; ignored?: boolean };
 type Tab = { path: string; model: monaco.editor.ITextModel | null; dirty: boolean; diff: boolean; note?: string; saved: string };
@@ -48,6 +51,10 @@ const parent = (p: string) => p.includes("/") ? p.slice(0, p.lastIndexOf("/")) :
 export function IdePanel({ workspace, open, request, gitFiles, terminal, terminalOpen, toggleTerminal, close, editorOnFile, treeToggle, onCompact }: { close?: () => void; workspace: string; open: boolean; request: OpenRequest | null; gitFiles: GitFile[] | null; terminal?: React.ReactNode; terminalOpen?: boolean; toggleTerminal?: () => void; editorOnFile?: boolean; treeToggle?: boolean; onCompact?: (compact: boolean) => void }) {
   const [children, setChildren] = useState<Record<string, Entry[]>>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set([""]));
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const anchor = useRef<string | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; paths: string[] } | null>(null);
+  const [confirmDel, setConfirmDel] = useState<string[] | null>(null);
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [active, setActive] = useState<string | null>(null);
   const [side, setSide] = useState<"files" | "search">("files");
@@ -261,19 +268,51 @@ export function IdePanel({ workspace, open, request, gitFiles, terminal, termina
     setExpanded(s => { const n = new Set(s); if (n.has(rel)) n.delete(rel); else { n.add(rel); if (!children[rel]) void loadDir(rel); } return n; });
   };
 
+  const visible = (rel = ""): string[] => (children[rel] || []).flatMap(e => e.dir && expanded.has(e.path) ? [e.path, ...visible(e.path)] : [e.path]);
+  const isDirPath = (p: string) => Object.values(children).some(l => l.some(e => e.path === p && e.dir));
+  const doDelete = async (paths: string[]) => {
+    setConfirmDel(null);
+    const failed = await window.army.files.act("trash", paths).catch(() => paths);
+    const done = paths.filter(p => !failed.includes(p));
+    for (const t of tabs) if (done.some(p => t.path === p || t.path.startsWith(p + "/"))) closeTab(t.path);
+    for (const d of new Set(done.map(parent))) void loadDir(d);
+    setPicked(new Set());
+  };
+  const menuItems = (paths: string[]): MenuItem[] => {
+    const one = paths.length === 1; const file = one && !isDirPath(paths[0]);
+    const act = (a: "reveal" | "open" | "terminal" | "copy-path" | "copy-rel" | "copy-name") => () => void window.army.files.act(a, paths);
+    return [
+      ...(file ? [{ label: "Open", action: () => void openFile(paths[0]) }, "sep" as const] : []),
+      ...(one ? [{ label: MAC ? "Reveal in Finder" : "Reveal in File Explorer", hint: MAC ? "\u2325\u2318R" : "Shift+Alt+R", action: act("reveal") }] : []),
+      { label: "Open with default app", action: act("open") },
+      ...(one ? [{ label: "Open terminal here", action: act("terminal") }] : []),
+      "sep" as const,
+      { label: one ? "Copy path" : "Copy paths", hint: MAC ? "\u2325\u2318C" : "Shift+Alt+C", action: act("copy-path") },
+      { label: one ? "Copy relative path" : "Copy relative paths", action: act("copy-rel") },
+      { label: one ? "Copy name" : "Copy names", action: act("copy-name") },
+      "sep" as const,
+      { label: one ? "Delete" : `Delete ${paths.length} items`, hint: MAC ? "\u2318\u232B" : "Del", action: () => setConfirmDel(paths) },
+    ];
+  };
+
   const renderDir = (rel: string, depth: number): React.ReactNode => (children[rel] || []).map(e => {
     const st = gitStatus.get(e.dir ? e.path + "/" : e.path);
     const isOpen = e.dir && expanded.has(e.path);
     return <React.Fragment key={e.path}>
-      <button type="button" data-dir={e.dir ? e.path : e.path.includes("/") ? e.path.slice(0, e.path.lastIndexOf("/")) : ""} className={"ide-row" + (e.dir && dropDir === e.path ? " drop" : "") + (active === e.path ? " selected" : "") + (e.ignored ? " ignored" : "") + (st ? " git-" + st : "")} style={{ paddingLeft: 8 + depth * 12 }}
-        onClick={() => e.dir ? toggleDir(e.path) : void openFile(e.path)} title={e.path}
+      <button type="button" data-dir={e.dir ? e.path : e.path.includes("/") ? e.path.slice(0, e.path.lastIndexOf("/")) : ""} className={"ide-row" + (e.dir && dropDir === e.path ? " drop" : "") + (picked.has(e.path) ? " picked" : "") + (active === e.path && !picked.size ? " selected" : "") + (e.ignored ? " ignored" : "") + (st ? " git-" + st : "")} style={{ paddingLeft: 8 + depth * 12 }}
+        onClick={ev => {
+          if (ev.shiftKey && anchor.current) { const o = visible(); const a = o.indexOf(anchor.current), b = o.indexOf(e.path); if (a >= 0 && b >= 0) { setPicked(new Set(o.slice(Math.min(a, b), Math.max(a, b) + 1))); return; } }
+          if (ev.ctrlKey || ev.metaKey) { anchor.current = e.path; setPicked(p => { const n = new Set(p.size ? p : active ? [active] : []); if (n.has(e.path)) n.delete(e.path); else n.add(e.path); return n; }); return; }
+          anchor.current = e.path; setPicked(new Set([e.path]));
+          if (e.dir) toggleDir(e.path); else void openFile(e.path);
+        }} title={e.path}
         // Drag a row onto the message box to put "@path" into the message.
         draggable onDragStart={ev => { const p = e.dir ? e.path + "/" : e.path; ev.dataTransfer.setData("application/x-dispatch-path", p); ev.dataTransfer.setData("text/plain", "@" + p); ev.dataTransfer.effectAllowed = "copyLink"; }}
-        onContextMenu={async ev => {
+        onContextMenu={ev => {
           ev.preventDefault(); ev.stopPropagation();
-          const r = await window.army.files.context?.(e.path, !!e.dir).catch(() => null);
-          if (r === "open") void openFile(e.path);
-          if (r === "deleted") { const parent = e.path.includes("/") ? e.path.slice(0, e.path.lastIndexOf("/")) : ""; if (tabs.some(t => t.path === e.path || t.path.startsWith(e.path + "/"))) for (const t of tabs) if (t.path === e.path || t.path.startsWith(e.path + "/")) closeTab(t.path); void loadDir(parent); }
+          const paths = picked.has(e.path) ? [...picked] : [e.path];
+          if (!picked.has(e.path)) { setPicked(new Set([e.path])); anchor.current = e.path; }
+          setMenu({ x: ev.clientX, y: ev.clientY, paths });
         }}>
         {e.dir ? <ChevronRightIcon className={"ide-chev" + (isOpen ? " open" : "")} aria-hidden="true" /> : <span className="ide-chev-space" />}
         {e.dir ? (isOpen ? <FolderOpenIcon className="ide-ico" aria-hidden="true" /> : <FolderIcon className="ide-ico" aria-hidden="true" />) : <DocumentIcon className="ide-ico" aria-hidden="true" />}
@@ -325,8 +364,10 @@ export function IdePanel({ workspace, open, request, gitFiles, terminal, termina
         {treeToggle && !compact && <button type="button" className="icon-button" title="Hide the file tree" aria-label="Hide the file tree" onClick={() => setTreeHidden(true)}><ChevronDoubleLeftIcon /></button>}
         {compact && close && <button type="button" className="icon-button ide-toggle on" aria-pressed="true" aria-label="Hide files" title="Hide files (Ctrl E)" onClick={close}><CodeBracketIcon aria-hidden="true" /></button>}
       </div>
-      {side === "files" ? <div className={"ide-tree" + (dropDir === "" ? " drop" : "")} role="tree" aria-label={rootName} data-dir="" onDragOver={onTreeDragOver} onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropDir(null); }} onDrop={e => void onTreeDrop(e)}>
+      {side === "files" ? <div className={"ide-tree" + (dropDir === "" ? " drop" : "")} role="tree" tabIndex={0} aria-label={rootName} data-dir="" onKeyDown={ev => { if (!picked.size) return; if (MAC ? (ev.metaKey && ev.key === "Backspace") : (ev.key === "Delete")) { ev.preventDefault(); setConfirmDel([...picked]); } else if (ev.key === "Escape") setPicked(new Set()); }} onDragOver={onTreeDragOver} onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropDir(null); }} onDrop={e => void onTreeDrop(e)}>
         <div className="ide-root" title={workspace}>{rootName}</div>
+        {menu && <TreeMenu x={menu.x} y={menu.y} items={menuItems(menu.paths)} onClose={() => setMenu(null)} />}
+        {confirmDel && <DeleteDialog paths={confirmDel} onConfirm={() => void doDelete(confirmDel)} onCancel={() => setConfirmDel(null)} />}
         {renderDir("", 0)}
         {children[""]?.length === 0 && <p className="empty-line ide-empty">This folder is empty.</p>}
       </div> : <div className="ide-search">

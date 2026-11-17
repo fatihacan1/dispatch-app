@@ -7,10 +7,11 @@ const { spawn, execFile } = require('node:child_process');
 const chokidar = require('chokidar');
 const pty = require('node-pty');
 const activity = require('./activity.cjs');
+const { restartRoster } = require('./roster.cjs');
 const gitLib = require('./git.cjs');
 const { parseMessage } = require('./bus.cjs');
 const { createDemoTerminal } = require('./demo-terminal.cjs');
-const { attentionFrom, trustAnswer, nudgeAnswer, BLOCKING, normalize } = require('./attention.cjs');
+const { attentionFrom, trustAnswer, nudgeAnswer, BLOCKING, normalize, progressKey } = require('./attention.cjs');
 const localAI = require('./local-ai.cjs');
 const mcp = require('./mcp.cjs');
 const storage = require('./storage.cjs');
@@ -287,7 +288,7 @@ function deliver(agent) {
       const age = Date.now() - pastedAt;
       if (age < (midTurn && !wasIdle ? 800 : 3000) && (age < 350 || Date.now() - agent.lastOutput < 300)) { agent.timer = setTimeout(submit, 100); return; }
       try { agent.terminal.write('\r'); } catch {}
-      agent.submitting = false; agent.inFlight = null;
+      agent.submitting = false; agent.inFlight = null; agent.deliveredAt = Date.now();
       try { fs.unlinkSync(item.file); } catch {}
       confirmSubmit(agent, pastedAt, wasIdle, 0);
       if (agent.queue.length) deliver(agent);
@@ -411,7 +412,7 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
       else if (permission === 'bypass') args.push('--dangerously-bypass-approvals-and-sandbox');
       else args.push('-s', permission);
     } else if (provider === 'claude') args.push('--permission-mode', permission);
-    else if (provider === 'antigravity') args.push('--mode', permission);
+    else if (provider === 'antigravity') { if (permission === 'bypass') args.push('--dangerously-skip-permissions'); else args.push('--mode', permission); }
   }
   // Dispatch skills are Claude Code plugins: the boss always gets them, other Claude agents only if the user chose so.
   if (provider === 'claude' && !demo) { const sk = skillStore(); if (name === 'boss' || sk.settings().claudeAgents) for (const dir of sk.pluginDirs()) args.push('--plugin-dir', dir); }
@@ -420,16 +421,27 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
   const terminal = demo ? createDemoTerminal(name, workspace, bin()) : pty.spawn(resolved.file, [...resolved.args, ...args], { name: 'xterm-256color', cols: 100, rows: 30, cwd: workspace, env: { ...process.env, ...mcpConfig.env, ...(memoryOn && provider === 'claude' && mem.settings().disableProviderMemory ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' } : {}), DISPATCH_INDEX_INFO: codeIndexInfo || '', DISPATCH_AGENT: name, MYARMY_AGENT: name, DISPATCH_HOME: path.join(workspace, '.dispatch'), MYARMY_HOME: path.join(workspace, '.dispatch'), PATH: `${path.dirname(bin())}${path.delimiter}${process.env.PATH}` } });
   const agent = { terminal, queue: [], output: '', lastOutput: Date.now(), atPrompt: false, template, session, enlistedBy, command, args, prompt, tracksTurns: direct }; processes.set(name, agent);
   // Transcript: live thinking, tool steps and interim text for the chat, the real turn state, and the reply itself.
-  if (!demo) agent.stopActivity = activity.watch({ provider, cwd: workspace, session, name, onSession: id => { if (saved && !saved.sessionId) { saved.sessionId = id; agent.session = id; saveOperation(); } }, onEvent: e => {
+  // agy is started without --conversation, so it always opens a new conversation: following the saved one watched
+  // a file nothing writes to any more, and the chat stayed empty after every restart. Find the new one instead.
+  const watchSession = provider === 'antigravity' ? null : session;
+  if (!demo) agent.stopActivity = activity.watch({ provider, cwd: workspace, session: watchSession, name, onSession: id => { if (saved && (!saved.sessionId || provider === 'antigravity')) { saved.sessionId = id; agent.session = id; saveOperation(); } }, onEvent: e => {
     if (processes.get(name) !== agent) return;
     agent.eventAt = Date.now();
+    // A turn the transcript never announced with a user line (a reply to a background task's notice): its first
+    // assistant line starts it, or the agent looked idle while it worked.
+    if (e.turn === undefined && e.steps.length && agent.turnKnown && !agent.turn) e = { ...e, turn: true };
+    // Open tool calls, so the stall watchdog never interrupts a long build; a new assistant step ends a stall.
+    const tools = e.steps.filter(s => s.kind === 'tool').length;
+    if (e.turn !== undefined) agent.toolsOpen = 0;
+    agent.toolsOpen = Math.max(0, (agent.toolsOpen || 0) + tools - (e.answered ? e.answered.length : 0));
+    if (e.steps.length) agent.stallNudged = false;
     if (e.turn === true) { agent.turn = true; agent.turnKnown = true; agent.toldYou = false; agent.turnAt = Date.now(); agent.lastText = ''; }
     const said = e.steps.filter(s => s.kind === 'text').at(-1); if (said) agent.lastText = said.text;
     if (e.ask) showQuestion(name, agent, e.ask);
     if (e.answered && agent.question && e.answered.includes(agent.question.id)) clearQuestion(name, agent);
     let dropLastText = false;
     if (e.turn === false) {
-      agent.turn = false; agent.turnKnown = true; clearQuestion(name, agent);
+      agent.turn = false; agent.turnKnown = true; agent.turnEndAt = Date.now(); clearQuestion(name, agent);
       // The reply the agent wrote in its terminal is the chat message, formatting intact. The boss always talks to
       // the user; another agent does when the user was the one who wrote to it.
       const forYou = name === 'boss' || ['you', 'user'].includes(agent.lastFrom);
@@ -464,7 +476,7 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
   fs.writeFileSync(path.join(workspace, '.dispatch', 'agents.json'), JSON.stringify([...processes.keys()]));
   // Busy TUIs (spinners) send dozens of chunks a second per agent. Trimming the 200 KB buffer on every chunk copied
   // it each time and froze the main process (window could not even be moved) with many agents: trim only past 300 KB.
-  terminal.onData(data => { agent.sawOutput = true; if (provider === 'antigravity' && /[⠁-⣿]/.test(data)) agent.spinAt = Date.now(); agent.output += data; if (agent.output.length > 300000) agent.output = agent.output.slice(-200000);
+  terminal.onData(data => { agent.sawOutput = true; noteProgress(agent, data); if (provider === 'antigravity' && /[⠁-⣿]/.test(data)) agent.spinAt = Date.now(); agent.output += data; if (agent.output.length > 300000) agent.output = agent.output.slice(-200000);
     agent.promptBuffer = ((agent.promptBuffer || '') + data).slice(-5000);
     // A choice the CLI wants that has one safe answer (Codex: keep the model when the limit is near).
     const nudge = nudgeAnswer(provider, agent.promptBuffer);
@@ -484,7 +496,9 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
     }
     // Not signed in: the CLI waits for a browser login (or quits) inside a terminal nobody is looking at. Tell the user and the lead once.
     // Waiting for a command approval: the lead would otherwise think the agent is still working. Tell it once per prompt.
-    if (detected === 'Approve command' && !agent.awaitingAnswer && name !== 'boss') {
+    // The detection flickers while the screen redraws, so awaitingAnswer alone let the same prompt be told dozens of times.
+    if (detected === 'Approve command' && !agent.awaitingAnswer && name !== 'boss' && Date.now() - (agent.approveToldAt || 0) > 10 * 60 * 1000) {
+      agent.approveToldAt = Date.now();
       const lead = agent.enlistedBy && processes.has(agent.enlistedBy) ? agent.enlistedBy : processes.has('boss') ? 'boss' : null;
       if (lead && lead !== name) void sendMessage(lead, `${name} (${provider}) is paused, waiting for the user to approve a command in its terminal. If this keeps happening, recreate it with auto-approve: dispatch spawn ... --auto-approve, or dispatch template create ... --auto-approve.`, 'dispatch').catch(() => {});
     }
@@ -533,6 +547,40 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
 }
 // Watchdog: an agent that got a task, then went quiet (idle at its prompt, or no terminal output for minutes)
 // without sending a single message back. Its requester would wait forever, so tell the requester (or the user).
+// Real progress on screen (spinner redraws and elapsed timers do not count), for the stall watchdog below.
+function noteProgress(agent, data) {
+  const key = progressKey(data); if (!key) return;
+  const seen = agent.seenKeys || (agent.seenKeys = new Set()); if (seen.has(key)) return;
+  seen.add(key); if (seen.size > 300) seen.delete(seen.values().next().value);
+  agent.progressAt = Date.now();
+}
+// Stall watchdog: the CLI still shows "working" (its spinner and timer keep redrawing, so lastOutput never goes quiet)
+// but neither its transcript nor its screen has moved for minutes: the API stream died. Seen: the boss "thinking" for
+// 22 min, nothing in the chat, until the user typed "continue" in its terminal. Say so in the chat and, once per
+// stall, press Esc and send "continue" for it. Never while a tool runs (Esc would kill a long build): only told.
+const STALL_THINKING = 6 * 60000, STALL_TOOL = 20 * 60000;
+function nudgeStalled(agent) {
+  agent.answering = true; clearTimeout(agent.timer); agent.stallNudged = true;
+  const write = k => { try { agent.terminal.write(k); } catch {} };
+  write('\x1b');
+  setTimeout(() => write('\x1b[200~continue\x1b[201~'), 1500);
+  setTimeout(() => { write('\r'); agent.answering = false; if (agent.ready && !agent.blocked && agent.queue.length) deliver(agent); }, 2300);
+}
+intervals.push(setInterval(() => {
+  for (const [name, agent] of processes) {
+    let working = false; try { working = isWorking(name); } catch {}
+    if (!working || agent.attention || agent.blocked || agent.question || agent.submitting || agent.answering) continue;
+    const since = Math.max(agent.progressAt || 0, agent.eventAt || 0, agent.turnAt || 0);
+    const quiet = Date.now() - since, tool = agent.toolsOpen > 0;
+    if (quiet < (tool ? STALL_TOOL : STALL_THINKING) || (agent.stallToldAt || 0) > since) continue;
+    agent.stallToldAt = Date.now();
+    const provider = agent.template?.provider, nudge = !tool && !agent.stallNudged && ['claude', 'codex'].includes(provider);
+    const note = `${name} looks stuck: it shows as working, but nothing has changed in its terminal or transcript for ${Math.round(quiet / 60000)} min${tool ? ' (a command is still running)' : ''}.${nudge ? ' Dispatch pressed Esc and sent "continue" to it.' : ` Check its terminal; Esc then "continue" usually gets it going.`}`;
+    if (nudge) nudgeStalled(agent);
+    const lead = name === 'boss' ? null : agent.enlistedBy && processes.has(agent.enlistedBy) ? agent.enlistedBy : processes.has('boss') ? 'boss' : null;
+    if (lead && lead !== name) void sendMessage(lead, note, 'dispatch').catch(() => {}); else emitMessage({ from: 'dispatch', to: 'you', text: note });
+  }
+}, 20000));
 const QUIET_IDLE = 60000, QUIET_ANY = 4 * 60000;
 intervals.push(setInterval(() => {
   for (const [name, agent] of processes) {
@@ -606,7 +654,7 @@ const skillScope = s => { if (!skillsLib.SCOPES.includes(s)) throw new Error('Un
 // Tiny UI preferences (office scene choice), stored in ~/.dispatch/ui.json so the renderer never touches localStorage.
 const uiFile = () => path.join(globalDir(), 'ui.json');
 const readUi = () => { try { return JSON.parse(fs.readFileSync(uiFile(), 'utf8')); } catch { return {}; } };
-ipcMain.handle('ui:get', () => readUi());
+ipcMain.handle('ui:get', () => ({ ...readUi(), material: host.material ? host.material() : false }));
 // ── Voice typing: local whisper.cpp, an in-chat mic and a global shortcut with a small overlay (FoneCue style) ──
 const whisper = require('./whisper.cjs');
 const VOICE_KEYS = ['Control+Alt+Space', 'Control+Shift+Space', 'Control+Alt+D', 'F9'];
@@ -630,6 +678,15 @@ ipcMain.handle('ui:set', (_e, patch) => {
   for (const k of ['terminalPath', 'terminalArgs', 'terminalCwd']) if (patch && typeof patch[k] === 'string' && patch[k].length <= 1000) next[k] = patch[k].trim();
   // Settings > Appearance: menu icon set and how the Files panel behaves.
   if (patch && ['mono', 'color'].includes(patch.navIcons)) next.navIcons = patch.navIcons;
+  // Settings > Appearance > Theme: id plus the user's color overrides (hex only). The window material follows the theme.
+  if (patch && ['dark', 'light', 'frosted'].includes(patch.theme)) { next.theme = patch.theme; setImmediate(() => host.setTheme && host.setTheme(patch.theme)); }
+  if (patch && patch.themeColors && typeof patch.themeColors === 'object') {
+    const clean = {};
+    for (const [t, own] of Object.entries(patch.themeColors)) if (['dark', 'light', 'frosted'].includes(t) && own && typeof own === 'object') {
+      clean[t] = {}; for (const k of ['accent', 'background', 'surface', 'text']) if (typeof own[k] === 'string' && /^#[0-9a-fA-F]{6}$/.test(own[k])) clean[t][k] = own[k];
+    }
+    next.themeColors = clean;
+  }
   for (const k of ['ideEditorOnFile', 'ideTreeToggle']) if (patch && typeof patch[k] === 'boolean') next[k] = patch[k];
   if (patch && Number.isFinite(patch.ideWidth)) next.ideWidth = Math.max(420, Math.min(3000, Math.round(patch.ideWidth)));
   fs.mkdirSync(globalDir(), { recursive: true }); fs.writeFileSync(uiFile(), JSON.stringify(next, null, 2));
@@ -1222,13 +1279,16 @@ ipcMain.handle('dev:mock', () => {
 // template. The old conversation stays under Recent operations.
 ipcMain.handle('operation:reset', () => {
   if (!operation?.agents.length) throw new Error('No operation is open.');
-  const roster = operation.agents.map(a => ({ name: a.name, template: a.template, enlistedBy: a.enlistedBy }));
+  const roster = operation.agents.map(a => ({ name: a.name, template: a.template, enlistedBy: a.enlistedBy, stopped: !!a.stopped }));
   stopAgents();
   // Undelivered orders belong to the old conversation. Only the files go: the watcher holds the folders open.
   for (const a of roster) { const dir = path.join(workspace, '.dispatch', 'inbox', a.name); try { for (const f of fs.readdirSync(dir)) try { fs.unlinkSync(path.join(dir, f)); } catch {} } catch {} }
-  newOperation(); rosterHint = roster.map(a => a.name);
-  try { for (const a of roster) startAgent(a.name, a.template, a.enlistedBy); } finally { rosterHint = []; }
-  return operation.agents.map(a => ({ name: a.name, template: a.template, enlistedBy: a.enlistedBy }));
+  newOperation(); rosterHint = roster.filter(a => !a.stopped).map(a => a.name);
+  // Stopped agents stay stopped, and one that cannot start (its CLI is gone) is kept as stopped instead of failing
+  // the whole reset halfway: the window then never switched to the new chat.
+  const park = a => { let saved = operation.agents.find(x => x.name === a.name); if (!saved) { saved = { name: a.name, template: a.template, provider: a.template.provider, model: a.template.model || '', enlistedBy: a.enlistedBy }; operation.agents.push(saved); createChat(saved); } saved.stopped = true; saveOperation(); };
+  let failed; try { failed = restartRoster(roster, { start: a => startAgent(a.name, a.template, a.enlistedBy), park }); } finally { rosterHint = []; }
+  return operation.agents.map(a => ({ name: a.name, template: a.template, enlistedBy: a.enlistedBy, stopped: !!a.stopped, error: failed.find(f => f.name === a.name)?.text }));
 });
 // Save the agents of the open operation as a team template (the boss may have built the team itself).
 // One running agent kept as a template: its current provider, model, effort and prompt (minus a team roster).
@@ -1311,6 +1371,19 @@ ipcMain.handle('files:context', (_e, rel, isDir) => new Promise(resolve => {
   ];
   Menu.buildFromTemplate(items).popup({ window: win, callback: () => setTimeout(() => { if (!pending) resolve(result); }, 0) });
 }));
+// Tree actions on one or many selected items (renderer draws the menu). Delete goes to the OS trash.
+ipcMain.handle('files:act', async (_e, action, rels) => {
+  const list = (Array.isArray(rels) ? rels : []).map(String); const fulls = list.map(r => filesLib.resolve(workspace, r)); if (!fulls.length) return [];
+  const dirOf = f => { try { return fs.statSync(f).isDirectory() ? f : path.dirname(f); } catch { return path.dirname(f); } };
+  if (action === 'reveal') shell.showItemInFolder(fulls[0]);
+  else if (action === 'open') for (const f of fulls) await shell.openPath(f);
+  else if (action === 'terminal') { const cwd = dirOf(fulls[0]); if (process.platform === 'win32') spawn('cmd.exe', ['/c', 'start', 'powershell.exe', '-NoExit'], { cwd, detached: true, stdio: 'ignore' }).unref(); else if (process.platform === 'darwin') spawn('open', ['-a', 'Terminal', cwd], { detached: true, stdio: 'ignore' }).unref(); }
+  else if (action === 'copy-path') clipboard.writeText(fulls.join('\n'));
+  else if (action === 'copy-rel') clipboard.writeText(list.map(r => r.replace(/\\/g, '/')).join('\n'));
+  else if (action === 'copy-name') clipboard.writeText(fulls.map(f => path.basename(f)).join('\n'));
+  else if (action === 'trash') { const failed = []; for (let i = 0; i < fulls.length; i++) { try { await shell.trashItem(fulls[i]); } catch { failed.push(list[i]); } } return failed; }
+  return [];
+});
 // Claude's screen has a footer under its prompt, so "at prompt" guessing fails there: trust its transcript instead.
 ipcMain.handle('agent:working', (_e, name) => isWorking(name));
 function isWorking(name) { const a = processes.get(name); if (!a) return false; if (a.submitting || a.inFlight) return true; const p = a.template?.provider; if (p === 'claude') return !!a.turn; if (p === 'codex') return !!a.codexStateKnown && !a.atPrompt;
@@ -1318,7 +1391,9 @@ function isWorking(name) { const a = processes.get(name); if (!a) return false; 
   // Stopped with Esc, nothing ends the turn in the transcript: back at the prompt and quiet for 20 s means done.
   // Its spinner (braille dots: "Running command", "Thought for 8m") on screen in the last 3 s also means working: long
   // thinking writes nothing to the transcript, and its prompt box is always drawn, so the prompt guess said idle.
-  if (p === 'antigravity') { if (Date.now() - (a.spinAt || 0) < 3000) return true; if (a.turnKnown) return !!a.turn && !(a.atPrompt && Date.now() - Math.max(a.eventAt || 0, a.lastOutput) > 20000); }
+  // Only after a real turn started (transcript) or a message went in since the last turn ended: the same spinner
+  // and a screen without a prompt also show while agy loads and signs in, which read as working on every start.
+  if (p === 'antigravity') return activity.antigravityWorking(a, Date.now());
   return !!a.ready && !a.atPrompt; }
 ipcMain.handle('boss:change', (_e, template, source) => {
   const saved = operation?.agents.find(a => a.name === 'boss');

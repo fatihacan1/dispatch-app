@@ -25,6 +25,34 @@ for (const d of [ts.typescriptDefaults, ts.javascriptDefaults]) {
   d.setCompilerOptions({ jsx: ts.JsxEmit.Preserve, allowJs: true, target: ts.ScriptTarget.ESNext, allowNonTsExtensions: true });
 }
 
+// .env files: .env, .env.local, .env.production, frontend.env, *.env
+monaco.languages.register({ id: "dotenv", extensions: [".env"], filenames: [".env"], filenamePatterns: [".env.*", "*.env"], aliases: ["Env", "dotenv"] });
+monaco.languages.setLanguageConfiguration("dotenv", { comments: { lineComment: "#" }, brackets: [["${", "}"]], autoClosingPairs: [{ open: '"', close: '"' }, { open: "'", close: "'" }, { open: "${", close: "}" }] });
+monaco.languages.setMonarchTokensProvider("dotenv", {
+  tokenizer: {
+    root: [
+      [/^\s*#.*$/, "comment"],
+      [/^(\s*export\s+)?([A-Za-z_][\w.\-]*)(\s*)(=)/, ["keyword", "variable.name", "", { token: "delimiter", next: "@value" }]],
+    ],
+    value: [
+      [/\s+#.*$/, { token: "comment", next: "@pop" }],
+      [/\$\{[^}]*\}|\$[A-Za-z_]\w*/, "variable"],
+      [/"/, { token: "string", next: "@dq" }],
+      [/'[^']*'/, "string"],
+      [/$/, { token: "", next: "@pop" }],
+      [/[^\s$"']+/, "string.value"],
+      [/\s+/, ""],
+    ],
+    dq: [
+      [/\$\{[^}]*\}|\$[A-Za-z_]\w*/, "variable"],
+      [/\./, "string.escape"],
+      [/[^"\$]+/, "string"],
+      [/\$/, "string"],
+      [/"/, { token: "string", next: "@pop" }],
+    ],
+  },
+});
+
 /** Theme built from tokens.css so the editor matches the app. */
 export function applyTheme() {
   const css = getComputedStyle(document.documentElement);
@@ -42,6 +70,10 @@ export function applyTheme() {
       { token: "regexp", foreground: v("--agent-4").slice(1) },
       { token: "tag", foreground: v("--agent-1").slice(1) },
       { token: "attribute.name", foreground: v("--agent-5").slice(1) },
+      { token: "variable.name", foreground: v("--agent-1").slice(1) },
+      { token: "variable", foreground: v("--agent-4").slice(1) },
+      { token: "string.value", foreground: v("--agent-3").slice(1) },
+      { token: "string.escape", foreground: v("--agent-0").slice(1) },
       { token: "delimiter", foreground: v("--text-2").slice(1) },
     ],
     colors: {

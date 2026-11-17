@@ -3,6 +3,9 @@
   Every other stylesheet and the xterm theme read these variables.
 */
 :root {
+  /* Boot loader accent (amber from the logo) */
+  --boot-accent: #e9a43a;
+
   /* Fonts */
   --font-ui: "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "Geist Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
@@ -83,6 +86,63 @@
   --term-cursor: #ebe7dc;
   --term-selection: #2c3038;
 
+  /* Extra fixed colors (previously hard-coded) */
+  --white: #ffffff;
+  --scrim: rgba(0, 0, 0, 0.35);
+  --shadow-soft: 0 4px 14px rgba(0, 0, 0, 0.35);
+  --shadow-edge: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --inset-hi: rgba(255, 255, 255, 0.04);
+  --link-blue: #26a5e4;
+  --link-blue-soft: #4ea4f6;
+  --update: #2f6fed;
+  --update-hover: #3b7bff;
+  --update-glow: rgba(47, 111, 237, 0.55);
+  --update-glow-off: rgba(47, 111, 237, 0);
+  --pulse: rgba(76, 195, 138, 0.45);
+  --pulse-off: rgba(76, 195, 138, 0);
+  --spin: #3b82f6;
+  --spin-track: rgba(255, 255, 255, 0.25);
+  --spin-track-blue: rgba(59, 130, 246, 0.25);
+  --on-accent: #14161a;
+  --dictation-dim: #737373;
+  --dictation-bright: #d9d9d9;
+  --dictation-spinner: #dedede;
+  --dictation-error: #f87171;
+  --crown: #f2c14e;
+  --crown-edge: #b8862a;
+
+  /* Music scene */
+  --music-bg: #08090b;
+  --music-fg: #f4f4f5;
+  --music-fg-2: rgba(244, 244, 245, 0.72);
+  --music-fg-3: rgba(244, 244, 245, 0.6);
+  --music-fill: rgba(255, 255, 255, 0.06);
+  --music-track: rgba(255, 255, 255, 0.18);
+  --music-shadow: rgba(0, 0, 0, 0.5);
+  --music-on-fg: #0b0b0d;
+
+  /* Office scenes (canvas): floor, wall, props */
+  --office-floor-a: #b48355;
+  --office-floor-b: #ad7c4f;
+  --office-floor-edge: #9c6e45;
+  --office-wall: #d9caa9;
+  --office-wall-edge: #b4a78c;
+  --office-wall-line: #cbbd9a;
+  --office-shadow: rgba(0, 0, 0, 0.22);
+  --agent-6: #7fd0e0;
+  --agent-7: #e5846a;
+  --boss: #ebe7dc;
+
+  /* Glass (used by the Frosted Glass theme; harmless elsewhere) */
+  --glass-blur: 0px;
+  --glass-sat: 100%;
+  --glass-edge: transparent;
+  --glass-shine: transparent;
+
+  /* Boot loader */
+  --loader-bar: var(--primary);
+  --loader-track: var(--line);
+
   /* Shape */
   --radius-sm: 4px;
   --radius: 6px;
@@ -117,3 +177,57 @@
 @media (prefers-reduced-motion: reduce) {
   :root { --dur-fast: 0ms; --dur: 0ms; --dur-slow: 0ms; }
 }
+
+/*
+  Themes. Each theme only re-declares tokens. Users can override accent, background, surface and text
+  for any theme in Settings > Appearance; the overrides are written inline on <html> by src/theme/theme.ts.
+*/
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f4f4f2; --surface: #ffffff; --raised: #f0f0ed; --overlay: #ffffff; --hover: #e9e9e5;
+  --selected: #deded9; --selected-line: #b9b9b2; --line: #e1e1dc; --line-strong: #cfcfc8;
+  --text: #17181a; --text-2: #55585f; --text-3: #8a8d94; --text-on-primary: #ffffff;
+  --primary: #1d1e21; --primary-hover: #000000;
+  --term-bg: #fbfbfa; --term-fg: #26282c; --term-cursor: #1d1e21; --term-selection: #d9dce2;
+  --voice-bar: #1d1e21; --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.16), 0 0 0 1px var(--line-strong);
+  --agent-you: #17181a; --provider-codex: #17181a;
+  --switch-on: #2ba35a;
+}
+
+:root[data-theme="frosted"] {
+  color-scheme: dark;
+  /* Not too dark: a blue-grey glass. Panels are translucent so the blurred window material shows through. */
+  --bg: rgba(38, 44, 56, 0.50);
+  --surface: rgba(52, 60, 76, 0.42);
+  --raised: rgba(68, 78, 96, 0.40);
+  --overlay: rgba(46, 54, 70, 0.78);
+  --hover: rgba(255, 255, 255, 0.08);
+  --selected: rgba(255, 255, 255, 0.14);
+  --selected-line: rgba(255, 255, 255, 0.34);
+  --line: rgba(255, 255, 255, 0.12);
+  --line-strong: rgba(255, 255, 255, 0.2);
+  --text: #f3f6fb; --text-2: #c3cad8; --text-3: #8e98ab; --text-on-primary: #10141c;
+  --primary: #eef3ff; --primary-hover: #ffffff;
+  --term-bg: rgba(24, 29, 40, 0.55); --term-fg: #e6ebf5; --term-cursor: #eef3ff; --term-selection: rgba(255, 255, 255, 0.2);
+  --voice-bar: #eef3ff;
+  --shadow-pop: 0 16px 40px rgba(8, 12, 22, 0.45), 0 0 0 1px var(--line-strong);
+  --glass-blur: 22px; --glass-sat: 150%;
+  --glass-edge: rgba(255, 255, 255, 0.14);
+  --glass-shine: rgba(255, 255, 255, 0.08);
+  --loader-track: rgba(255, 255, 255, 0.14);
+}
+/* Opaque fallback when the window has no native material and the CSS blur has nothing to blur. */
+:root[data-theme="frosted"]:not([data-material]) body { background: #2b3342; }
+:root[data-theme="frosted"] body { background: transparent; }
+:root[data-theme="frosted"] .topbar,
+:root[data-theme="frosted"] .rail,
+:root[data-theme="frosted"] .sidebar,
+:root[data-theme="frosted"] .dialog,
+:root[data-theme="frosted"] .popover,
+:root[data-theme="frosted"] .menu {
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+}
+:root[data-theme="frosted"] .dialog,
+:root[data-theme="frosted"] .popover,
+:root[data-theme="frosted"] .menu { box-shadow: var(--shadow-pop), inset 0 1px 0 var(--glass-shine); }

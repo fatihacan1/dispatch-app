@@ -13,3 +13,5 @@ dist/
 desktop/e2e/screens/
 ai-api.md
 .playwright-mcp/
+
+desktop/release*/

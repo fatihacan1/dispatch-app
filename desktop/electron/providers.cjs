@@ -36,7 +36,7 @@ const EFFORTS = {
 const PERMISSIONS = {
   claude: ['acceptEdits', 'bypassPermissions', 'plan'],
   codex: ['read-only', 'workspace-write', 'danger-full-access', 'never', 'bypass'],
-  antigravity: ['accept-edits', 'auto', 'plan'],
+  antigravity: ['accept-edits', 'auto', 'plan', 'bypass'],
 };
 
 const strip =s => String(s || '').replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '');

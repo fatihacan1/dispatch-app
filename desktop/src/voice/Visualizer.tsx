@@ -8,7 +8,7 @@ export function Visualizer({ analyser, width = 75, height = 20, color }: { analy
     const ratio = window.devicePixelRatio || 1;
     const c = canvas.current!; c.width = width * ratio; c.height = height * ratio;
     const g = c.getContext("2d")!; g.scale(ratio, ratio);
-    const fill = color || getComputedStyle(document.documentElement).getPropertyValue("--voice-bar").trim() || "#ebe7dc";
+    const fill = color || getComputedStyle(document.documentElement).getPropertyValue("--voice-bar").trim() || "currentColor";
     const data = new Uint8Array(analyser ? analyser.frequencyBinCount : 0);
     const draw = () => {
       raf = requestAnimationFrame(draw);

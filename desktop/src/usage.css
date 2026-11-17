@@ -32,7 +32,7 @@
 .usage-switch input { appearance: none; flex: none; position: relative; width: 34px; height: 20px; margin: 0; border-radius: 10px; border: var(--border-strong); background: var(--hover); cursor: pointer; transition: background 0.15s; }
 .usage-switch input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--text-3); transition: transform 0.15s, background 0.15s; }
 .usage-switch input:checked { background: var(--status-working); border-color: transparent; }
-.usage-switch input:checked::after { transform: translateX(14px); background: #fff; }
+.usage-switch input:checked::after { transform: translateX(14px); background: var(--switch-knob); }
 .usage-switch input:focus-visible { outline: 2px solid var(--status-working); outline-offset: 2px; }
 .usage-preview { display: flex; align-items: center; gap: 6px; margin-top: 6px; pointer-events: none; }
 .usage-preview .usage-chip { cursor: default; }

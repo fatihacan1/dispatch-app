@@ -35,7 +35,10 @@ function parseClaude(o) {
     if (Array.isArray(c)) { const ids = c.filter(x => x.type === 'tool_result' && x.tool_use_id).map(x => String(x.tool_use_id)); if (ids.length) out.answered = ids; }
     if (typeof c === 'string' || (Array.isArray(c) && c.some(x => x.type === 'text'))) {
       const text = typeof c === 'string' ? c : c.filter(x => x.type === 'text').map(x => x.text).join(' ');
-      if (/^\s*<(local-command|command-name|command-message)/.test(text)) return out;
+      // A background task's notice is written as a user line, but often starts no turn (on resume: "didn't finish
+      // before the previous session ended"). Counting it kept the agent "working" for good; a real reply to it shows
+      // up as assistant lines, which start the turn in the engine.
+      if (/^\s*<(local-command|command-name|command-message|task-notification)/.test(text)) return out;
       out.turn = !/^\[Request interrupted/.test(text);
     }
     return out;
@@ -116,11 +119,17 @@ function parseAgyStep(type, payload) {
   // 14 = a user message (field 19.2 is not always there); 101 = the agent waits on a background command and goes on
   // by itself afterwards. Both mean a turn is running, also after a text-only step that looked final.
   if (type === 14 || type === 101) out.turn = true;
+  // 17 = the turn failed (quota reached, model error): nothing else is written, so without this the turn never ended
+  // and the chat showed nothing. 24.3.1 is the message the CLI shows, 24.3.2 the raw one.
+  if (type === 17) { const msg = (f['24.3.1'] || f['24.3.2'] || [])[0]; out.turn = false; out.error = true; out.final = `Antigravity error: ${String(msg || 'the turn failed').trim().slice(0, 1000)}`; return out; }
   if (type !== 15) return out;
-  const thinking = f['20.3']?.[0], text = f['20.1']?.[0], tool = f['20.7.2']?.[0];
+  const thinking = f['20.3']?.[0], text = f['20.1']?.[0], tools = f['20.7.2'] || [];
   if (thinking) out.steps.push({ kind: 'thinking', text: clip(thinking) });
-  if (tool) { out.turn = true; out.steps.push({ kind: 'tool', text: toolLabel(tool, f['20.7.3']?.[0]) }); if (text) out.steps.unshift({ kind: 'text', text: text.trim().slice(0, 4000) }); }
-  else if (text) { out.turn = false; out.final = text.trim(); }
+  if (tools.length) {
+    out.turn = true;
+    if (text) out.steps.push({ kind: 'text', text: text.trim().slice(0, 4000) });
+    tools.forEach((tool, i) => out.steps.push({ kind: 'tool', text: toolLabel(tool, f['20.7.3']?.[i]) }));
+  } else if (text) { out.turn = false; out.final = text.trim(); }
   return out;
 }
 // Several Antigravity agents started together in one folder each make a new conversation there: the folder alone
@@ -138,13 +147,28 @@ function newAgyDb(cwd, since, name) {
       if (name) {
         const db2 = openAgy(full); let first; try { first = db2.prepare('select step_payload from steps where step_type = 14 order by idx limit 1').get(); } finally { db2.close(); }
         if (!first?.step_payload) continue; // no message yet: decide on a later tick
-        const text = Buffer.from(first.step_payload).toString('latin1');
-        if (/You are [\w-]+\. You report to/.test(text) && !text.includes(`You are ${name}. You report to`)) continue;
+        // Newer agy versions store the message with a NUL before each sentence ("You are x. \0You report to"):
+        // without removing them no name ever matched, and any agent took any new conversation in the folder.
+        if (!agyMatchesAgent(first.step_payload, name)) continue;
       }
       claimed.add(full); return { file: full, id: n.slice(0, -3) };
     } catch {}
   }
   return null;
+}
+function agyMatchesAgent(payload, name) {
+  const text = Buffer.from(payload).toString('latin1').replace(/\0/g, '');
+  return !/You are [\w-]+\. You report to/.test(text) || text.includes(`You are ${name}. You report to`);
+}
+// Is an Antigravity agent working? a: the engine's agent state. Its braille spinner and a screen without a prompt
+// also show while agy loads and signs in, so they only count once a turn really started: the transcript said so, or
+// a message went in after the last turn ended. Stopped with Esc nothing ends the turn in the transcript: back at the
+// prompt and quiet for 20 s means done. Long thinking writes nothing to the transcript, so a fresh spinner still counts.
+function antigravityWorking(a, now) {
+  const asked = (a.deliveredAt || 0) > (a.turnEndAt || 0);
+  if (!a.turn && !asked) return false;
+  if (now - (a.spinAt || 0) < 3000) return true;
+  return !(a.atPrompt && now - Math.max(a.eventAt || 0, a.lastOutput || 0, a.deliveredAt || 0) > 20000);
 }
 function openAgy(file) { const { DatabaseSync } = require('node:sqlite'); return new DatabaseSync(file, { readOnly: true }); }
 function watchAgy({ cwd, session, name, onEvent, onSession }) {
@@ -223,4 +247,4 @@ function questionKeys(questions, answers) {
   });
 }
 
-module.exports = { watch, parseClaude, parseCodex, parseAgyStep, claudeFile, questionKeys };
+module.exports = { watch, parseClaude, parseCodex, parseAgyStep, agyMatchesAgent, antigravityWorking, claudeFile, questionKeys };

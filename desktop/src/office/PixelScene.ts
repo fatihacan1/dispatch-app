@@ -1,10 +1,10 @@
 ﻿// 2D pixel "Hall" scene on a canvas 2D renderer. Art: Kenney Roguelike Indoors + Roguelike Characters (CC0, see THIRD_PARTY_LICENSES.md).
 import type { OfficeScene, SceneOptions } from "./OfficeScene";
+import { agentColors, sceneColor } from "../theme/theme";
 
 const TS = 16, STRIDE = 17;
 const W = 24, H = 18, WALL = 3;
 const ZOOMS = [1, 1.5, 2, 3, 4, 5, 6, 8];
-const COLORS = ["#e9a46a", "#7fb4ff", "#c79cf2", "#6fd0b0", "#f08fb0", "#d6c66a", "#7fd0e0", "#e5846a"];
 // [column, row] of the front-facing character sprites in the characters sheet
 const SPRITES: [number, number][] = [[0, 5], [1, 5], [0, 6], [1, 6], [0, 7], [1, 7], [0, 8], [1, 8], [0, 9], [1, 9], [0, 10], [1, 10]];
 const BOSS_SPRITE: [number, number] = [1, 10];
@@ -87,7 +87,7 @@ export function createOfficeScene(container: HTMLElement, options: SceneOptions 
     setBoss(name, role) {
       bossName = name; bossRole = role || "Boss";
       if (boss) { boss.name = name; boss.role = bossRole; return; }
-      boss = make(name, bossRole, -1, BOSS_SPRITE, "#ebe7dc", bossLeg()); boss.role = bossRole; boss.seated = false;
+      boss = make(name, bossRole, -1, BOSS_SPRITE, sceneColor("boss"), bossLeg()); boss.role = bossRole; boss.seated = false;
     },
     setAgents(list) {
       const names = new Set(list.map(a => a.name));
@@ -96,7 +96,7 @@ export function createOfficeScene(container: HTMLElement, options: SceneOptions 
         if (walkers.has(item.name)) return;
         const slot = slots.findIndex(s => !s); if (slot < 0) return;
         const seat = seatLeg(slot);
-        const w = make(item.name, item.role || "", slot, SPRITES[slot], COLORS[slot], seat);
+        const w = make(item.name, item.role || "", slot, SPRITES[slot], agentColors()[slot], seat);
         w.pos = { x: BOSS.x + 1.6 * TS, y: BOSS.y + 0.8 * TS }; w.busy = true; slots[slot] = w; walkers.set(item.name, w);
         walk(w, route({ pos: w.pos, out: [], gapx: w.pos.x, aisle: 14.6 * TS }, w.pos, seat), () => { w.seated = true; w.walking = false; finish(w); });
       });
@@ -136,13 +136,13 @@ export function createOfficeScene(container: HTMLElement, options: SceneOptions 
     const cv = document.createElement("canvas"); cv.width = W * TS; cv.height = H * TS; const g = cv.getContext("2d")!; g.imageSmoothingEnabled = false;
     // floor planks (palette taken from the pack's sample scene)
     for (let y = WALL; y < H; y++) for (let x = 0; x < W; x++) {
-      g.fillStyle = (x + y) % 2 ? "#b48355" : "#ad7c4f"; g.fillRect(x * TS, y * TS, TS, TS);
-      g.fillStyle = "#9c6e45"; g.fillRect(x * TS, y * TS + TS - 1, TS, 1);
+      g.fillStyle = (x + y) % 2 ? sceneColor("office-floor-a") : sceneColor("office-floor-b"); g.fillRect(x * TS, y * TS, TS, TS);
+      g.fillStyle = sceneColor("office-floor-edge"); g.fillRect(x * TS, y * TS + TS - 1, TS, 1);
     }
     // wall
-    g.fillStyle = "#d9caa9"; g.fillRect(0, 0, W * TS, WALL * TS);
-    g.fillStyle = "#b4a78c"; g.fillRect(0, WALL * TS - 4, W * TS, 4); g.fillRect(0, 0, W * TS, 3);
-    g.fillStyle = "#cbbd9a"; for (let x = 0; x < W; x += 1) g.fillRect(x * TS + 15, 3, 1, WALL * TS - 7);
+    g.fillStyle = sceneColor("office-wall"); g.fillRect(0, 0, W * TS, WALL * TS);
+    g.fillStyle = sceneColor("office-wall-edge"); g.fillRect(0, WALL * TS - 4, W * TS, 4); g.fillRect(0, 0, W * TS, 3);
+    g.fillStyle = sceneColor("office-wall-line"); for (let x = 0; x < W; x += 1) g.fillRect(x * TS + 15, 3, 1, WALL * TS - 7);
 
 
     // wall decor
@@ -247,7 +247,7 @@ export function createOfficeScene(container: HTMLElement, options: SceneOptions 
     for (const w of people) add(w.pos.y / TS, () => {
       const [c, r] = w.sprite; const bob = w.walking && w.wait <= 0 ? Math.abs(Math.sin(time * 9 + w.phase)) * -1.5 : w.seated ? 0 : Math.sin(time * 2 + w.phase) * -0.4;
       const x = Math.round(w.pos.x - TS / 2), y = Math.round(w.pos.y - TS + bob);
-      ctx.fillStyle = "rgba(0,0,0,0.22)"; ctx.fillRect(x + 3, Math.round(w.pos.y) - 1, 10, 2);
+      ctx.fillStyle = sceneColor("office-shadow"); ctx.fillRect(x + 3, Math.round(w.pos.y) - 1, 10, 2);
       if (w.flip) { ctx.save(); ctx.translate(x + TS, y); ctx.scale(-1, 1); ctx.drawImage(chars!, c * STRIDE, r * STRIDE, TS, TS, 0, 0, TS, TS); ctx.restore(); }
       else ctx.drawImage(chars!, c * STRIDE, r * STRIDE, TS, TS, x, y, TS, TS);
     });
@@ -259,9 +259,9 @@ export function createOfficeScene(container: HTMLElement, options: SceneOptions 
       const s = toScreen({ x: w.pos.x, y: w.pos.y - TS - 1 });
       const nameW = (ctx.font = "600 12px Geist, system-ui, sans-serif", ctx.measureText(w.name).width);
       const bw = nameW + 24, bh = 20, bx = Math.round(s.x - bw / 2), by = Math.round(s.y - bh - 4);
-      ctx.fillStyle = "#131417"; ctx.strokeStyle = "#30333a"; ctx.lineWidth = 1; ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 6); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = sceneColor("surface"); ctx.strokeStyle = sceneColor("line-strong"); ctx.lineWidth = 1; ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 6); ctx.fill(); ctx.stroke();
       ctx.fillStyle = w.color; ctx.beginPath(); ctx.arc(bx + 10, by + bh / 2, 3.5, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = "#ebecee"; ctx.textBaseline = "middle"; ctx.textAlign = "left"; ctx.fillText(w.name, bx + 19, by + bh / 2 + 0.5);
+      ctx.fillStyle = sceneColor("text"); ctx.textBaseline = "middle"; ctx.textAlign = "left"; ctx.fillText(w.name, bx + 19, by + bh / 2 + 0.5);
     }
     for (const b of bubbles) {
       const s = toScreen({ x: b.who.pos.x, y: b.who.pos.y - TS - 1 });
@@ -269,9 +269,9 @@ export function createOfficeScene(container: HTMLElement, options: SceneOptions 
       const tw = Math.max(...b.lines.map(l => ctx.measureText(l).width)), bw = tw + 20, bh = b.lines.length * 17 + 12;
       const bx = Math.round(s.x - bw / 2), by = Math.round(s.y - 30 - bh);
       ctx.globalAlpha = Math.min(1, b.t / 0.4);
-      ctx.fillStyle = "#ebecee"; ctx.strokeStyle = "#30333a"; ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 8); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = sceneColor("text"); ctx.strokeStyle = sceneColor("line-strong"); ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 8); ctx.fill(); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(s.x - 6, by + bh - 0.5); ctx.lineTo(s.x, by + bh + 7); ctx.lineTo(s.x + 6, by + bh - 0.5); ctx.fill();
-      ctx.fillStyle = "#131417"; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      ctx.fillStyle = sceneColor("surface"); ctx.textAlign = "left"; ctx.textBaseline = "middle";
       b.lines.forEach((l, i) => ctx.fillText(l, bx + 10, by + 6 + 8.5 + i * 17));
       ctx.globalAlpha = 1;
     }
