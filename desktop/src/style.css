@@ -228,6 +228,10 @@ main.main { grid-area: main; overflow: hidden; display: flex; flex-direction: co
 .row-more { position: absolute; right: 4px; opacity: 0; }
 .team-row:hover .row-more, .row-more[aria-expanded="true"], .row-more:focus-visible { opacity: 1; }
 .team-row:hover .agent .status { opacity: 0; }
+.team-row.stopped .agent { padding-right: 104px; }
+.team-row.stopped .agent .status { display: none; }
+.row-start { position: absolute; right: 32px; height: 26px; gap: 4px; font-size: var(--text-xs); color: var(--text); border-color: var(--line-strong); }
+.row-start svg { width: 12px; height: 12px; }
 .row-menu { right: 0; top: calc(100% - 2px); }
 .files { list-style: none; margin: 0; padding: 0 2px; display: flex; flex-direction: column; }
 .files li { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 6px; border-radius: var(--radius); font-family: var(--font-mono); font-size: var(--text-sm); cursor: default; }

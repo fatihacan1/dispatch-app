@@ -1,5 +1,5 @@
 import React, { useRef, useState } from "react";
-import { BookmarkIcon, ChevronRightIcon, CommandLineIcon, EllipsisHorizontalIcon, PlusIcon } from "@heroicons/react/16/solid";
+import { BookmarkIcon, ChevronRightIcon, CommandLineIcon, EllipsisHorizontalIcon, PlayIcon, PlusIcon } from "@heroicons/react/16/solid";
 import { Button, ProviderIcon, StatusDot, type Tone } from "../components/common";
 import type { Message } from "../lib/types";
 import { UsageChips } from "../components/Usage";
@@ -165,12 +165,14 @@ export function Sidebar(p: Props) {
     <Section id="team" title="Team" open={panes.team.open} toggle={() => togglePane("team")} style={paneStyle(panes.team)} meta={p.agents.length} action={<button type="button" className="icon-button" aria-label="+ Enlist agent" title="Enlist agent" onClick={p.enlist}><PlusIcon /></button>}>
       <div className="team">
         {p.agents.map(a => (
-          <div className="team-row" key={a.name} onContextMenu={e => { e.preventDefault(); openMenu(a.name, e.currentTarget.querySelector(".row-more") || e.currentTarget); }} onKeyDown={e => { if (e.key === "Delete" && a.name !== "boss") { e.preventDefault(); p.act(a.name, "dismiss"); } }}>
+          <div className={"team-row" + (a.status === "Stopped" ? " stopped" : "")} key={a.name} onContextMenu={e => { e.preventDefault(); openMenu(a.name, e.currentTarget.querySelector(".row-more") || e.currentTarget); }} onKeyDown={e => { if (e.key === "Delete" && a.name !== "boss") { e.preventDefault(); p.act(a.name, "dismiss"); } }}>
             <Button className={"list-row agent " + (p.activeView && p.selected === a.name ? "selected" : "")} onClick={() => p.select(a.name)} aria-label={`${a.name} · ${a.model} · ${a.status.toLowerCase()}`} title={a.status}>
               <ProviderIcon className="provider-icon row-icon" provider={a.provider} alt="" />
               <span className="row-text"><b>{a.name}{tgOwner === a.name && <TelegramMark title="Answers Telegram" />}</b><small>{a.enlistedBy ? `by ${a.enlistedBy} · ` : ""}{a.model}</small></span>
               <StatusDot tone={a.tone} label={a.status} />
             </Button>
+            {/* A stopped agent starts again in one click, without opening the menu. */}
+            {a.status === "Stopped" && <Button className="ghost row-start" aria-label={`Start ${a.name}`} title={`Start ${a.name}`} onClick={() => p.act(a.name, "restart")}><PlayIcon aria-hidden="true" />Start</Button>}
             <button type="button" className="icon-button row-more" aria-label={`Actions for ${a.name}`} aria-expanded={p.menu === a.name} onClick={e => p.menu === a.name ? p.setMenu(null) : openMenu(a.name, e.currentTarget)}><EllipsisHorizontalIcon /></button>
             {p.menu === a.name && <div className="popover row-menu" role="menu" style={menuPos}>
               <Button className="menu-item" onClick={() => p.openTerminal(a.name)}>Open terminal</Button>

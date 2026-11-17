@@ -190,7 +190,9 @@ function watchAgy({ cwd, session, name, onEvent, onSession }) {
       // A turn that ends on a cancelled or failed command (Esc, a rejected command: status 6, 7, 9) writes no closing
       // text. The newest step being such a command, and nothing after it, means the agent stopped.
       const tail = db.prepare('select idx, step_type, status from steps order by idx desc limit 1').get();
-      if (tail && tail.step_type === 132 && ![2, 3].includes(tail.status) && tail.idx !== endedAt) { endedAt = tail.idx; onEvent({ steps: [], turn: false }); }
+      // Only those: status 1 is a command that was just proposed and is about to run (agy 1.5.10 writes it before every
+      // tool call), and reading it as "stopped" flipped a working agent to idle many times a minute.
+      if (tail && tail.step_type === 132 && [6, 7, 9].includes(tail.status) && tail.idx !== endedAt) { endedAt = tail.idx; onEvent({ steps: [], turn: false }); }
     } finally { db.close(); }
   };
   const timer = setInterval(() => { try { tick(); } catch {} }, 1000);
