@@ -742,7 +742,7 @@ main.main { grid-area: main; overflow: hidden; display: flex; flex-direction: co
 .ide-chev { width: 12px; height: 12px; color: var(--text-3); transition: transform var(--dur-fast) var(--ease-out); }
 .ide-chev.open { transform: rotate(90deg); }
 .ide-chev-space { width: 12px; flex: none; }
-.ide-ico { width: 14px; height: 14px; color: var(--text-3); }
+.ide-ico { width: 16px; height: 16px; flex: none; color: var(--text-3); }
 .ide-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .ide-git { font: 500 var(--text-xs) var(--font-mono); color: var(--text-3); }
 .ide-row.git-modified .ide-git { color: var(--status-waiting); }

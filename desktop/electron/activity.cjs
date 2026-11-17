@@ -66,10 +66,10 @@ function parseCodex(o) {
   return out;
 }
 
-const codexHome = () => process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
-const claudeFile = (cwd, session) => path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'projects', path.resolve(cwd).replace(/[^a-zA-Z0-9]/g, '-'), `${session}.jsonl`);
-function codexFile(session) {
-  const root = path.join(codexHome(), 'sessions');
+const codexHome = accountDir => accountDir || process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+const claudeFile = (cwd, session, accountDir) => path.join(accountDir || process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'projects', path.resolve(cwd).replace(/[^a-zA-Z0-9]/g, '-'), `${session}.jsonl`);
+function codexFile(session, accountDir) {
+  const root = path.join(codexHome(accountDir), 'sessions');
   // Newest day folders first; a session file is created in the folder of the day it started.
   const walk = (dir, depth) => { let names = []; try { names = fs.readdirSync(dir).sort().reverse(); } catch { return null; }
     for (const n of names) { const full = path.join(dir, n); if (depth < 3) { const hit = walk(full, depth + 1); if (hit) return hit; } else if (n.endsWith(`${session}.jsonl`)) return full; } return null; };
@@ -78,9 +78,9 @@ function codexFile(session) {
 
 // A new Codex session has no id until its rollout file appears: take the first unclaimed one for this cwd created after start.
 const claimed = new Set();
-function newCodexFile(cwd, since) {
+function newCodexFile(cwd, since, accountDir) {
   // The day folder of the start and of today: a session started just before midnight lands in the next day's folder.
-  const day = d => path.join(codexHome(), 'sessions', String(d.getFullYear()), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0'));
+  const day = d => path.join(codexHome(accountDir), 'sessions', String(d.getFullYear()), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0'));
   const files = [...new Set([day(new Date(since)), day(new Date())])].flatMap(dir => { try { return fs.readdirSync(dir).filter(n => n.startsWith('rollout-') && n.endsWith('.jsonl')).map(n => path.join(dir, n)); } catch { return []; } });
   for (const full of files) {
     if (claimed.has(full)) continue;
@@ -97,7 +97,7 @@ function newCodexFile(cwd, since) {
 // ── Antigravity (agy): one SQLite database per conversation, ~/.gemini/antigravity-cli/conversations/<id>.db.
 // Each row of `steps` is a protobuf message. There is no published schema, so this reads it generically:
 // type 14 = user message (field 19.2), type 15 = model step (20.1 text, 20.3 thinking, 20.7.2/20.7.3 tool call).
-const agyDir = () => path.join(os.homedir(), '.gemini', 'antigravity-cli', 'conversations');
+const agyDir = accountDir => path.join(accountDir || process.env.ANTIGRAVITY_APP_DATA_DIR || path.join(os.homedir(), '.gemini', 'antigravity-cli'), 'conversations');
 function pbFields(buf, depth = 0) {
   // Returns { '20.1': ['...'], ... } for readable strings, keyed by field path. Throws on bytes that are not protobuf.
   const out = {}; let i = 0;
@@ -135,11 +135,11 @@ function parseAgyStep(type, payload) {
 // Several Antigravity agents started together in one folder each make a new conversation there: the folder alone
 // matched the first agent to the second one's conversation (one showed idle while the other worked). The first
 // message carries "You are <name>.", so a conversation goes to the agent it names; one without any name to any.
-function newAgyDb(cwd, since, name) {
+function newAgyDb(cwd, since, name, accountDir) {
   const uri = 'file:///' + path.resolve(cwd).replace(/\\/g, '/');
-  let names = []; try { names = fs.readdirSync(agyDir()).filter(n => /^[\w-]+\.db$/.test(n)); } catch { return null; }
+  let names = []; try { names = fs.readdirSync(agyDir(accountDir)).filter(n => /^[\w-]+\.db$/.test(n)); } catch { return null; }
   for (const n of names) {
-    const full = path.join(agyDir(), n); if (claimed.has(full)) continue;
+    const full = path.join(agyDir(accountDir), n); if (claimed.has(full)) continue;
     try {
       if (fs.statSync(full).birthtimeMs < since - 2000) continue;
       const db = openAgy(full); const meta = db.prepare("select data from trajectory_metadata_blob where id = 'main'").get(); db.close();
@@ -171,11 +171,11 @@ function antigravityWorking(a, now) {
   return !(a.atPrompt && now - Math.max(a.eventAt || 0, a.lastOutput || 0, a.deliveredAt || 0) > 20000);
 }
 function openAgy(file) { const { DatabaseSync } = require('node:sqlite'); return new DatabaseSync(file, { readOnly: true }); }
-function watchAgy({ cwd, session, name, onEvent, onSession }) {
-  const since = Date.now(); let file = session ? path.join(agyDir(), `${session}.db`) : null, last = null, stopped = false, endedAt = -1;
+function watchAgy({ cwd, session, name, accountDir, onEvent, onSession }) {
+  const since = Date.now(); let file = session ? path.join(agyDir(accountDir), `${session}.db`) : null, last = null, stopped = false, endedAt = -1;
   const tick = () => {
     if (stopped) return;
-    if (!file) { const hit = newAgyDb(cwd, since, name); if (!hit) return; file = hit.file; last = -1; onSession?.(hit.id); }
+    if (!file) { const hit = newAgyDb(cwd, since, name, accountDir); if (!hit) return; file = hit.file; last = -1; onSession?.(hit.id); }
     if (!fs.existsSync(file)) return;
     const db = openAgy(file);
     try {
@@ -201,17 +201,17 @@ function watchAgy({ cwd, session, name, onEvent, onSession }) {
 }
 
 /** Follow one agent's transcript. onEvent({ steps, turn }) fires for new lines only; onSession(id) when a new Codex session is found. Returns stop(). */
-function watch({ provider, cwd, session, name, onEvent, onSession }) {
-  if (provider === 'antigravity') return watchAgy({ cwd, session, name, onEvent, onSession });
+function watch({ provider, cwd, session, name, accountDir, onEvent, onSession }) {
+  if (provider === 'antigravity') return watchAgy({ cwd, session, name, accountDir, onEvent, onSession });
   if (!['claude', 'codex'].includes(provider) || (provider === 'claude' && !session)) return () => {};
   const parse = provider === 'claude' ? parseClaude : parseCodex;
   const since = Date.now();
   let file = null, pos = null, rest = '', stopped = false;
   const tick = () => {
     if (stopped) return;
-    if (!file && provider === 'claude') file = claudeFile(cwd, session);
-    if (!file && session) file = codexFile(session);
-    if (!file && !session) { const hit = newCodexFile(cwd, since); if (hit) { file = hit.file; pos = 0; session = hit.id; onSession?.(hit.id); } }
+    if (!file && provider === 'claude') file = claudeFile(cwd, session, accountDir);
+    if (!file && session) file = codexFile(session, accountDir);
+    if (!file && !session) { const hit = newCodexFile(cwd, since, accountDir); if (hit) { file = hit.file; pos = 0; session = hit.id; onSession?.(hit.id); } }
     if (!file) return;
     // A new session has no transcript until its first message: when the file shows up later, read it from the top,
     // or the first turn (and its reply) would be skipped.

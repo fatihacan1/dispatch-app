@@ -2,7 +2,7 @@
 import type { OfficeScene, SceneOptions } from "./OfficeScene";
 import type { Message } from "../lib/types";
 
-type Props = { boss?: string; agents: { name: string; role?: string }[]; messages: Message[]; working: Record<string, boolean> };
+type Props = { boss?: string; agents: { name: string; role?: string }[]; messages: Message[]; working: Record<string, boolean>; onReady?: () => void };
 type Factory = (container: HTMLElement, options?: SceneOptions) => OfficeScene;
 
 const FLY_HINT = "RMB + WASD to fly · Q/E down/up · wheel dolly · MMB pan · Alt + drag orbit · F focus · Home reset";
@@ -17,7 +17,8 @@ type SceneId = (typeof SCENES)[number]["id"];
 const ui = () => (window as any).army?.ui as { get(): Promise<{ scene?: string; hintSeen?: boolean }>; set(p: object): Promise<unknown> } | undefined;
 
 /** Office view above the chat: boss at reception, other agents at desks; messages make the sender walk to the recipient. The scene is chosen by the user. */
-export function Office({ boss = "boss", agents, messages, working }: Props) {
+export function Office({ boss = "boss", agents, messages, working, onReady }: Props) {
+  const onReadyRef = useRef(onReady); onReadyRef.current = onReady;
   const host = useRef<HTMLDivElement>(null);
   const scene = useRef<OfficeScene | null>(null);
   const seen = useRef(new Set<string>());
@@ -47,7 +48,8 @@ export function Office({ boss = "boss", agents, messages, working }: Props) {
       const l = latest.current;
       made.setBoss(l.boss, "Boss"); made.setAgents(l.agents.slice(0, 8));
       for (const [name, on] of Object.entries(l.working)) made.setWorking(name, on);
-    });
+      onReadyRef.current?.();
+    }).catch(() => onReadyRef.current?.());
     return () => { cancelled = true; made?.destroy(); if (scene.current === made) scene.current = null; };
   }, [kind]);
 

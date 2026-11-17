@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
-import { ArrowUturnLeftIcon, FolderIcon, DocumentIcon, SignalIcon } from "@heroicons/react/24/outline";
+import { ArrowUturnLeftIcon, SignalIcon } from "@heroicons/react/24/outline";
+import { FileIcon } from "../components/FileIcon";
 import { Button } from "../components/common";
 import { Dialog } from "../components/Dialog";
 import { ask } from "../components/ask";
@@ -121,7 +122,7 @@ function RemotePicker() {
         {entries.length === 0 && <p className="empty-line">{wantDir ? "No folders here." : "Nothing here."}</p>}
         {entries.map(e => <button type="button" role="option" aria-selected={pick === e.name} key={e.name} className={"list-row" + (pick === e.name ? " selected" : "")}
           onClick={() => setPick(e.name)} onDoubleClick={() => { if (e.dir) void go(join(e.name)); else { setPick(e.name); close({ canceled: false, filePaths: [join(e.name)] }); } }}>
-          {e.dir ? <FolderIcon className="row-glyph" aria-hidden="true" /> : <DocumentIcon className="row-glyph" aria-hidden="true" />}<span className="row-text"><b>{e.name}</b></span></button>)}
+          <FileIcon name={e.name} dir={e.dir} className="row-glyph" /><span className="row-text"><b>{e.name}</b></span></button>)}
       </div>
       {req.mode === "save" && <label className="field">File name<input value={name} onChange={e => setName(e.target.value)} /></label>}
       {error && <p className="setting-note error" role="alert">{error}</p>}

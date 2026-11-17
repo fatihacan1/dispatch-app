@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { DocumentIcon, FolderIcon } from "@heroicons/react/16/solid";
+import { FileIcon } from "./FileIcon";
 
 /** A workspace path offered after "@" in the message box. Folders end with "/". */
 export type MentionItem = { path: string; dir: boolean };
@@ -43,7 +43,7 @@ export function MentionMenu({ items, index, query, loading, pick, hover }: { ite
         return (
           <div key={item.path} data-i={i} role="option" aria-selected={i === index} className={"mention-row" + (i === index ? " active" : "") + (item.dir ? " dir" : "")}
             onMouseEnter={() => hover(i)} onClick={() => pick(item)}>
-            {item.dir ? <FolderIcon aria-hidden="true" /> : <DocumentIcon aria-hidden="true" />}
+            <FileIcon name={name} dir={item.dir} />
             <span className="mention-name"><Highlight text={name + (item.dir ? "/" : "")} query={query} /></span>
             {parent && <span className="mention-parent">{parent}</span>}
           </div>

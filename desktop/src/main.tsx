@@ -13,7 +13,7 @@ import { DictationOverlay } from "./voice/DictationOverlay";
 import { RemoteGate } from "./views/Remote";
 import { startI18n } from "./lib/i18n";
 import { applyTheme, loadTheme, syncThemeFromMain } from "./theme/theme";
-import { hideBoot } from "./theme/boot";
+import { startBootGuard } from "./theme/boot";
 
 // The same bundle serves the voice overlay window (#overlay) opened by the global shortcut.
 const overlay = window.location.hash === "#overlay";
@@ -23,5 +23,5 @@ applyTheme(loadTheme());
 void syncThemeFromMain();
 createRoot(document.getElementById("root")!).render(overlay ? <DictationOverlay /> : <RemoteGate><App /></RemoteGate>);
 
-// The loader stays up until the first real paint of the app, then fades out.
-if (!overlay) hideBoot();
+// The loader stays up until App signals that workspace data and initial heavy views are ready (with a 20 s safety timeout).
+if (!overlay) startBootGuard(20000);

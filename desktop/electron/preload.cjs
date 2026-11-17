@@ -113,8 +113,12 @@ contextBridge.exposeInMainWorld('army', {
   setPermission: (name, permission) => invoke('agent:set-permission', name, permission),
   usage: { get: () => invoke('usage:get'), refresh: id => invoke('usage:refresh', id) },
   providers: { list: () => invoke('providers:list'), check: id => invoke('providers:check', id), updateInfo: (id, v) => invoke('providers:update-info', id, v), models: id => invoke('providers:models', id), action: (id, kind) => invoke('providers:action', id, kind), close: name => invoke('providers:close', name) },
+  accounts: { list: provider => invoke('accounts:list', provider), add: (provider, label) => invoke('accounts:add', provider, label), activate: (provider, id) => invoke('accounts:activate', provider, id), rename: (provider, id, label) => invoke('accounts:rename', provider, id, label), remove: (provider, id) => invoke('accounts:remove', provider, id) },
+  bossSwitch: opts => invoke('boss:switch', opts),
   templates: { getVisibility: () => invoke('templates:visibility:get'), setVisibility: files => invoke('templates:visibility:set', files), list: () => invoke('templates:list'), save: t => invoke('templates:save', t), saveAgent: (agent, name, scope) => invoke('templates:save-agent', agent, name, scope),remove: file => invoke('templates:delete', file), reveal: file => invoke('templates:reveal', file) },
   servers: { list: () => invoke('servers:list'), save: s => invoke('servers:save', s), remove: id => invoke('servers:remove', id), order: ids => invoke('servers:order', ids), test: s => invoke('servers:test', s), connect: id => invoke('servers:connect', id), chooseKey: () => invoke('servers:choose-key'), chooseIcon: () => invoke('servers:choose-icon'), approve: (id, ok) => invoke('servers:approve', id, ok), pending: () => invoke('servers:pending'), log: () => invoke('servers:log') },
+  vpns: { list: () => invoke('vpns:list'), save: v => invoke('vpns:save', v), remove: id => invoke('vpns:remove', id), test: (v, host, port) => invoke('vpns:test', v, host, port), chooseConf: () => invoke('vpns:choose-conf') },
+  ready: () => invoke('app:ready'),
   remote: remoteApi,
   on
 });

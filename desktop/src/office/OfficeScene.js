@@ -53,20 +53,20 @@ const fly=createFlyCamera(camera,renderer.domElement,{
   getFocus:i=>{const list=[{point:new THREE.Vector3(bossSpot.x,1.2,bossSpot.z),radius:2},...agentData.filter(a=>a.active).map(a=>({point:new THREE.Vector3(a.home.x,1,a.home.z),radius:2}))];return list[i%list.length]}
 });
 // ─── LIGHTS ────────────────────────────────────────
-const ambient=new THREE.AmbientLight(0xffffff,0.75);scene.add(ambient);
+const ambient=new THREE.AmbientLight(0xffffff,0.9);scene.add(ambient);
 const sun=new THREE.DirectionalLight(0xFFF8F0,1.2);
 sun.position.set(12,20,10);sun.castShadow=true;
-sun.shadow.mapSize.set(2048,2048);
+sun.shadow.mapSize.set(1024,1024);
 sun.shadow.camera.left=-22;sun.shadow.camera.right=22;sun.shadow.camera.top=22;sun.shadow.camera.bottom=-22;sun.shadow.bias=-.001;
 scene.add(sun);
 scene.add(new THREE.DirectionalLight(0xCCDDFF,0.4).translateX(-10).translateY(12));
-scene.add(new THREE.HemisphereLight(0xDDE8F0,0xB0BEC5,0.4));
+scene.add(new THREE.HemisphereLight(0xDDE8F0,0xB0BEC5,0.55));
 
 // ─── HELPERS ───────────────────────────────────────
 const office=new THREE.Group();scene.add(office);
 const M=(c,o={})=>new THREE.MeshLambertMaterial({color:c,...o});
 const MB=c=>new THREE.MeshBasicMaterial({color:c});
-const Glass=()=>new THREE.MeshPhysicalMaterial({color:0xBBCCDD,transparent:true,opacity:0.08,roughness:0});
+const Glass=()=>new THREE.MeshLambertMaterial({color:0xBBCCDD,transparent:true,opacity:0.12});
 
 // ═══════════════════════════════════════════════════
 // OFFICE STRUCTURE
@@ -96,13 +96,8 @@ cp.position.set(-3,.01,0);cp.receiveShadow=true;office.add(cp);
 const ceil=new THREE.Mesh(new THREE.BoxGeometry(26,.1,20),new THREE.MeshLambertMaterial({color:0x0A1628,transparent:true,opacity:0.45}));
 ceil.position.y=4.05; // Dispatch: ceiling hidden so the camera sees the floor clearly.
 
-// Ceiling light panels (recessed) — brighter for dark bg contrast
-for(let i=-2;i<=2;i++){for(let j=-1;j<=1;j++){
-  const p=new THREE.Mesh(new THREE.BoxGeometry(3,.03,1),MB(0xF0F4FF));
-  p.position.set(i*4.5,3.98,j*5);
-  const pl=new THREE.PointLight(0xFFFFFF,0.25,10,1.8);
-  pl.position.set(i*4.5,3.8,j*5);office.add(pl);
-}}
+// Two ceiling fill lights instead of 15 per-panel PointLights (15 point lights stalled WebGL shader compilation on startup).
+for (const px of [-4, 6]) { const pl = new THREE.PointLight(0xFFFFFF, 0.4, 18, 1.5); pl.position.set(px, 3.8, 0); office.add(pl); }
 
 // ═══════════════════════════════════════════════════
 // MEETING ROOM (right side)

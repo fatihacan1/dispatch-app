@@ -16,6 +16,7 @@ type Props = {
   act: (name: string, action: string) => void;
   openTerminal: (name: string) => void;
   changeBoss: () => void;
+  switchBoss?: () => void;
   enlist: () => void;
   saveTeam?: () => void;
   files: { path: string; add: number; del: number }[] | null;
@@ -173,6 +174,7 @@ export function Sidebar(p: Props) {
             </Button>
             {/* A stopped agent starts again in one click, without opening the menu. */}
             {a.status === "Stopped" && <Button className="ghost row-start" aria-label={`Start ${a.name}`} title={`Start ${a.name}`} onClick={() => p.act(a.name, "restart")}><PlayIcon aria-hidden="true" />Start</Button>}
+            {a.name === "boss" && p.switchBoss && <Button className="ghost row-start" title="Switch boss account or provider" onClick={p.switchBoss}>Switch</Button>}
             <button type="button" className="icon-button row-more" aria-label={`Actions for ${a.name}`} aria-expanded={p.menu === a.name} onClick={e => p.menu === a.name ? p.setMenu(null) : openMenu(a.name, e.currentTarget)}><EllipsisHorizontalIcon /></button>
             {p.menu === a.name && <div className="popover row-menu" role="menu" style={menuPos}>
               <Button className="menu-item" onClick={() => p.openTerminal(a.name)}>Open terminal</Button>

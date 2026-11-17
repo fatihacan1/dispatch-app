@@ -3,7 +3,7 @@ const Office = lazy(() => import("../office/Office").then(m => ({ default: m.Off
 const IdePanel = lazy(() => import("../ide/IdePanel"));
 import type { OpenRequest } from "../ide/IdePanel";
 import { Terminals, type Shell } from "../ide/Terminals";
-import { afterFirstPaint } from "../theme/boot";
+import { afterFirstPaint, hideBoot, setBootStatus } from "../theme/boot";
 import { ThemeSettings } from "../theme/ThemeSettings";
 import { Dictation, joinSpoken } from "../voice/dictation";
 import { Visualizer } from "../voice/Visualizer";
@@ -23,6 +23,7 @@ import { Skills } from "./Skills";
 import { Share } from "./Share";
 import { Schedules } from "../components/Schedules";
 import { UsageSwitch } from "../components/Usage";
+import type { Account } from "../lib/types";
 import { Button, Console, ProviderIcon, StatusDot, models, type Tone } from "../components/common";
 import { EnlistDialog } from "../components/EnlistDialog";
 import { Dialog } from "../components/Dialog";
@@ -306,6 +307,31 @@ export function App() {
   const [bossModel, setBossModel] = useState("");
   const [changingBoss, setChangingBoss] = useState(false);
   const [bossSource, setBossSource] = useState("template");
+  const [switchingBoss, setSwitchingBoss] = useState(false);
+  const [switchMode, setSwitchMode] = useState<"account" | "provider">("account");
+  const [bossAccounts, setBossAccounts] = useState<Account[]>([]);
+  const [switchAccountId, setSwitchAccountId] = useState("");
+  const [switchProvider, setSwitchProvider] = useState("");
+  const [switchBusy, setSwitchBusy] = useState(false);
+
+  const openSwitchBoss = async () => {
+    const curProv = agentTemplates.boss?.provider || "claude";
+    const supportsAccounts = ["claude", "codex"].includes(curProv);
+    const otherProviders = ["claude", "codex", "antigravity", "opencode", "qoder", "gemini"].filter(p => p !== curProv);
+    setSwitchProvider(otherProviders[0] || "claude");
+    setSwitchMode(supportsAccounts ? "account" : "provider");
+    setSwitchingBoss(true);
+    if (supportsAccounts && window.army.accounts) {
+      try {
+        const list = await window.army.accounts.list(curProv);
+        setBossAccounts(list);
+        const curAcc = list.find(a => a.active) || list[0];
+        setSwitchAccountId(curAcc?.id || "default");
+      } catch { setBossAccounts([]); }
+    } else {
+      setBossAccounts([]);
+    }
+  };
   const bossWorkspace = useRef<string | null>(null);
   useEffect(() => {
     const load = async () => {
@@ -325,7 +351,13 @@ export function App() {
       });
     };
     // The main process may still be registering IPC handlers on first paint: retry until it answers.
-    let tries = 0; const first = () => load().catch(e => { if (++tries < 20) setTimeout(first, 300); else console.error("templates load failed", e); }); void first(); return window.army.on("templates-changed", () => void load().catch(e => console.error("templates load failed", e)));
+    let tries = 0;
+    const first = () => load().then(() => setBootReady(b => b.templates ? b : { ...b, templates: true })).catch(e => {
+      if (++tries < 20) setTimeout(first, 300);
+      else { console.error("templates load failed", e); setBootReady(b => b.templates ? b : { ...b, templates: true }); }
+    });
+    void first();
+    return window.army.on("templates-changed", () => void load().catch(e => console.error("templates load failed", e)));
   }, [workspace]);
   useEffect(() => {
     if (!bossFile && bossTemplates.length) {
@@ -348,9 +380,10 @@ export function App() {
   const [stageH, setStageH] = useState(380);
   const startResize = (e: React.PointerEvent<HTMLDivElement>) => { const startY = e.clientY, start = stageH, box = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect(); const move = (ev: PointerEvent) => setStageH(Math.min(box.height - 220, Math.max(160, start + ev.clientY - startY))); const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); document.body.classList.remove("resizing"); }; document.body.classList.add("resizing"); window.addEventListener("pointermove", move); window.addEventListener("pointerup", up); };
   const [office, setOffice] = useState(true);
-  // The 3D/2D office scene is heavy: it mounts after the first paint, so the boot loader animates smoothly.
+  const [bootReady, setBootReady] = useState({ main: false, info: false, ui: false, templates: false, office: false, files: false });
+  // The 3D/2D office scene is heavy: it mounts after the first paint behind the boot loader.
   const [heavyOk, setHeavyOk] = useState(false);
-  useEffect(() => afterFirstPaint(() => setHeavyOk(true)), []);
+  useEffect(() => afterFirstPaint(() => setHeavyOk(true), 100), []);
   // IDE panel left of the chat. Mounted on first open and kept, so tabs survive closing it.
   const [ide, setIde] = useState(false);
   const [ideMounted, setIdeMounted] = useState(false);
@@ -370,7 +403,16 @@ export function App() {
   const [prefs, setPrefs] = useState<{ navIcons?: "mono" | "color"; ideEditorOnFile?: boolean; ideTreeToggle?: boolean }>({});
   const setPref = (patch: Partial<typeof prefs>) => { setPrefs(p => ({ ...p, ...patch })); void window.army.ui?.set(patch).catch(() => {}); };
   const [ideCompact, setIdeCompact] = useState(false);
-  useEffect(() => { void window.army.ui?.get().then((u: any) => { setPrefs({ navIcons: u?.navIcons, ideEditorOnFile: !!u?.ideEditorOnFile, ideTreeToggle: !!u?.ideTreeToggle }); if (u?.ideWidth) setIdeW(u.ideWidth); if (u?.ideTreeWidth) setTreeW(u.ideTreeWidth); if (u?.ideOpen) { setIdeMounted(true); setIde(true); } }).catch(() => {}); }, []);
+  useEffect(() => {
+    const uiApi = window.army.ui;
+    if (!uiApi) { setBootReady(b => ({ ...b, ui: true })); return; }
+    void uiApi.get().then((u: any) => {
+      setPrefs({ navIcons: u?.navIcons, ideEditorOnFile: !!u?.ideEditorOnFile, ideTreeToggle: !!u?.ideTreeToggle });
+      if (u?.ideWidth) setIdeW(u.ideWidth);
+      if (u?.ideTreeWidth) setTreeW(u.ideTreeWidth);
+      if (u?.ideOpen) { setIdeMounted(true); setIde(true); }
+    }).catch(() => {}).finally(() => setBootReady(b => b.ui ? b : { ...b, ui: true }));
+  }, []);
   const toggleIde = (next?: boolean) => setIde(v => { const on = next ?? !v; if (on) setIdeMounted(true); void window.army.ui?.set({ ideOpen: on }); return on; });
   // User terminals (PowerShell in the workspace), shown under the editor.
   const [shells, setShells] = useState<Shell[]>([]);
@@ -460,7 +502,13 @@ export function App() {
   const [search, setSearch] = useState(false);
   const [query, setQuery] = useState("");
   useEffect(() => {
-    window.army.info().then(x => { setNeedsFolder(!!(x as any).needsFolder); setWorkspace(x.workspace); setDemo(x.demo); setMock(!!(x as any).mock); setOperations(x.operations); setWorkspaces(x.workspaces); if (x.operations[0]) void resume(x.operations[0].id, true); });
+    const readyApi = (window as any).army.ready;
+    if (readyApi) void readyApi().catch(() => {}).finally(() => setBootReady(b => b.main ? b : { ...b, main: true }));
+    else setBootReady(b => b.main ? b : { ...b, main: true });
+    window.army.info().then(async x => {
+      setNeedsFolder(!!(x as any).needsFolder); setWorkspace(x.workspace); setDemo(x.demo); setMock(!!(x as any).mock); setOperations(x.operations); setWorkspaces(x.workspaces);
+      if (x.operations[0]) { setBootStatus("Resuming operation"); await resume(x.operations[0].id, true); }
+    }).catch(() => {}).finally(() => setBootReady(b => b.info ? b : { ...b, info: true }));
     const off = window.army.on("message", (incoming: Message) => setMessages(v => {
       const m: Timed = { ...incoming, time: Date.now() };
       if (v.some(x => x.id === m.id)) return v;
@@ -729,6 +777,15 @@ export function App() {
   const [agentSeen, setAgentSeen] = useState(false);
   const onAgentPage = !showHome && view === "agent";
   useEffect(() => { if (onAgentPage) setAgentSeen(true); }, [onAgentPage]);
+  useEffect(() => {
+    const needFiles = onAgentPage && ide && !needsFolder;
+    const needOffice = onAgentPage && office && !needsFolder;
+    if (bootReady.ui && !needFiles && !bootReady.files) { setBootReady(b => ({ ...b, files: true })); return; }
+    if (bootReady.info && !needOffice && !bootReady.office) { setBootReady(b => ({ ...b, office: true })); return; }
+    if (!bootReady.main || !bootReady.info) setBootStatus("Opening workspace");
+    else if (!bootReady.files || !bootReady.office || !bootReady.templates) setBootStatus("Preparing workspace");
+    else hideBoot();
+  }, [bootReady, onAgentPage, ide, office, needsFolder]);
   const showSidebar = agents.length > 0 && !showHome && ["agent", "overview", "comms"].includes(view);
   const agentFeed = messages.filter(m => m.from !== "you" && m.to !== "you");
   const pairs = [...new Set(agentFeed.map(m => [m.from, m.to].sort().join(" ↔ ")))];
@@ -890,11 +947,11 @@ export function App() {
         {/* The agent page stays mounted while another page is open: coming back does not rebuild the office scene, the terminal or the chat. */}
         {(agentSeen || onAgentPage) && <div className="view" hidden={!onAgentPage}>
             <div ref={workbench} className={"workbench" + (ide ? " ide-open" : "")} style={{ "--ide-w": (ideCompact ? treeW : Math.max(320, Math.min(ideW, wbWidth - 407))) + "px" } as React.CSSProperties}>
-            <div className="ide-slot" aria-hidden={!ide} inert={!ide ? true : undefined}>{ideMounted && <Suspense fallback={<div className="ide-loading">Loading editor…</div>}><IdePanel workspace={workspace} open={ide} request={ideReq} gitFiles={demo ? DEMO_FILES : gitFiles} terminalOpen={termOpen} toggleTerminal={toggleTerminal} close={() => toggleIde()} editorOnFile={prefs.ideEditorOnFile} treeToggle={prefs.ideTreeToggle} onCompact={setIdeCompact}
+            <div className="ide-slot" aria-hidden={!ide} inert={!ide ? true : undefined}>{ideMounted && <Suspense fallback={<div className="ide-loading">Loading editor…</div>}><IdePanel workspace={workspace} open={ide} request={ideReq} gitFiles={demo ? DEMO_FILES : gitFiles} terminalOpen={termOpen} toggleTerminal={toggleTerminal} close={() => toggleIde()} editorOnFile={prefs.ideEditorOnFile} treeToggle={prefs.ideTreeToggle} onCompact={setIdeCompact} onReady={() => setBootReady(b => b.files ? b : { ...b, files: true })}
               terminal={<Terminals shells={shells} active={shellActive} setActive={setShellActive} onClose={() => setTermOpen(false)} height={termH} setHeight={setTermH} />} /></Suspense>}</div>
             <div className="ide-resizer" role="separator" aria-orientation="vertical" aria-label="Resize files panel" tabIndex={ide ? 0 : -1} onPointerDown={startIdeResize} onKeyDown={e => { const d = e.key === "ArrowLeft" ? -32 : e.key === "ArrowRight" ? 32 : 0; if (!d) return; if (ideCompact) setTreeW(w => Math.min(520, Math.max(240, w + d))); else setIdeW(w => Math.max(420, w + d)); }} />
             <div className="chat">
-              {office && <><div className="stage" style={{ height: stageH }}><Suspense fallback={null}>{heavyOk && <Office agents={team.filter(a => a.name !== "boss").map(a => ({ name: a.name, role: a.model }))} messages={messages} working={working} />}</Suspense></div>
+              {office && <><div className="stage" style={{ height: stageH }}><Suspense fallback={null}>{heavyOk && <Office agents={team.filter(a => a.name !== "boss").map(a => ({ name: a.name, role: a.model }))} messages={messages} working={working} onReady={() => setBootReady(b => b.office ? b : { ...b, office: true })} />}</Suspense></div>
               <div className="splitter" role="separator" aria-orientation="horizontal" aria-label="Resize office" tabIndex={0} onPointerDown={startResize} onKeyDown={e => { if (e.key === "ArrowUp") setStageH(h => Math.max(160, h - 24)); if (e.key === "ArrowDown") setStageH(h => h + 24); }} /></>}
               <div className="chat-pane">
               <div className="chat-head">
@@ -995,6 +1052,7 @@ export function App() {
         act={(a, action) => void act(a, action)} openTerminal={openTerminal} enlist={() => setEnlisting(true)}
         saveTeam={agents.length > 1 && agents.includes("boss") ? () => setSavingTeam({ name: "", scope: "project" }) : undefined}
         changeBoss={() => { setAgentMenu(null); setBossSource("template"); setChangingBoss(true); }}
+        switchBoss={() => void openSwitchBoss()}
         files={demo ? DEMO_FILES : gitFiles} openFile={openInIde} shells={shells} openShell={name => void openShell(name)} outputs={outputs} feed={agentFeed} color={agentColor} openProvider={id => { setProviderFocus(id); setView("providers"); }} />}
 
       {changingBoss && <Dialog title="Change boss" size="md" onClose={() => setChangingBoss(false)} footer={<>
@@ -1004,6 +1062,109 @@ export function App() {
         <label className="field">Choose from<select value={bossSource} onChange={e => setBossSource(e.target.value)}><option value="template">Boss template</option>{agents.filter(a => a !== "boss").map(a => <option key={a} value={a}>{a}</option>)}</select></label>
         {bossSource === "template" && bossPicker}
       </Dialog>}
+      {switchingBoss && (() => {
+        const curProv = agentTemplates.boss?.provider || "claude";
+        const supportsAccounts = ["claude", "codex"].includes(curProv);
+        const otherProviders = ["claude", "codex", "antigravity", "opencode", "qoder", "gemini"].filter(p => p !== curProv);
+        return (
+          <Dialog
+            title="Switch boss"
+            size="md"
+            onClose={() => !switchBusy && setSwitchingBoss(false)}
+            description={switchMode === "account"
+              ? `Restart boss on ${curProv} with another account (resumes the session if available).`
+              : "Restart boss on a different provider (starts a fresh session)."}
+            footer={<>
+              <Button className="ghost" disabled={switchBusy} onClick={() => setSwitchingBoss(false)}>Cancel</Button>
+              <Button
+                className="primary"
+                disabled={switchBusy || (switchMode === "account" ? !switchAccountId : !switchProvider)}
+                onClick={async () => {
+                  if (!window.army.bossSwitch) return;
+                  setSwitchBusy(true);
+                  try {
+                    const res = await window.army.bossSwitch(
+                      switchMode === "account"
+                        ? { provider: curProv, accountId: switchAccountId }
+                        : { provider: switchProvider }
+                    );
+                    setAgentTemplates(v => ({ ...v, boss: res.template }));
+                    setStopped(v => ({ ...v, boss: false }));
+                    setSelected("boss");
+                    setView("agent");
+                    setSwitchingBoss(false);
+                  } catch (e) { setError(String(e)); } finally { setSwitchBusy(false); }
+                }}
+              >
+                {switchBusy ? "Switching…" : "Switch & restart"}
+              </Button>
+            </>}
+          >
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {supportsAccounts && (
+                <div style={{ display: "flex", gap: 6 }}>
+                  <Button
+                    className={switchMode === "account" ? "primary" : "secondary"}
+                    onClick={() => setSwitchMode("account")}
+                  >
+                    Switch {curProv} account
+                  </Button>
+                  <Button
+                    className={switchMode === "provider" ? "primary" : "secondary"}
+                    onClick={() => setSwitchMode("provider")}
+                  >
+                    Switch provider
+                  </Button>
+                </div>
+              )}
+              {switchMode === "account" && supportsAccounts ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 260, overflowY: "auto" }}>
+                  {bossAccounts.map(acc => {
+                    const picked = switchAccountId === acc.id;
+                    return (
+                      <button
+                        type="button"
+                        key={acc.id}
+                        onClick={() => setSwitchAccountId(acc.id)}
+                        style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 2,
+                          textAlign: "left",
+                          padding: "7px 10px",
+                          borderRadius: 8,
+                          border: picked ? "1px solid var(--accent)" : "1px solid var(--line)",
+                          background: picked ? "var(--surface-2)" : "transparent",
+                          color: "inherit",
+                          cursor: "pointer",
+                        }}
+                      >
+                        <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <b>{acc.label}</b>
+                          {acc.active && <span className="tag">Current</span>}
+                        </span>
+                        {(acc.email || acc.plan) && (
+                          <small style={{ color: "var(--muted)" }}>{[acc.email, acc.plan].filter(Boolean).join(" · ")}</small>
+                        )}
+                      </button>
+                    );
+                  })}
+                  {bossAccounts.length <= 1 && (
+                    <small style={{ color: "var(--muted)" }}>Add more {curProv} accounts in Providers to switch between them here.</small>
+                  )}
+                </div>
+              ) : (
+                <label className="field">
+                  New provider
+                  <select value={switchProvider} onChange={e => setSwitchProvider(e.target.value)}>
+                    {otherProviders.map(p => <option key={p} value={p}>{p}</option>)}
+                  </select>
+                </label>
+              )}
+            </div>
+          </Dialog>
+        );
+      })()}
       {savingTeam && <Dialog title="Save as team template" onClose={() => setSavingTeam(null)} description={`The boss and its ${agents.length - 1} ${agents.length === 2 ? "agent" : "agents"} are saved as a team you can start again with one click. Chats and tasks are not part of it.`} footer={<>
         <Button className="ghost" onClick={() => setSavingTeam(null)}>Cancel</Button>
         <Button className="primary" disabled={!savingTeam.name.trim()} onClick={() => void saveTeam()}>Save team</Button>

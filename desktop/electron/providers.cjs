@@ -40,9 +40,9 @@ const PERMISSIONS = {
 };
 
 const strip =s => String(s || '').replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '');
-function run(spec, args, timeout = 10000) {
+function run(spec, args, timeout = 10000, extraEnv = null) {
   return new Promise(resolve => {
-    execFile(spec.file, [...spec.args, ...args], { timeout, windowsHide: true, env: { ...process.env, NO_COLOR: '1', CI: '1' } },
+    execFile(spec.file, [...spec.args, ...args], { timeout, windowsHide: true, env: { ...process.env, ...(extraEnv || {}), NO_COLOR: '1', CI: '1' } },
       (error, stdout, stderr) => resolve({ ok: !error, code: error ? (error.code ?? 1) : 0, out: strip(stdout) + strip(stderr) }));
   });
 }
@@ -50,9 +50,10 @@ function run(spec, args, timeout = 10000) {
 function readCache() { try { return JSON.parse(fs.readFileSync(CACHE, 'utf8')); } catch { return {}; } }
 function writeCache(c) { try { fs.mkdirSync(path.dirname(CACHE), { recursive: true }); fs.writeFileSync(CACHE, JSON.stringify(c, null, 2)); } catch {} }
 
-function codexCachedModels() {
+function codexCachedModels(codexDir) {
   try {
-    const j = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.codex', 'models_cache.json'), 'utf8'));
+    const dir = codexDir || process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+    const j = JSON.parse(fs.readFileSync(path.join(dir, 'models_cache.json'), 'utf8'));
     const list = (Array.isArray(j) ? j : j.models || j.data || []).map(m => typeof m === 'string' ? m : m.slug || m.id || m.name).filter(Boolean);
     return [...new Set(list)];
   } catch { return []; }
@@ -76,33 +77,38 @@ function parseModels(id, result) {
 
 // Neither CLI prints the account email in its status, so it is read from their own local files.
 // Codex: the email claim of the id_token in ~/.codex/auth.json (ChatGPT sign-in).
-function codexEmail() {
+function codexEmail(codexDir) {
   try {
-    const os = require('os'), fs = require('fs'), path = require('path');
-    const auth = JSON.parse(fs.readFileSync(path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'auth.json'), 'utf8'));
+    const dir = codexDir || process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+    const auth = JSON.parse(fs.readFileSync(path.join(dir, 'auth.json'), 'utf8'));
     const token = auth.tokens?.id_token; if (!token) return '';
     const claims = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));
     return claims.email || claims['https://api.openai.com/profile']?.email || '';
   } catch { return ''; }
 }
 // Antigravity: its CLI log records "authenticated successfully as <email>" on each start.
-function antigravityEmail() {
+function antigravityEmail(agyDir) {
   try {
-    const os = require('os'), fs = require('fs'), path = require('path');
-    const text = fs.readFileSync(path.join(os.homedir(), '.gemini', 'antigravity-cli', 'cli.log'), 'utf8');
+    const dir = agyDir || process.env.ANTIGRAVITY_APP_DATA_DIR || path.join(os.homedir(), '.gemini', 'antigravity-cli');
+    const text = fs.readFileSync(path.join(dir, 'cli.log'), 'utf8');
     const all = [...text.matchAll(/authenticated successfully as (\S+@\S+)/g)];
     return all.length ? all[all.length - 1][1] : '';
   } catch { return ''; }
 }
-function parseAuth(p, r) {
+function parseAuth(p, r, opts = {}) {
   if (!p.status) return { auth: 'unknown', detail: 'Sign-in state can only be checked inside the CLI.' };
   const out = r.out.trim();
   if (p.id === 'claude') {
     try { const j = JSON.parse(out.slice(out.indexOf('{'))); const ok = j.loggedIn ?? j.logged_in ?? j.authenticated; return { auth: ok ? 'signed-in' : 'signed-out', detail: j.email || j.account?.email || j.authMethod || '' }; } catch {}
   }
-  if (p.id === 'codex') return /logged in/i.test(out) && !/not logged in/i.test(out) ? { auth: 'signed-in', detail: codexEmail() || out.split('\n')[0] } : { auth: 'signed-out', detail: '' };
+  if (p.id === 'codex') return /logged in/i.test(out) && !/not logged in/i.test(out) ? { auth: 'signed-in', detail: codexEmail(opts.accountDir) || out.split('\n')[0] } : { auth: 'signed-out', detail: '' };
   if (p.id === 'antigravity') {
-    if (parseModels(p.id, r).length) return { auth: 'signed-in', detail: antigravityEmail() };
+    if (typeof r.log === 'string') {
+      const m = [...r.log.matchAll(/authenticated successfully as (\S+@\S+)/g)];
+      if (m.length) return { auth: 'signed-in', detail: m[m.length - 1][1] };
+      if (/You are not logged into Antigravity|not logged in/i.test(r.log)) return { auth: 'signed-out', detail: '' };
+    }
+    if (parseModels(p.id, r).length) return { auth: 'signed-in', detail: antigravityEmail(opts.accountDir) };
     if (/not (?:logged|signed) in|login required|sign in|authentication required/i.test(out)) return { auth: 'signed-out', detail: '' };
     return { auth: 'unknown', detail: 'Could not verify sign-in with agy models.' };
   }
@@ -113,26 +119,35 @@ function parseAuth(p, r) {
   return { auth: r.ok ? 'signed-in' : 'signed-out', detail: '' };
 }
 
-async function check(resolveCommand, id) {
+async function check(resolveCommand, id, opts = {}) {
   const p = PROVIDERS.find(x => x.id === id);
   let spec;
   try { spec = resolveCommand(p.bin); } catch { return { id, name: p.name, installed: false, auth: 'n/a', version: '', path: '', models: p.known }; }
-  const v = await run(spec, ['--version'], 8000);
+  const v = await run(spec, ['--version'], 8000, opts.env);
   const version = (/\d+\.\d+(\.\d+)?/.exec(v.out) || [''])[0];
-  const status = p.status ? await run(spec, p.status, 12000) : null;
-  const a = parseAuth(p, status || { ok: true, out: '' });
+  let status = null;
+  if (id === 'antigravity' && p.status) {
+    const tmpLog = path.join(os.tmpdir(), `dispatch-agy-check-${process.pid}-${Date.now()}.log`);
+    status = await run(spec, ['--log-file', tmpLog, ...p.status], 12000, opts.env);
+    try { status.log = fs.readFileSync(tmpLog, 'utf8'); } catch {}
+    try { fs.rmSync(tmpLog, { force: true }); } catch {}
+  } else if (p.status) {
+    status = await run(spec, p.status, 12000, opts.env);
+  }
+  const a = parseAuth(p, status || { ok: true, out: '' }, opts);
   const cache = readCache();
-  let models = withKnown(p, cache[id]?.models?.length ? cache[id].models : (id === 'codex' && codexCachedModels().length ? codexCachedModels() : p.known));
-  if (a.auth === 'signed-in' && p.models) models = await refreshModels(resolveCommand, id, id === 'antigravity' ? status : undefined);
+  const cachedCodex = id === 'codex' ? codexCachedModels(opts.accountDir) : [];
+  let models = withKnown(p, cache[id]?.models?.length ? cache[id].models : (cachedCodex.length ? cachedCodex : p.known));
+  if (a.auth === 'signed-in' && p.models) models = await refreshModels(resolveCommand, id, id === 'antigravity' ? status : undefined, opts);
   return { id, name: p.name, installed: true, version, path: spec.args.at(-1) || spec.file, ...a, models, canLogout: !!p.logout || (id === 'antigravity' && WIN) };
 }
 
-async function refreshModels(resolveCommand, id, recorded) {
+async function refreshModels(resolveCommand, id, recorded, opts = {}) {
   const p = PROVIDERS.find(x => x.id === id);
   let models = [];
-  if (id === 'codex') models = codexCachedModels();
+  if (id === 'codex') models = codexCachedModels(opts.accountDir);
   if (!models.length && p.models) {
-    try { const r = recorded || await run(resolveCommand(p.bin), p.models, 20000); models = parseModels(id, r); } catch {}
+    try { const r = recorded || await run(resolveCommand(p.bin), p.models, 20000, opts.env); models = parseModels(id, r); } catch {}
   }
   if (!models.length) models = p.known;
   const c = readCache(); c[id] = { ...(c[id] || {}), models, updated: new Date().toISOString() }; writeCache(c);

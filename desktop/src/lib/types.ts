@@ -2,7 +2,9 @@ export type Message = { id: string; from: string; to: string; text: string; chat
 export type AgentQuestion = { id: string; at: string; questions: { question: string; header: string; multiSelect: boolean; options: { label: string; description: string }[] }[] };
 export type CustomTool = { id: string; name: string; command: string; cwd: string; note: string; autostart: boolean; agents: boolean; stopped?: boolean; terminal: string; log: string; running: boolean; exitCode: number | null; startedAt: string | null };
 export type QuestionAnswer = { picks: number[]; other?: string };
-export type Server = { id: string; name: string; host: string; port: number; user: string; key: string; note: string; icon: string; access: "off" | "ask" | "on"; hasPassword?: boolean; password?: string };
+export type Server = { id: string; name: string; host: string; port: number; user: string; key: string; note: string; icon: string; access: "off" | "ask" | "on"; vpnId?: string; hasPassword?: boolean; password?: string };
+export type Vpn = { id: string; name: string; type: "wireguard" | "proxy" | "jump"; config?: string; hasKey?: boolean; clearKey?: boolean; protocol?: "socks5" | "http"; host?: string; port?: number; user?: string; hasPassword?: boolean; password?: string };
+export type Account = { provider: "claude" | "codex" | "antigravity"; id: string; label: string; dir: string; active: boolean; isDefault?: boolean; email?: string; plan?: string };
 export type ServerCall = { id: string; time: number; agent: string; server: string; serverId: string; tool: string; action: string; status: "waiting" | "running" | "done" | "failed" | "denied"; code?: number };
 export type RemoteTarget = { hosts: string[]; port: number; token: string; name: string };
 export type RemoteState = { state: "local" | "connecting" | "connected" | "lost" | "failed"; error: string; target: RemoteTarget | null };
@@ -81,6 +83,21 @@ declare global {
         pending(): Promise<ServerCall[]>;
         log(): Promise<ServerCall[]>;
       };
+      vpns: {
+        list(): Promise<Vpn[]>;
+        save(v: Partial<Vpn>): Promise<Vpn>;
+        remove(id: string): Promise<boolean>;
+        test(v: Partial<Vpn>, targetHost?: string, targetPort?: number): Promise<{ ok: boolean; output: string }>;
+        chooseConf(): Promise<{ name: string; text: string } | null>;
+      };
+      accounts?: {
+        list(provider?: string): Promise<Account[]>;
+        add(provider: string, label?: string): Promise<{ account: Account; terminal: string; list: Account[] }>;
+        activate(provider: string, id: string): Promise<Account[]>;
+        rename(provider: string, id: string, label: string): Promise<Account[]>;
+        remove(provider: string, id: string): Promise<Account[]>;
+      };
+      bossSwitch?(opts: { provider?: string; accountId?: string }): Promise<{ provider: string; accountId?: string; template: any }>;
       remote: {
         state(): RemoteState;
         onState(fn: (s: RemoteState) => void): () => void;

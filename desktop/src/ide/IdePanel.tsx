@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDoubleLeftIcon, ChevronDoubleRightIcon, ChevronRightIcon, DocumentIcon, FolderIcon, FolderOpenIcon, MagnifyingGlassIcon, XMarkIcon, ArrowsRightLeftIcon, ArrowPathIcon, CommandLineIcon, CodeBracketIcon } from "@heroicons/react/16/solid";
+import { ChevronDoubleLeftIcon, ChevronDoubleRightIcon, ChevronRightIcon, MagnifyingGlassIcon, XMarkIcon, ArrowsRightLeftIcon, ArrowPathIcon, CommandLineIcon, CodeBracketIcon } from "@heroicons/react/16/solid";
+import { FileIcon } from "../components/FileIcon";
 import { monaco, applyTheme } from "./monaco";
 import { TreeMenu, DeleteDialog, type MenuItem } from "./TreeMenu";
 
@@ -48,7 +49,8 @@ const parent = (p: string) => p.includes("/") ? p.slice(0, p.lastIndexOf("/")) :
 
 // editorOnFile (Settings > Appearance): with no file open the panel is only the tree, the editor appears with the first file.
 // treeToggle: a button that folds the tree away so the editor gets the whole panel.
-export function IdePanel({ workspace, open, request, gitFiles, terminal, terminalOpen, toggleTerminal, close, editorOnFile, treeToggle, onCompact }: { close?: () => void; workspace: string; open: boolean; request: OpenRequest | null; gitFiles: GitFile[] | null; terminal?: React.ReactNode; terminalOpen?: boolean; toggleTerminal?: () => void; editorOnFile?: boolean; treeToggle?: boolean; onCompact?: (compact: boolean) => void }) {
+export function IdePanel({ workspace, open, request, gitFiles, terminal, terminalOpen, toggleTerminal, close, editorOnFile, treeToggle, onCompact, onReady }: { close?: () => void; workspace: string; open: boolean; request: OpenRequest | null; gitFiles: GitFile[] | null; terminal?: React.ReactNode; terminalOpen?: boolean; toggleTerminal?: () => void; editorOnFile?: boolean; treeToggle?: boolean; onCompact?: (compact: boolean) => void; onReady?: () => void }) {
+  const onReadyRef = useRef(onReady); onReadyRef.current = onReady;
   const [children, setChildren] = useState<Record<string, Entry[]>>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set([""]));
   const [picked, setPicked] = useState<Set<string>>(new Set());
@@ -93,14 +95,13 @@ export function IdePanel({ workspace, open, request, gitFiles, terminal, termina
     for (const m of originals.current.values()) m.dispose();
     originals.current.clear(); views.current.clear();
     setTabs([]); setActive(null); setChildren({}); setExpanded(new Set([""]));
-    void loadDir("");
-  }, [workspace, loadDir]);
+  }, [workspace]);
 
-  // Watch the folder only while the panel is open.
+  // Watch the folder and load the first level only while the panel is open.
   useEffect(() => {
-    if (!open) return;
+    if (!open) { onReadyRef.current?.(); return; }
     void window.army.files.watch(true);
-    void loadDir("");
+    void loadDir("").finally(() => onReadyRef.current?.());
     return () => { void window.army.files.watch(false); };
   }, [open, workspace, loadDir]);
 
@@ -315,7 +316,7 @@ export function IdePanel({ workspace, open, request, gitFiles, terminal, termina
           setMenu({ x: ev.clientX, y: ev.clientY, paths });
         }}>
         {e.dir ? <ChevronRightIcon className={"ide-chev" + (isOpen ? " open" : "")} aria-hidden="true" /> : <span className="ide-chev-space" />}
-        {e.dir ? (isOpen ? <FolderOpenIcon className="ide-ico" aria-hidden="true" /> : <FolderIcon className="ide-ico" aria-hidden="true" />) : <DocumentIcon className="ide-ico" aria-hidden="true" />}
+        <FileIcon name={e.name} dir={e.dir} open={isOpen} className="ide-ico" />
         <span className="ide-name">{e.name}</span>
         {st && !e.dir && <span className="ide-git">{st === "new" ? "U" : st === "deleted" ? "D" : "M"}</span>}
       </button>

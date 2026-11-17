@@ -47,14 +47,14 @@ function parseClaude(data, plan) {
   return { provider: 'claude', plan: plan || undefined, windows, source: 'Anthropic OAuth usage endpoint' };
 }
 
-function readClaudeToken() {
-  const file = path.join(homeDir(), '.claude', '.credentials.json');
+function readClaudeToken(accountDir) {
+  const file = path.join(accountDir || process.env.CLAUDE_CONFIG_DIR || path.join(homeDir(), '.claude'), '.credentials.json');
   let j; try { j = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
   const o = j?.claudeAiOauth; return o?.accessToken ? { token: o.accessToken, expiresAt: num(o.expiresAt), plan: o.subscriptionType } : null;
 }
 
-async function fetchClaude() {
-  const cred = readClaudeToken();
+async function fetchClaude(opts = {}) {
+  const cred = readClaudeToken(opts.accountDir);
   if (!cred) return { error: 'No Claude subscription sign-in found (API-key users have no session or weekly limits).', errorCode: 'unsupported' };
   if (cred.expiresAt && cred.expiresAt < Date.now()) return { error: 'The Claude sign-in token has expired. Open Claude Code once to refresh it.', errorCode: 'token-expired', plan: cred.plan };
   try {
@@ -100,8 +100,8 @@ function parseCodexRollout(text) {
   }
   return null;
 }
-function newestRollout() {
-  const root = path.join(homeDir(), '.codex', 'sessions'); let best = null;
+function newestRollout(accountDir) {
+  const root = path.join(accountDir || process.env.CODEX_HOME || path.join(homeDir(), '.codex'), 'sessions'); let best = null;
   const walk = (dir, depth) => {
     let entries; try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
     for (const e of entries) {
@@ -115,9 +115,9 @@ function newestRollout() {
 function killTree(child) {
   try { if (process.platform === 'win32' && child.pid) execFile('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true }, () => {}); else child.kill(); } catch {}
 }
-function codexAppServer(spec, timeout = 15000) {
+function codexAppServer(spec, timeout = 15000, extraEnv = null) {
   return new Promise((resolve, reject) => {
-    let child; try { child = spawn(spec.file, [...spec.args, 'app-server'], { stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true }); } catch (e) { return reject(e); }
+    let child; try { child = spawn(spec.file, [...spec.args, 'app-server'], { stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true, env: { ...process.env, ...(extraEnv || {}) } }); } catch (e) { return reject(e); }
     let buf = '', done = false;
     const finish = (err, val) => { if (done) return; done = true; clearTimeout(timer); killTree(child); err ? reject(err) : resolve(val); };
     const timer = setTimeout(() => finish(new Error('timed out')), timeout);
@@ -135,16 +135,16 @@ function codexAppServer(spec, timeout = 15000) {
     send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'dispatch', version: '1' } } });
   });
 }
-async function fetchCodex(resolveCommand) {
+async function fetchCodex(resolveCommand, opts = {}) {
   let spec; try { spec = resolveCommand('codex'); } catch { return { error: 'Codex is not installed.', errorCode: 'not-installed' }; }
   let liveError = '';
   try {
-    const out = parseCodexLimits(await codexAppServer(spec));
+    const out = parseCodexLimits(await codexAppServer(spec, 15000, opts.env));
     if (out.windows.length) return out;
     liveError = 'no limits reported';
   } catch (e) { liveError = e.message; }
   try {
-    const f = newestRollout(); const parsed = f && parseCodexRollout(fs.readFileSync(f, 'utf8'));
+    const f = newestRollout(opts.accountDir); const parsed = f && parseCodexRollout(fs.readFileSync(f, 'utf8'));
     if (parsed?.windows.length) return { ...parsed, stale: true };
   } catch {}
   return { error: `Codex limits are unavailable (${liveError}). Sign in with a ChatGPT plan; API-key use has no session limits.`, errorCode: 'unavailable' };
@@ -164,9 +164,9 @@ function parseAntigravity(json) {
 }
 // agy 1.5.x has no /usage command in print mode: `agy -p /usage` sends '/usage' to the model as a prompt, so it spends
 // a real turn of the user's quota. It is only ever called from an explicit Refresh (force), never by the 3-minute poll.
-function run(spec, args, timeout = 30000) {
+function run(spec, args, timeout = 30000, extraEnv = null) {
   return new Promise((resolve, reject) => {
-    execFile(spec.file, [...spec.args, ...args], { timeout, windowsHide: true, maxBuffer: 8 * 1024 * 1024, env: { ...process.env, NO_COLOR: '1', CI: '1' } },
+    execFile(spec.file, [...spec.args, ...args], { timeout, windowsHide: true, maxBuffer: 8 * 1024 * 1024, env: { ...process.env, ...(extraEnv || {}), NO_COLOR: '1', CI: '1' } },
       (error, stdout, stderr) => {
         if (error && !stdout && !stderr) return reject(error);
         resolve(stripAnsi(String(stdout || '') + String(stderr || '')));
@@ -174,10 +174,10 @@ function run(spec, args, timeout = 30000) {
   });
 }
 const stripAnsi = s => s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '');
-async function fetchAntigravity(resolveCommand) {
+async function fetchAntigravity(resolveCommand, opts = {}) {
   let spec; try { spec = resolveCommand('agy'); } catch { return { error: 'Antigravity is not installed.', errorCode: 'not-installed' }; }
   try {
-    const out = await run(spec, ['-p', '/usage', '--output-format', 'json']);
+    const out = await run(spec, ['-p', '/usage', '--output-format', 'json'], 30000, opts.env);
     const start = out.indexOf('{'), end = out.lastIndexOf('}');
     let json = null; try { json = JSON.parse(start >= 0 && end > start ? out.slice(start, end + 1) : out); } catch {}
     const parsed = parseAntigravity(json);
@@ -187,36 +187,48 @@ async function fetchAntigravity(resolveCommand) {
 }
 
 // --- public API ---
-const FETCH = { claude: () => fetchClaude(), codex: r => fetchCodex(r), antigravity: r => fetchAntigravity(r) };
+const FETCH = { claude: (_r, opts) => fetchClaude(opts), codex: (r, opts) => fetchCodex(r, opts), antigravity: (r, opts) => fetchAntigravity(r, opts) };
 
-async function load(provider, resolveCommand) {
+const cacheKey = (provider, accountId) => `${provider}:${accountId || 'default'}`;
+
+async function load(provider, resolveCommand, opts = {}) {
   let r;
-  try { r = await FETCH[provider](resolveCommand); } catch (e) { r = { error: e.message || String(e) }; }
-  const prev = cache.get(provider)?.value || savedReadings()[provider];
+  try { r = await FETCH[provider](resolveCommand, opts); } catch (e) { r = { error: e.message || String(e) }; }
+  const key = cacheKey(provider, opts.accountId);
+  const prev = cache.get(key)?.value || savedReadings()[key] || (!opts.accountId || opts.accountId === 'default' ? savedReadings()[provider] : null);
   const value = { provider, windows: [], ...r, updatedAt: new Date().toISOString() };
   if (value.error && prev?.windows?.length && value.errorCode !== 'not-installed' && value.errorCode !== 'unsupported') return { ...prev, stale: true, error: value.error, staleSince: prev.staleSince || prev.updatedAt };
   return value;
 }
 
-// getUsage(providerId, { resolveCommand, force }) -> normalized usage; never throws.
-async function getUsage(provider, { resolveCommand, force } = {}) {
+// getUsage(providerId, { resolveCommand, force, env, accountDir, accountId }) -> normalized usage; never throws.
+async function getUsage(provider, opts = {}) {
+  const { resolveCommand, force, accountId } = opts;
   if (!SUPPORTED.includes(provider)) return { provider, windows: [], updatedAt: new Date().toISOString(), source: 'none', error: 'Usage limits are not available for this provider.', errorCode: 'unsupported' };
-  const hit = cache.get(provider);
+  const key = cacheKey(provider, accountId);
+  const hit = cache.get(key);
   if (hit?.pending) return hit.pending;
   // Reading Antigravity costs a model turn. Until the user presses Refresh, show the last saved reading (if any) and
   // make it clear the number is not live.
   if (provider === 'antigravity' && !force) {
-    const prev = hit?.value?.windows?.length ? hit.value : savedReadings()[provider];
+    const prev = hit?.value?.windows?.length ? hit.value : (savedReadings()[key] || (!accountId || accountId === 'default' ? savedReadings()[provider] : null));
     return prev?.windows?.length ? { ...prev, stale: true } : { provider, windows: [], updatedAt: new Date().toISOString(), source: 'agy /usage', error: 'Press Refresh to read the Antigravity limit. Reading it spends one model turn.', errorCode: 'manual' };
   }
   if (!force && hit?.value && Date.now() - hit.at < TTL) return hit.value;
-  const pending = load(provider, resolveCommand).then(value => { cache.set(provider, { at: Date.now(), value }); remember(value); return value; });
-  cache.set(provider, { ...(hit || { at: 0 }), pending });
+  const pending = load(provider, resolveCommand, opts).then(value => {
+    cache.set(key, { at: Date.now(), value });
+    if (!value.error && value.windows?.length && cacheFile) {
+      const all = savedReadings(); all[key] = value;
+      try { fs.mkdirSync(path.dirname(cacheFile), { recursive: true }); fs.writeFileSync(cacheFile, JSON.stringify(all)); } catch {}
+    }
+    return value;
+  });
+  cache.set(key, { ...(hit || { at: 0 }), pending });
   return pending;
 }
 async function getAll(opts = {}) {
   const ids = opts.providers || SUPPORTED;
-  const list = await Promise.all(ids.filter(id => SUPPORTED.includes(id)).map(id => getUsage(id, opts)));
+  const list = await Promise.all(ids.filter(id => SUPPORTED.includes(id)).map(id => getUsage(id, { ...opts, ...(opts.forProvider ? opts.forProvider(id) : {}) })));
   return Object.fromEntries(list.map(u => [u.provider, u]));
 }
 

@@ -6,8 +6,10 @@ import { Dialog } from "../components/Dialog";
 import { ask } from "../components/ask";
 import { UsageDetails } from "../components/Usage";
 import { useUsage } from "../lib/usage";
+import type { Account } from "../lib/types";
 
 const SUPPORTS_USAGE = ["claude", "codex", "antigravity"];
+const MULTI_ACCOUNT_PROVIDERS = ["claude", "codex"];
 
 type Status = { id: string; name: string; installed: boolean; version?: string; path?: string; auth: string; detail?: string; models?: string[]; canLogout?: boolean; canRepair?: boolean; update?: string; latest?: string };
 const api = () => (window as any).army.providers;
@@ -53,6 +55,28 @@ export function Providers({ focus = "" }: { focus?: string }) {
   const testLocal = async () => { if (!localAvailable) { setLocalStatus("Quit and restart Dispatch to enable Local AI settings."); return; } setLocalBusy(true); try { const result = await localApi.check(local); setDetectedModels(result.ok ? result.models : []); setLocalStatus(result.ok ? result.matches ? `Connected · ${local.model}` : "Connected. Choose a detected model below." : `Could not connect: ${result.error}`); } catch (e) { setLocalStatus(String(e)); } finally { setLocalBusy(false); } };
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [task, setTask] = useState<{ id: string; kind: string; name: string; done?: boolean; code?: number } | null>(null);
+  const [accounts, setAccounts] = useState<Record<string, Account[]>>({});
+  const [accountModal, setAccountModal] = useState<string | null>(null);
+  const [newAccountLabel, setNewAccountLabel] = useState("");
+  const [addingAccount, setAddingAccount] = useState(false);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [accountError, setAccountError] = useState("");
+
+  const loadAccounts = async (provider?: string) => {
+    const accApi = window.army.accounts;
+    if (!accApi) return;
+    try {
+      const list = await accApi.list(provider);
+      if (provider) {
+        setAccounts(prev => ({ ...prev, [provider]: list }));
+      } else {
+        const grouped: Record<string, Account[]> = {};
+        for (const a of list) (grouped[a.provider] ||= []).push(a);
+        setAccounts(grouped);
+      }
+    } catch {}
+  };
 
   const check = async (id: string) => {
     setBusy(b => ({ ...b, [id]: true }));
@@ -66,11 +90,16 @@ export function Providers({ focus = "" }: { focus?: string }) {
       setRows(list.map(p => ({ ...p, installed: false, auth: "checking" })));
       list.forEach(p => check(p.id));
     });
-    return (window as any).army.on("provider:done", (e: any) => {
+    void loadAccounts();
+    const offDone = (window as any).army.on("provider:done", (e: any) => {
       setTask(t => (t && t.name === e.name ? { ...t, done: true, code: e.exitCode } : t));
       if (e.exitCode === 0 && e.kind === "login") api().models(e.id).then(() => check(e.id));
       else check(e.id);
     });
+    const offAcc = (window as any).army.on("accounts-changed", (provider?: string) => {
+      void loadAccounts(typeof provider === "string" ? provider : undefined);
+    });
+    return () => { offDone(); offAcc(); };
   }, []);
 
   const act = async (id: string, kind: string) => {
@@ -88,10 +117,163 @@ export function Providers({ focus = "" }: { focus?: string }) {
   };
   const closeTask = async () => { if (task) await api().close(task.name); setTask(null); };
   const taskRow = task && rows.find(r => r.id === task.id);
+  const modalRow = accountModal ? rows.find(r => r.id === accountModal) : null;
+  const modalAccounts = accountModal ? (accounts[accountModal] || []) : [];
+
+  const openAccountModal = (provider: string) => {
+    setAccountModal(provider);
+    setNewAccountLabel("");
+    setRenamingId(null);
+    setRenameValue("");
+    setAccountError("");
+    void loadAccounts(provider);
+  };
+
+  const activateAccount = async (provider: string, id: string) => {
+    const accApi = window.army.accounts;
+    if (!accApi) return;
+    try {
+      const list = await accApi.activate(provider, id);
+      setAccounts(prev => ({ ...prev, [provider]: list }));
+      setAccountError("");
+      void check(provider);
+    } catch (e) { setAccountError(String(e)); }
+  };
+
+  const addAccount = async () => {
+    if (!accountModal || !window.army.accounts) return;
+    setAddingAccount(true);
+    setAccountError("");
+    try {
+      if (task && !task.done) await api().close(task.name);
+      const res = await window.army.accounts.add(accountModal, newAccountLabel.trim());
+      setAccounts(prev => ({ ...prev, [accountModal]: res.list }));
+      setNewAccountLabel("");
+      setAccountModal(null);
+      setTask({ id: accountModal, kind: "login", name: res.terminal });
+    } catch (e) {
+      setAccountError(String(e));
+    } finally {
+      setAddingAccount(false);
+    }
+  };
+
+  const saveRename = async (provider: string, id: string) => {
+    if (!window.army.accounts) return;
+    try {
+      const list = await window.army.accounts.rename(provider, id, renameValue);
+      setAccounts(prev => ({ ...prev, [provider]: list }));
+      setRenamingId(null);
+      setAccountError("");
+    } catch (e) { setAccountError(String(e)); }
+  };
+
+  const removeAccount = async (provider: string, id: string) => {
+    if (!window.army.accounts) return;
+    try {
+      const list = await window.army.accounts.remove(provider, id);
+      setAccounts(prev => ({ ...prev, [provider]: list }));
+      setAccountError("");
+      void check(provider);
+    } catch (e) { setAccountError(String(e)); }
+  };
 
   return (
     <div className={"page prov-page" + (task ? " with-task" : "")}>
       {deletingLocal && <Dialog title="Remove this provider?" onClose={() => setDeletingLocal(null)} description={`${deletingLocal} will be removed from Dispatch.`} footer={<><Button className="ghost" autoFocus onClick={() => setDeletingLocal(null)}>Cancel</Button><Button className="danger" onClick={() => void removeLocal()}>Remove</Button></>} />}
+      {accountModal && (
+        <Dialog
+          title={`${modalRow?.name || accountModal} accounts`}
+          size="md"
+          onClose={() => setAccountModal(null)}
+          description="Click an account to make it active for new agents and usage meters."
+          footer={<>
+            <input
+              aria-label="New account label"
+              placeholder="Account label (e.g. Work)"
+              value={newAccountLabel}
+              disabled={modalAccounts.length >= 10 || addingAccount}
+              onChange={e => setNewAccountLabel(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter" && modalAccounts.length < 10 && !addingAccount) void addAccount(); }}
+              style={{ flex: 1, minWidth: 0 }}
+            />
+            <Button className="primary" disabled={modalAccounts.length >= 10 || addingAccount} onClick={() => void addAccount()}>
+              {addingAccount ? "Opening…" : "+ Add account"}
+            </Button>
+          </>}
+        >
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 340, overflowY: "auto" }}>
+            {modalAccounts.map(acc => (
+              <div
+                key={acc.id}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "7px 10px",
+                  borderRadius: 8,
+                  border: acc.active ? "1px solid var(--accent)" : "1px solid var(--line)",
+                  background: acc.active ? "var(--surface-2)" : "transparent",
+                }}
+              >
+                {renamingId === acc.id ? (
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1 }}>
+                    <input
+                      autoFocus
+                      aria-label="Rename account"
+                      value={renameValue}
+                      onChange={e => setRenameValue(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === "Enter") void saveRename(accountModal, acc.id);
+                        if (e.key === "Escape") setRenamingId(null);
+                      }}
+                      style={{ flex: 1, minWidth: 0 }}
+                    />
+                    <Button className="primary" onClick={() => void saveRename(accountModal, acc.id)}>Save</Button>
+                    <Button className="ghost" onClick={() => setRenamingId(null)}>Cancel</Button>
+                  </div>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => void activateAccount(accountModal, acc.id)}
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        textAlign: "left",
+                        background: "none",
+                        border: "none",
+                        padding: 0,
+                        color: "inherit",
+                        cursor: "pointer",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 2,
+                      }}
+                    >
+                      <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <b>{acc.label}</b>
+                        {acc.active && <span className="tag">Active</span>}
+                      </span>
+                      {(acc.email || acc.plan) && (
+                        <small style={{ color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {[acc.email, acc.plan].filter(Boolean).join(" · ")}
+                        </small>
+                      )}
+                    </button>
+                    <Button className="ghost" onClick={() => { setRenamingId(acc.id); setRenameValue(acc.label); }}>Rename</Button>
+                    {acc.id !== "default" && (
+                      <Button className="danger-ghost" onClick={() => void removeAccount(accountModal, acc.id)}>Remove</Button>
+                    )}
+                  </>
+                )}
+              </div>
+            ))}
+            {modalAccounts.length >= 10 && <small style={{ color: "var(--muted)" }}>Maximum of 10 accounts reached.</small>}
+            {accountError && <small role="alert" style={{ color: "var(--danger, #e5534b)" }}>{accountError}</small>}
+          </div>
+        </Dialog>
+      )}
       <div className="view-heading"><h1>Providers</h1><span className="grow" /><button className="button secondary local-add-toggle" type="button" aria-label={localFormOpen ? "Close custom AI form" : "Add custom AI"} aria-expanded={localFormOpen} onClick={() => setLocalFormOpen(v => !v)}>{localFormOpen ? <XMarkIcon aria-hidden="true" /> : <PlusIcon aria-hidden="true" />}<span>{localFormOpen ? "Close" : "Custom AI"}</span></button></div>
       <div className="prov-list">
         <div className={"local-form-collapse " + (localFormOpen ? "open" : "")} aria-hidden={!localFormOpen} inert={!localFormOpen}><div className="local-form-inner">
@@ -126,6 +308,11 @@ export function Providers({ focus = "" }: { focus?: string }) {
                 {p.update === "manual" && <Button className="ghost" onClick={() => act(p.id, "update")}>Check for updates</Button>}
                 {p.installed && <Button className="secondary" onClick={() => refreshModels(p.id)} disabled={busy[p.id]}>Refresh models</Button>}
                 {p.installed && SUPPORTS_USAGE.includes(p.id) && <Button className="secondary" aria-expanded={!!details[p.id]} onClick={() => setDetails(d => ({ ...d, [p.id]: !d[p.id] }))}>{details[p.id] ? "Hide details" : "Show details"}</Button>}
+                {p.installed && MULTI_ACCOUNT_PROVIDERS.includes(p.id) && (
+                  <Button className="secondary" onClick={() => openAccountModal(p.id)}>
+                    Switch account · {(accounts[p.id]?.find(a => a.active)?.label) || "Default"}
+                  </Button>
+                )}
                 {p.installed && <Button className="danger-ghost" title="Uninstall" onClick={() => act(p.id, "uninstall")}>Uninstall</Button>}
               </div>
               {p.installed && details[p.id] && <UsageDetails u={usage[p.id]} now={now} loading={usageLoading[p.id]} refresh={() => void refreshUsage(p.id)} manual={p.id === "antigravity"} />}

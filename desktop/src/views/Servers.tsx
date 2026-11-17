@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
-import { PlusIcon, ServerStackIcon, PencilSquareIcon, TrashIcon, PhotoIcon, KeyIcon, XMarkIcon, CommandLineIcon } from "@heroicons/react/16/solid";
+import { PlusIcon, ServerStackIcon, PencilSquareIcon, TrashIcon, PhotoIcon, KeyIcon, XMarkIcon, CommandLineIcon, ShieldCheckIcon, DocumentArrowUpIcon } from "@heroicons/react/16/solid";
 import { Button, Console } from "../components/common";
 import { Dialog } from "../components/Dialog";
 import { ask } from "../components/ask";
-import type { Server, ServerCall } from "../lib/types";
+import type { Server, ServerCall, Vpn } from "../lib/types";
 import { VersionBadge } from "./UpdateButton";
 
 const army = () => window.army;
@@ -13,6 +13,12 @@ type Shell = { name: string; title: string; cwd: string; exited: boolean; server
 export function useServers() {
   const [list, setList] = useState<Server[]>([]);
   useEffect(() => { const load = () => army().servers.list().then(setList).catch(() => {}); void load(); return army().on("servers-changed", load); }, []);
+  return [list, setList] as const;
+}
+
+export function useVpns() {
+  const [list, setList] = useState<Vpn[]>([]);
+  useEffect(() => { const load = () => army().vpns.list().then(setList).catch(() => {}); void load(); return army().on("vpns-changed", load); }, []);
   return [list, setList] as const;
 }
 
@@ -51,8 +57,93 @@ export function RailServers({ open }: { open: (id: string) => void }) {
 }
 
 const ACCESS: [Server["access"], string, string][] = [["off", "Off", "Agents do not see this server."], ["ask", "Ask me", "Agents can use it; every command waits for your OK."], ["on", "Allowed", "Agents run commands without asking."]];
+const VPN_TYPES: [Vpn["type"], string][] = [["wireguard", "WireGuard"], ["proxy", "SOCKS5 / HTTP"], ["jump", "SSH jump host"]];
+const VPN_TYPE_LABEL: Record<Vpn["type"], string> = { wireguard: "WireGuard", proxy: "Proxy", jump: "Jump host" };
+const vpnSubtitle = (v: Vpn) => v.type === "wireguard" ? "WireGuard" : v.type === "proxy" ? `${(v.protocol || "socks5").toUpperCase()} · ${v.host}:${v.port}` : `Jump · ${v.user ? v.user + "@" : ""}${v.host}${v.port && v.port !== 22 ? ":" + v.port : ""}`;
 
-function ServerForm({ initial, onClose }: { initial: Partial<Server> | null; onClose: (saved?: Server) => void }) {
+function VpnForm({ initial, onClose }: { initial: Partial<Vpn> | null; onClose: (saved?: Vpn) => void }) {
+  const [v, setV] = useState<Partial<Vpn>>({ type: "wireguard", protocol: "socks5", port: 1080, ...initial });
+  const [targetHost, setTargetHost] = useState("");
+  const [targetPort, setTargetPort] = useState(22);
+  const [busy, setBusy] = useState(false);
+  const [test, setTest] = useState<{ ok: boolean; output: string } | null>(null);
+  const [error, setError] = useState("");
+  const set = (patch: Partial<Vpn>) => { setV(x => ({ ...x, ...patch })); setTest(null); };
+  const switchType = (type: Vpn["type"]) => {
+    const port = type === "proxy" ? (v.protocol === "http" ? 8080 : 1080) : type === "jump" ? 22 : v.port;
+    set({ type, port });
+  };
+  const canSave = !!v.name?.trim() && (v.type === "wireguard" ? !!v.config?.trim() : !!v.host?.trim());
+  const canTest = v.type === "wireguard" ? !!v.config?.trim() : !!v.host?.trim();
+  const save = async () => { setBusy(true); setError(""); try { onClose(await army().vpns.save(v)); } catch (e) { setError(errText(e)); } finally { setBusy(false); } };
+  const runTest = async () => {
+    setBusy(true); setTest(null); setError("");
+    try { setTest(await army().vpns.test(v, targetHost, targetPort)); }
+    catch (e) { setTest({ ok: false, output: errText(e) }); }
+    finally { setBusy(false); }
+  };
+
+  return <Dialog title={initial?.id ? `Edit ${initial.name}` : "Add VPN"} size="md" onClose={() => onClose()} footer={<>
+    <Button className="ghost" disabled={busy || !canTest} onClick={() => void runTest()}>{busy && !test ? "Testing…" : "Test connection"}</Button>
+    <span className="grow" />
+    <Button className="ghost" onClick={() => onClose()}>Cancel</Button>
+    <Button className="primary" disabled={busy || !canSave} onClick={() => void save()}>{initial?.id ? "Save" : "Add VPN"}</Button>
+  </>}>
+    <div className="server-form">
+      <label className="field">Name<input autoFocus value={v.name || ""} placeholder="Office WireGuard" onChange={e => set({ name: e.target.value })} /></label>
+      <div className="field">Type
+        <div className="seg" role="radiogroup" aria-label="VPN type">
+          {VPN_TYPES.map(([id, label]) => <button type="button" key={id} role="radio" aria-checked={v.type === id} className={v.type === id ? "on" : ""} onClick={() => switchType(id)}>{label}</button>)}
+        </div>
+        <small className="field-hint">Only selected servers route through this VPN. OpenVPN is not in this version (requires a TUN/TAP driver and admin rights).</small>
+      </div>
+
+      {v.type === "wireguard" && <>
+        <div className="field">
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+            <span>WireGuard config (.conf)</span>
+            <Button className="secondary" onClick={async () => { const f = await army().vpns.chooseConf(); if (f) set({ config: f.text, name: v.name || f.name, clearKey: false }); }}><DocumentArrowUpIcon aria-hidden="true" />Import .conf</Button>
+          </div>
+          <textarea rows={7} style={{ fontFamily: "var(--font-mono)", fontSize: "var(--text-xs)" }} value={v.config || ""} placeholder={"[Interface]\nPrivateKey = ...\nAddress = 10.0.0.2/32\n\n[Peer]\nPublicKey = ...\nEndpoint = vpn.example.com:51820"} onChange={e => set({ config: e.target.value })} />
+          {v.hasKey && <small className="field-hint">Private key is saved encrypted. Paste or import a new config to replace it.</small>}
+        </div>
+      </>}
+
+      {v.type === "proxy" && <>
+        <div className="field">Protocol
+          <div className="seg" role="radiogroup" aria-label="Proxy protocol">
+            {([["socks5", "SOCKS5"], ["http", "HTTP CONNECT"]] as const).map(([id, label]) => <button type="button" key={id} role="radio" aria-checked={(v.protocol || "socks5") === id} className={(v.protocol || "socks5") === id ? "on" : ""} onClick={() => set({ protocol: id, port: v.port === 1080 && id === "http" ? 8080 : v.port === 8080 && id === "socks5" ? 1080 : v.port })}>{label}</button>)}
+          </div>
+        </div>
+        <div className="server-form-row">
+          <label className="field grow">Proxy host<input value={v.host || ""} placeholder="127.0.0.1 or proxy.example.com" onChange={e => set({ host: e.target.value })} /></label>
+          <label className="field server-port">Port<input inputMode="numeric" value={v.port ?? 1080} onChange={e => set({ port: Number(e.target.value.replace(/\D/g, "")) || 0 })} /></label>
+        </div>
+        <label className="field">User (optional)<input value={v.user || ""} placeholder="Optional" onChange={e => set({ user: e.target.value })} /></label>
+        <div className="field">Password (optional)<div className="server-key"><input type="password" aria-label="Proxy password" autoComplete="new-password" value={v.password ?? ""} placeholder={v.hasPassword && v.password === undefined ? "Saved (type to change)" : "Optional: stored encrypted by your system"} onChange={e => set({ password: e.target.value })} />{(v.hasPassword || v.password) && <Button className="ghost" onClick={() => set({ password: "", hasPassword: false })}>Clear</Button>}</div></div>
+      </>}
+
+      {v.type === "jump" && <>
+        <div className="server-form-row">
+          <label className="field grow">Jump host<input value={v.host || ""} placeholder="bastion.example.com" onChange={e => set({ host: e.target.value })} /></label>
+          <label className="field server-port">Port<input inputMode="numeric" value={v.port ?? 22} onChange={e => set({ port: Number(e.target.value.replace(/\D/g, "")) || 0 })} /></label>
+        </div>
+        <label className="field">Jump user (optional)<input value={v.user || ""} placeholder="ubuntu" onChange={e => set({ user: e.target.value })} /></label>
+        <small className="field-hint">Uses ssh -J with your local SSH keys / ssh-agent.</small>
+      </>}
+
+      {v.type !== "jump" && <div className="server-form-row">
+        <label className="field grow">Test target host (optional)<input value={targetHost} placeholder="e.g. 10.0.0.5" onChange={e => setTargetHost(e.target.value)} /></label>
+        <label className="field server-port">Port<input inputMode="numeric" value={targetPort} onChange={e => setTargetPort(Number(e.target.value.replace(/\D/g, "")) || 22)} /></label>
+      </div>}
+
+      {test && <p className={"server-test " + (test.ok ? "ok" : "bad")} role="status">{test.output}</p>}
+      {error && <p className="setting-note error" role="alert">{error}</p>}
+    </div>
+  </Dialog>;
+}
+
+function ServerForm({ initial, vpns, onClose }: { initial: Partial<Server> | null; vpns: Vpn[]; onClose: (saved?: Server) => void }) {
   const [s, setS] = useState<Partial<Server>>({ port: 22, access: "off", ...initial });
   const [busy, setBusy] = useState(false);
   const [test, setTest] = useState<{ ok: boolean; output: string } | null>(null);
@@ -82,6 +173,12 @@ function ServerForm({ initial, onClose }: { initial: Partial<Server> | null; onC
         <small className="field-hint">Typed for you in the terminal and used by agents. Leave empty to use an SSH key.</small></div>
       <div className="field">Key file<div className="server-key"><input aria-label="Key file" value={s.key || ""} placeholder="Optional: uses ssh-agent and ~/.ssh by default" onChange={e => set({ key: e.target.value })} /><Button className="secondary" onClick={async () => { const k = await army().servers.chooseKey(); if (k) set({ key: k }); }}><KeyIcon aria-hidden="true" />Choose</Button></div></div>
       <label className="field">What is on it<textarea rows={2} value={s.note || ""} placeholder="Agents read this. e.g. Ubuntu 24, runs the shop API in /srv/shop with docker compose" onChange={e => set({ note: e.target.value })} /></label>
+      <label className="field">VPN
+        <select value={s.vpnId || ""} onChange={e => set({ vpnId: e.target.value })}>
+          <option value="">None</option>
+          {vpns.map(v => <option key={v.id} value={v.id}>{v.name} ({VPN_TYPE_LABEL[v.type]})</option>)}
+        </select>
+      </label>
       <div className="field">Agents<div className="seg" role="radiogroup" aria-label="Agent access">{ACCESS.map(([id, label]) => <button type="button" key={id} role="radio" aria-checked={s.access === id} className={s.access === id ? "on" : ""} onClick={() => set({ access: id })}>{label}</button>)}</div>
         <small className="field-hint">{ACCESS.find(a => a[0] === s.access)?.[2]}</small></div>
       {test && <p className={"server-test " + (test.ok ? "ok" : "bad")} role="status">{test.ok ? "Connected. Agents can use this server." : `Could not connect: ${test.output.split("\n").filter(Boolean).pop() || "no answer"}`}</p>}
@@ -95,9 +192,11 @@ const ago = (t: number) => { const s = Math.round((Date.now() - t) / 1000); retu
 /** Servers page: the list (drag to reorder), and the selected server's terminals and agent activity. */
 export function Servers({ focus }: { focus: { id: string; n: number } | null }) {
   const [list, setList] = useServers();
+  const [vpns] = useVpns();
   const { dragging, props } = useReorder(list, setList);
   const [selected, setSelected] = useState<string | null>(null);
   const [editing, setEditing] = useState<Partial<Server> | null | false>(false);
+  const [editingVpn, setEditingVpn] = useState<Partial<Vpn> | null | false>(false);
   const [shells, setShells] = useState<Shell[]>([]);
   const [active, setActive] = useState<string | null>(null);
   const [calls, setCalls] = useState<ServerCall[]>([]);
@@ -109,6 +208,15 @@ export function Servers({ focus }: { focus: { id: string; n: number } | null }) 
     return () => offs.forEach(f => f());
   }, []);
   const connect = async (id: string) => { setError(""); setSelected(id); try { const name = await army().servers.connect(id); setActive(name); } catch (e) { setError(errText(e)); } };
+  const removeVpn = async (v: Vpn) => {
+    const usedBy = list.filter(s => s.vpnId === v.id);
+    const description = usedBy.length
+      ? `Used by ${usedBy.length} server${usedBy.length > 1 ? "s" : ""} (${usedBy.map(s => s.name).join(", ")}). Removing it will clear their VPN setting.`
+      : "Only the saved VPN is removed.";
+    if (await ask.confirm(`Delete ${v.name}?`, { description, action: "Delete", danger: true })) {
+      await army().vpns.remove(v.id);
+    }
+  };
   useEffect(() => {
     if (!focus) return;
     setSelected(focus.id);
@@ -116,6 +224,7 @@ export function Servers({ focus }: { focus: { id: string; n: number } | null }) 
     if (open) setActive(open.name); else void connect(focus.id);
   }, [focus?.n]);
   const current = list.find(s => s.id === selected) || list[0];
+  const currentVpn = current?.vpnId ? vpns.find(v => v.id === current.vpnId) : undefined;
   const mine = shells.filter(sh => current && sh.server === current.id);
   const shown = mine.find(sh => sh.name === active) || mine[mine.length - 1];
   const activity = calls.filter(c => current && c.serverId === current.id).slice(-30).reverse();
@@ -124,20 +233,36 @@ export function Servers({ focus }: { focus: { id: string; n: number } | null }) 
     <aside className="server-list">
       <div className="server-list-head"><h1>Servers</h1><Button className="secondary" onClick={() => setEditing({})}><PlusIcon aria-hidden="true" />Add</Button></div>
       {list.length === 0 ? <div className="server-empty"><ServerStackIcon aria-hidden="true" /><p>Save the servers you use. Open them as terminals, and let agents work on them if you want.</p></div>
-        : <div className="rows" role="listbox" aria-label="Servers">{list.map(s => <div key={s.id} role="option" aria-selected={current?.id === s.id} tabIndex={0} className={"list-row server-row" + (current?.id === s.id ? " selected" : "") + (dragging === s.id ? " dragging" : "")} {...props(s.id)}
-          onClick={() => setSelected(s.id)} onDoubleClick={() => void connect(s.id)} onKeyDown={e => { if (e.key === "Enter") void connect(s.id); }}>
-          <ServerBadge server={s} />
-          <span className="row-text"><b>{s.name}</b><small>{s.user ? s.user + "@" : ""}{s.host}{s.port !== 22 ? ":" + s.port : ""}</small></span>
-          {s.access !== "off" && <span className="server-access" title={ACCESS.find(a => a[0] === s.access)?.[2]}>{s.access === "ask" ? "Agents ask" : "Agents"}</span>}
-          {shells.some(sh => sh.server === s.id && !sh.exited) && <span className="server-live" title="Terminal open" />}
-        </div>)}</div>}
+        : <div className="rows" role="listbox" aria-label="Servers">{list.map(s => {
+          const vpn = s.vpnId ? vpns.find(v => v.id === s.vpnId) : undefined;
+          return <div key={s.id} role="option" aria-selected={current?.id === s.id} tabIndex={0} className={"list-row server-row" + (current?.id === s.id ? " selected" : "") + (dragging === s.id ? " dragging" : "")} {...props(s.id)}
+            onClick={() => setSelected(s.id)} onDoubleClick={() => void connect(s.id)} onKeyDown={e => { if (e.key === "Enter") void connect(s.id); }}>
+            <ServerBadge server={s} />
+            <span className="row-text"><b>{s.name}</b><small>{s.user ? s.user + "@" : ""}{s.host}{s.port !== 22 ? ":" + s.port : ""}</small></span>
+            {vpn && <span className="server-access" title={`VPN: ${vpn.name}`}>VPN</span>}
+            {s.access !== "off" && <span className="server-access" title={ACCESS.find(a => a[0] === s.access)?.[2]}>{s.access === "ask" ? "Agents ask" : "Agents"}</span>}
+            {shells.some(sh => sh.server === s.id && !sh.exited) && <span className="server-live" title="Terminal open" />}
+          </div>;
+        })}</div>}
       {list.length > 1 && <p className="setting-note">Drag to reorder. The same order shows in the left bar.</p>}
+      <div className="server-list-head" style={{ marginTop: 12 }}>
+        <h2 className="label" style={{ margin: 0 }}>My VPNs</h2>
+        <Button className="secondary" onClick={() => setEditingVpn({ type: "wireguard" })}><PlusIcon aria-hidden="true" />Add</Button>
+      </div>
+      {vpns.length === 0
+        ? <p className="setting-note">No VPNs yet. Add WireGuard, a SOCKS5/HTTP proxy, or an SSH jump host.</p>
+        : <div className="rows" role="list" aria-label="My VPNs">{vpns.map(v => <div key={v.id} role="listitem" className="list-row server-row" onClick={() => setEditingVpn(v)}>
+          <ShieldCheckIcon style={{ width: 16, height: 16, flex: "none", color: "var(--text-2)" }} aria-hidden="true" />
+          <span className="row-text"><b>{v.name}</b><small>{vpnSubtitle(v)}</small></span>
+          <button type="button" className="icon-button" title={`Edit ${v.name}`} aria-label={`Edit ${v.name}`} onClick={e => { e.stopPropagation(); setEditingVpn(v); }}><PencilSquareIcon /></button>
+          <button type="button" className="icon-button" title={`Delete ${v.name}`} aria-label={`Delete ${v.name}`} onClick={e => { e.stopPropagation(); void removeVpn(v); }}><TrashIcon /></button>
+        </div>)}</div>}
     </aside>
     <section className="server-main">
       {!current ? <div className="empty"><h2>No servers yet</h2><p>Add one with its host and user. Passwords are typed in the terminal and never saved.</p><Button className="primary" onClick={() => setEditing({})}>Add server</Button></div> : <>
         <header className="server-head">
           <ServerBadge server={current} size={40} />
-          <div className="server-title"><h2>{current.name}</h2><small>{current.user ? current.user + "@" : ""}{current.host}{current.port !== 22 ? ":" + current.port : ""}{current.note ? " · " + current.note : ""}</small></div>
+          <div className="server-title"><h2>{current.name}</h2><small>{current.user ? current.user + "@" : ""}{current.host}{current.port !== 22 ? ":" + current.port : ""}{currentVpn ? " · VPN: " + currentVpn.name : ""}{current.note ? " · " + current.note : ""}</small></div>
           <span className="grow" />
           <button type="button" className="icon-button" title="Edit" aria-label={`Edit ${current.name}`} onClick={() => setEditing(current)}><PencilSquareIcon /></button>
           <button type="button" className="icon-button" title="Delete" aria-label={`Delete ${current.name}`} onClick={async () => { if (await ask.confirm(`Delete ${current.name}?`, { description: "Only the saved entry is removed. Nothing changes on the server.", action: "Delete", danger: true })) { await army().servers.remove(current.id); setSelected(null); } }}><TrashIcon /></button>
@@ -161,7 +286,8 @@ export function Servers({ focus }: { focus: { id: string; n: number } | null }) 
         </div>
       </>}
     </section>
-    {editing !== false && <ServerForm initial={editing} onClose={saved => { setEditing(false); if (saved) setSelected(saved.id); }} />}
+    {editing !== false && <ServerForm initial={editing} vpns={vpns} onClose={saved => { setEditing(false); if (saved) setSelected(saved.id); }} />}
+    {editingVpn !== false && <VpnForm initial={editingVpn} onClose={() => setEditingVpn(false)} />}
   </div>;
 }
 

@@ -19,6 +19,7 @@ const crypto = require('node:crypto');
 const { Worker } = require('node:worker_threads');
 const os = require('node:os');
 const providersLib = require('./providers.cjs');
+const accountsLib = require('./accounts.cjs');
 const templates = require('./templates.cjs');
 const tools = require('./tools.cjs');
 const teams = require('./teams.cjs');
@@ -26,7 +27,7 @@ module.exports = function createEngine(host) {
 const ipcMain = host.ipc, win = host.window;
 let workspace = process.cwd(), watcher, operation = null, needsFolder = false;
 const intervals = [];
-let codeIndexWorker, codeIndexInfo;
+let codeIndexWorker, codeIndexInfo, codeIndexTimer = null;
 function startCodeIndex(target) {
   if (codeIndexWorker) codeIndexWorker.postMessage('close');
   const dir = path.join(os.tmpdir(), 'dispatch-code-index', crypto.createHash('sha256').update(path.resolve(target)).digest('hex'));
@@ -190,8 +191,11 @@ function bossVisibleTemplates() {
 }
 function watch() {
   watcher?.close();
+  clearTimeout(codeIndexTimer);
   storage.migrate(workspace);
-  startCodeIndex(workspace);
+  // Defer full-repo tree-sitter + chokidar indexing until after first paint so boot I/O stays fast.
+  const indexTarget = workspace;
+  codeIndexTimer = setTimeout(() => { codeIndexTimer = null; if (workspace === indexTarget) startCodeIndex(indexTarget); }, 1500);
   const inbox = path.join(workspace, '.dispatch', 'inbox');
   fs.mkdirSync(inbox, { recursive: true });
   for (const scope of templates.scopes(workspace).filter(s => !s.readonly)) fs.mkdirSync(scope.dir, { recursive: true });
@@ -377,10 +381,12 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
     ? `The user reads your replies in the Dispatch chat exactly as you write them here, rendered as Markdown. ${name === 'boss' ? 'To talk to the user' : 'When a message is from you (the user)'}, simply write your answer as your normal final reply: use short paragraphs, headings, lists, tables and code blocks where they help. Never run dispatch send --to you; that would show the user a second, unformatted copy. Use dispatch send only for other agents: when another agent gave you the task or you need its input, report with dispatch send --to <agent> "<report>".`
     : `When you finish a task or need input, report to the requester using dispatch send --to <requester> "<short report>". For a message from you, run dispatch send --to you "<short report>"; for a message from another agent, use that agent's name.`} A message with line breaks, quotes or backticks gets cut by the shell: write it to a file and send it with dispatch send --to <agent> --file <path> (dispatch spawn takes --task-file <path> the same way). Keep reports to other agents short. Use dispatch list to see the squad.${name === 'boss' ? `\nAvailable providers (plan and notes are supplied by the user):\n${providerInfo}\nTemplate catalogue:\n${catalogue}\nUse dispatch spawn --template <name> --name <id> --task <task> and dispatch template create --name <name> --provider <provider> --description <description> --role <prompt>.\n${SCHEDULE_HELP}${telegramHelp()}` : (tgOwner() === name ? telegramHelp(name) : '')}\nShared outputs: save every finished deliverable (images, video, audio, documents, exports) in ${path.join(workspace, '.dispatch', 'outputs', name)} so the user and the other agents can find it. Run dispatch outputs [agent] to see what the squad has produced and reuse those files by path. To show an image in the chat, save it in that folder and write ![short description](<full path>) in your reply; the user sees the image itself.${host.customTools?.prompt() || ''}${memoryText}`;
   if (!saved) { saved = { name, template, provider, model: template.model || '', enlistedBy }; operation.agents.push(saved); createChat(saved); resumeSession = false; } else if (!saved.chatId) { const previousSession = saved.sessionId; const chat = createChat(saved); if (previousSession) { chat.sessionId = previousSession; saved.sessionId = previousSession; writeChat(name, chat); saveOperation(); } }
+  const account = accountsLib.PROVIDERS.includes(provider) ? accountFor(provider, saved.accountId) : null;
+  if (account) saved.accountId = account.id;
   const session = saved.sessionId;
   // Claude can only resume a session it has written down. An agent that never got a message has none yet
   // (a team member without a task, a fresh chat): resuming it fails with "No conversation found" and the agent dies.
-  if (provider === 'claude' && resumeSession && !demo && !fs.existsSync(activity.claudeFile(workspace, session))) resumeSession = false;
+  if (provider === 'claude' && resumeSession && !demo && !fs.existsSync(activity.claudeFile(workspace, session, account?.dir))) resumeSession = false;
   const args = [...mcpConfig.args];
   // Auto-approve (template "Approvals: Auto", or dispatch spawn --auto-approve): the CLI runs commands without
   // stopping for a yes/no in a terminal nobody watches. Only for CLIs with a known flag.
@@ -418,13 +424,14 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
   if (provider === 'claude' && !demo) { const sk = skillStore(); if (name === 'boss' || sk.settings().claudeAgents) for (const dir of sk.pluginDirs()) args.push('--plugin-dir', dir); }
   if (provider === 'claude') args.push('--append-system-prompt', prompt, resumeSession ? '--resume' : '--session-id', session);
   const resolved = demo ? null : resolveCommand(command);
-  const terminal = demo ? createDemoTerminal(name, workspace, bin()) : pty.spawn(resolved.file, [...resolved.args, ...args], { name: 'xterm-256color', cols: 100, rows: 30, cwd: workspace, env: { ...process.env, ...mcpConfig.env, ...(memoryOn && provider === 'claude' && mem.settings().disableProviderMemory ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' } : {}), DISPATCH_INDEX_INFO: codeIndexInfo || '', DISPATCH_AGENT: name, MYARMY_AGENT: name, DISPATCH_HOME: path.join(workspace, '.dispatch'), MYARMY_HOME: path.join(workspace, '.dispatch'), PATH: `${path.dirname(bin())}${path.delimiter}${process.env.PATH}` } });
-  const agent = { terminal, queue: [], output: '', lastOutput: Date.now(), atPrompt: false, template, session, enlistedBy, command, args, prompt, tracksTurns: direct }; processes.set(name, agent);
+  const accountEnv = account ? accountsLib.envFor(provider, account) : {};
+  const terminal = demo ? createDemoTerminal(name, workspace, bin()) : pty.spawn(resolved.file, [...resolved.args, ...args], { name: 'xterm-256color', cols: 100, rows: 30, cwd: workspace, env: { ...process.env, ...accountEnv, ...mcpConfig.env, ...(memoryOn && provider === 'claude' && mem.settings().disableProviderMemory ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' } : {}), DISPATCH_INDEX_INFO: codeIndexInfo || '', DISPATCH_AGENT: name, MYARMY_AGENT: name, DISPATCH_HOME: path.join(workspace, '.dispatch'), MYARMY_HOME: path.join(workspace, '.dispatch'), PATH: `${path.dirname(bin())}${path.delimiter}${process.env.PATH}` } });
+  const agent = { terminal, queue: [], output: '', lastOutput: Date.now(), atPrompt: false, template, session, enlistedBy, command, args, prompt, tracksTurns: direct, accountId: account?.id || null, accountDir: account?.dir || null }; processes.set(name, agent);
   // Transcript: live thinking, tool steps and interim text for the chat, the real turn state, and the reply itself.
   // agy is started without --conversation, so it always opens a new conversation: following the saved one watched
   // a file nothing writes to any more, and the chat stayed empty after every restart. Find the new one instead.
   const watchSession = provider === 'antigravity' ? null : session;
-  if (!demo) agent.stopActivity = activity.watch({ provider, cwd: workspace, session: watchSession, name, onSession: id => { if (saved && (!saved.sessionId || provider === 'antigravity')) { saved.sessionId = id; agent.session = id; saveOperation(); } }, onEvent: e => {
+  if (!demo) agent.stopActivity = activity.watch({ provider, cwd: workspace, session: watchSession, name, accountDir: account?.dir, onSession: id => { if (saved && (!saved.sessionId || provider === 'antigravity')) { saved.sessionId = id; agent.session = id; saveOperation(); } }, onEvent: e => {
     if (processes.get(name) !== agent) return;
     agent.eventAt = Date.now();
     // A turn the transcript never announced with a user line (a reply to a background task's notice): its first
@@ -618,10 +625,40 @@ function init(target) {
 }
 ipcMain.handle('workspace', async (_e, target) => { if (!target) { const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'] }); if (r.canceled) return workspace; target = r.filePaths[0]; } if (!fs.statSync(target).isDirectory()) throw new Error('Workspace is not a directory'); if (!host.free(target)) { host.focusFolder(target); return workspace; } switchWorkspace(target); host.changed(); return workspace; });
 function switchWorkspace(target) { if (needsFolder || path.resolve(target) !== path.resolve(workspace)) { needsFolder = false; finishOperation(); stopAgents(); if (isMock(workspace) && !isMock(target)) { demo = process.argv.includes('--demo'); mockPrevious = null; } workspace = path.resolve(target); rememberWorkspace(); watch(); } }
+ipcMain.handle('app:ready', () => ({ ok: true, workspace, needsFolder }));
 ipcMain.handle('info', () => ({ workspace, needsFolder, demo, mock: isMock(workspace), operations: listOperations(), workspaces: recentWorkspaces() }));
 ipcMain.handle('operations:list', () => listOperations());
 ipcMain.handle('operations:delete', (_e, id) => { if (!/^[\w-]+$/.test(id)) throw new Error('Invalid operation'); if (operation?.id === id) { stopAgents(); operation = null; } fs.rmSync(path.join(operationsDir(), id + '.json'), { force: true }); void fs.promises.rm(path.join(operationsDir(), id), { recursive: true, force: true, maxRetries: 20, retryDelay: 250 }).catch(() => {}); return listOperations(); });
-ipcMain.handle('operations:resume', (_e, id) => { const op = listOperations().find(o => o.id === id); if (!op) throw new Error('Operation not found'); finishOperation(); stopAgents(); const messages = history(op); for (const a of op.agents) { if (a.name !== 'boss' && a.chatId) for (const m of messages) if (m.from === a.name || m.to === a.name) (m.chats ||= {})[a.name] = 'previous'; const dir = path.join(operationsDir(), op.id, 'chats', a.name); try { for (const file of fs.readdirSync(dir)) { if (a.name !== 'boss' && file !== a.chatId + '.json') continue; const chat = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8')); for (const item of chat.messages) { const m = messages.find(x => x.id === item.id); if (m) (m.chats ||= {})[a.name] = chat.id; } } } catch {} } if (op.segments?.length && op.segments.at(-1).end == null) op.segments.at(-1).end = logSize(); op.segments ||= []; op.segments.push({ start: logSize(), end: null }); operation = op; saveOperation(); const failed = []; for (const a of op.agents) if (!a.stopped || a.name === 'boss') { a.stopped = false; try { startAgent(a.name, a.template, a.enlistedBy, a); } catch (e) { a.stopped = true; failed.push({ name: a.name, text: `${a.name} could not start: ${e.message}` }); } } saveOperation(); return { operation: op, messages, notes: [...failed, ...op.agents.filter(a => !a.stopped && a.provider !== 'claude' && !(a.provider === 'codex' && a.sessionId)).map(a => ({ name: a.name, text: `${a.name}: started a fresh ${a.provider} session; prior conversation is shown in chat.` }))] }; });
+ipcMain.handle('operations:resume', async (_e, id) => {
+  const op = listOperations().find(o => o.id === id); if (!op) throw new Error('Operation not found');
+  finishOperation(); stopAgents();
+  let log = null; try { log = await fs.promises.readFile(logPath()); } catch {}
+  const messages = log ? (op.segments || []).flatMap(s => log.subarray(s.start, s.end ?? log.length).toString('utf8').split('\n').map(parseMessage).filter(Boolean)) : [];
+  const byId = new Map(messages.map(m => [m.id, m]));
+  for (const a of op.agents) {
+    if (a.name !== 'boss' && a.chatId) for (const m of messages) if (m.from === a.name || m.to === a.name) (m.chats ||= {})[a.name] = 'previous';
+    const dir = path.join(operationsDir(), op.id, 'chats', a.name);
+    try {
+      const files = await fs.promises.readdir(dir);
+      for (const file of files) {
+        if (a.name !== 'boss' && file !== a.chatId + '.json') continue;
+        const chat = JSON.parse(await fs.promises.readFile(path.join(dir, file), 'utf8'));
+        for (const item of chat.messages) { const m = byId.get(item.id); if (m) (m.chats ||= {})[a.name] = chat.id; }
+      }
+    } catch {}
+  }
+  if (op.segments?.length && op.segments.at(-1).end == null) op.segments.at(-1).end = logSize();
+  op.segments ||= []; op.segments.push({ start: logSize(), end: null });
+  operation = op; saveOperation();
+  const failed = [];
+  for (const a of op.agents) if (!a.stopped || a.name === 'boss') {
+    a.stopped = false;
+    try { startAgent(a.name, a.template, a.enlistedBy, a); } catch (e) { a.stopped = true; failed.push({ name: a.name, text: `${a.name} could not start: ${e.message}` }); }
+    await new Promise(r => setImmediate(r));
+  }
+  saveOperation();
+  return { operation: op, messages, notes: [...failed, ...op.agents.filter(a => !a.stopped && a.provider !== 'claude' && !(a.provider === 'codex' && a.sessionId)).map(a => ({ name: a.name, text: `${a.name}: started a fresh ${a.provider} session; prior conversation is shown in chat.` }))] };
+});
 ipcMain.handle('chats:list', (_e, name) => chats(name).filter(c => name === 'boss' || c.id === operation?.agents.find(a => a.name === name)?.chatId).map(c => ({ ...c, active: c.id === operation?.agents.find(a => a.name === name)?.chatId })));
 ipcMain.handle('chats:switch', (_e, name, id) => switchChat(name, id));
 const unreal = require('./unreal.cjs');
@@ -709,7 +746,13 @@ ipcMain.handle('skills:remove', (_e, name, scope) => skillStore().remove(String(
 ipcMain.handle('skills:reveal', (_e, name, scope) => { const s = skillStore().list().find(x => x.name === name && x.scope === scope); if (s) shell.showItemInFolder(s.file); else { const d = skillStore().roots[skillScope(scope)]; fs.mkdirSync(d, { recursive: true }); void shell.openPath(d); } return true; });
 // Skills Claude Code loads by itself (~/.claude/skills, <workspace>/.claude/skills, plugins). Delete goes to the Recycle Bin.
 const userHome = () => process.env.DISPATCH_TEST_HOME || os.homedir();
-const agentSkills = () => skillsLib.claudeSkills({ claudeHome: path.join(userHome(), '.claude'), codexHome: process.env.DISPATCH_TEST_HOME ? path.join(userHome(), '.codex') : (process.env.CODEX_HOME || path.join(userHome(), '.codex')), agentsHome: path.join(userHome(), '.agents'), workspace });
+const accountStore = () => accountsLib.create(globalDir(), { userHome: userHome() });
+const accountFor = (provider, accountId) => {
+  if (!accountsLib.PROVIDERS.includes(provider)) return null;
+  const st = accountStore();
+  return (accountId && st.get(provider, accountId)) || st.active(provider);
+};
+const agentSkills = () => skillsLib.claudeSkills({ claudeHome: accountFor('claude')?.dir || path.join(userHome(), '.claude'), codexHome: accountFor('codex')?.dir || (process.env.DISPATCH_TEST_HOME ? path.join(userHome(), '.codex') : (process.env.CODEX_HOME || path.join(userHome(), '.codex'))), agentsHome: path.join(userHome(), '.agents'), workspace });
 const claudeSkill = id => { const s = agentSkills().find(x => x.id === id); if (!s) throw new Error('Skill not found'); return s; };
 ipcMain.handle('skills:claude', () => agentSkills());
 ipcMain.handle('skills:claude-read', (_e, id) => fs.readFileSync(claudeSkill(String(id)).file, 'utf8'));
@@ -859,7 +902,7 @@ ipcMain.handle('telegram:set-owner', (_e, name) => setTgOwner(String(name)));
 // ── .dispatch packs (share a trained workspace or an agent) ─────
 const packLib = require('./pack.cjs');
 const packs = new Map();
-const packArgs = { get workspace() { return workspace; }, get globalDir() { return globalDir(); }, get claudeHome() { return path.join(userHome(), '.claude'); } };
+const packArgs = { get workspace() { return workspace; }, get globalDir() { return globalDir(); }, get claudeHome() { return accountFor('claude')?.dir || path.join(userHome(), '.claude'); } };
 function openPackFile(file) {
   const stat = fs.statSync(file);
   if (stat.size > 300 * 1024 * 1024) throw new Error('This pack is larger than 300 MB.');
@@ -1056,19 +1099,65 @@ ipcMain.handle('providers:list', () => providersLib.PROVIDERS.map(p => ({ id: p.
 // Checking a provider starts its CLI; opening the Providers page again within a minute reuses the answer. A sign-in or
 // install run (provider:done) clears it, so the page shows the new state right away.
 const providerChecks = new Map();
-function checkProvider(id) { const hit = providerChecks.get(id); if (hit && Date.now() - hit.at < 60000) return hit.value; const value = Promise.resolve(providersLib.check(resolveCommand, id)); providerChecks.set(id, { at: Date.now(), value }); value.catch(() => providerChecks.delete(id)); return value; }
+const providerAccountOpts = id => {
+  const acc = accountFor(id);
+  return acc ? { env: accountsLib.envFor(id, acc), accountDir: acc.dir, account: acc, accountId: acc.id } : {};
+};
+function checkProvider(id) { const hit = providerChecks.get(id); if (hit && Date.now() - hit.at < 60000) return hit.value; const value = Promise.resolve(providersLib.check(resolveCommand, id, providerAccountOpts(id))); providerChecks.set(id, { at: Date.now(), value }); value.catch(() => providerChecks.delete(id)); return value; }
 ipcMain.handle('providers:check', async (_e, id) => { if (id !== 'local' && !id.startsWith('local:')) return checkProvider(id); const config = localAI.read(id.startsWith('local:') ? decodeURIComponent(id.slice(6)) : undefined); let installed = true; try { resolveCommand('opencode'); } catch { installed = false; } const status = config && installed ? await localAI.check(config) : null; return { id, name: config?.name || 'Custom AI', installed, auth: status?.ok && status.matches ? 'signed-in' : 'error', detail: !installed ? 'OpenCode is required.' : !config ? 'Configure a custom AI provider in Providers.' : !status.ok ? status.error || 'Server is offline.' : !status.matches ? 'Configured model was not found on the server.' : config.baseURL, models: config ? [config.model] : [] }; });
 ipcMain.handle('providers:update-info', (_e, id, version) => providersLib.updateInfo(id, version));
-ipcMain.handle('providers:models', (_e, id) => providersLib.refreshModels(resolveCommand, id));
+ipcMain.handle('providers:models', (_e, id) => providersLib.refreshModels(resolveCommand, id, undefined, providerAccountOpts(id)));
 ipcMain.handle('providers:action', (_e, id, kind) => {
   const name = `provider-${id}-${kind}`;
   processes.get(name)?.terminal.kill(); processes.delete(name);
-  const spec = providersLib.actionSpec(resolveCommand, id, kind);
-  const terminal = pty.spawn(spec.file, spec.args, { name: 'xterm-256color', cols: 100, rows: 24, cwd: os.homedir(), env: process.env });
+  const opts = providerAccountOpts(id);
+  const spec = providersLib.actionSpec(resolveCommand, id, kind, opts);
+  const terminal = pty.spawn(spec.file, spec.args, { name: 'xterm-256color', cols: 100, rows: 24, cwd: os.homedir(), env: { ...process.env, ...(opts.env || {}) } });
   const entry = { terminal, queue: [], output: '' }; processes.set(name, entry);
   terminal.onData(data => { entry.output += data; if (entry.output.length > 300000) entry.output = entry.output.slice(-200000); terminalOut(name, data); });
-  terminal.onExit(({ exitCode }) => { providerChecks.delete(id); notify('provider:done', { id, kind, exitCode, name }); });
+  terminal.onExit(({ exitCode }) => { providerChecks.delete(id); notify('provider:done', { id, kind, exitCode, name }); notify('accounts-changed', id); });
   return name;
+});
+ipcMain.handle('accounts:list', (_e, provider) => accountStore().list(provider));
+ipcMain.handle('accounts:add', (_e, provider, label) => {
+  const account = accountStore().add(provider, label);
+  providerChecks.delete(provider);
+  notify('accounts-changed', provider);
+  const name = `provider-${provider}-login-${account.id}`;
+  processes.get(name)?.terminal.kill(); processes.delete(name);
+  const env = accountsLib.envFor(provider, account);
+  const spec = providersLib.actionSpec(resolveCommand, provider, 'login', { account });
+  const terminal = pty.spawn(spec.file, spec.args, { name: 'xterm-256color', cols: 100, rows: 24, cwd: os.homedir(), env: { ...process.env, ...env } });
+  const entry = { terminal, queue: [], output: '' }; processes.set(name, entry);
+  terminal.onData(data => { entry.output += data; if (entry.output.length > 300000) entry.output = entry.output.slice(-200000); terminalOut(name, data); });
+  terminal.onExit(({ exitCode }) => {
+    providerChecks.delete(provider);
+    const meta = accountsLib.readAccountMeta(provider, account.dir);
+    if (meta.email || meta.plan) accountStore().updateMeta(provider, account.id, meta);
+    notify('provider:done', { id: provider, kind: 'login', exitCode, name });
+    notify('accounts-changed', provider);
+    if (usageTracking()) usageAll(true).then(shareUsage).catch(() => {});
+  });
+  return { account, terminal: name, list: accountStore().list(provider) };
+});
+ipcMain.handle('accounts:activate', (_e, provider, id) => {
+  accountStore().activate(provider, id);
+  providerChecks.delete(provider);
+  notify('accounts-changed', provider);
+  if (usageTracking()) usageAll(true).then(shareUsage).catch(() => {});
+  return accountStore().list(provider);
+});
+ipcMain.handle('accounts:rename', (_e, provider, id, label) => {
+  const list = accountStore().rename(provider, id, label);
+  notify('accounts-changed', provider);
+  return list;
+});
+ipcMain.handle('accounts:remove', (_e, provider, id) => {
+  const list = accountStore().remove(provider, id);
+  providerChecks.delete(provider);
+  notify('accounts-changed', provider);
+  if (usageTracking()) usageAll(true).then(shareUsage).catch(() => {});
+  return list;
 });
 // User shells (Terminal tab in the side panel): PowerShell in the workspace. Kept apart from agents so stopping
 // or restarting the team never touches them; they share the 'terminal' event and the input/resize/output channels.
@@ -1125,16 +1214,29 @@ ipcMain.handle('shell:close', (_e, name) => { const s = shells.get(name); if (s)
 ipcMain.handle('shell:rename', (_e, name, title) => { const s = shells.get(name); if (s && String(title).trim()) { s.title = String(title).trim().slice(0, 40); notify('shells-changed', null); } return true; });
 // ── SSH servers (electron/servers.cjs): saved list, terminals, and the agents' servers MCP bridge ──
 const serversLib = require('./servers.cjs');
+const vpnsLib = require('./vpns.cjs');
 const { safeStorage } = require('electron');
 const serverVault = { seal: text => { if (!safeStorage.isEncryptionAvailable()) throw new Error('This computer cannot store passwords securely'); return safeStorage.encryptString(text).toString('base64'); }, open: s => safeStorage.decryptString(Buffer.from(s, 'base64')) };
 localAI.setVault(serverVault);
 const serverStore = () => serversLib.create(path.join(globalDir(), 'servers.json'), serverVault);
+const vpnStore = () => vpnsLib.create(path.join(globalDir(), 'vpns.json'), serverVault, { dataDir: globalDir() });
 const serverPassword = id => { const st = serverStore(), s = st.get(id); return s ? st.password(s) : ''; };
+const prepareVpn = async s => s?.vpnId ? vpnStore().prepareForServer(s, serverStore().list()) : { vpn: null, tunnel: null, env: null, proxyScript: '' };
 ipcMain.handle('servers:list', () => serverStore().list());
-ipcMain.handle('servers:save', (_e, s) => { const saved = serverStore().save(s); notify('servers-changed', null); return saved; });
+ipcMain.handle('servers:save', (_e, s) => { if (s?.vpnId && !vpnStore().get(s.vpnId)) throw new Error('Selected VPN was not found'); const saved = serverStore().save(s); notify('servers-changed', null); return saved; });
 ipcMain.handle('servers:remove', (_e, id) => { serverStore().remove(id); notify('servers-changed', null); return true; });
 ipcMain.handle('servers:order', (_e, ids) => { serverStore().order(Array.isArray(ids) ? ids.map(String) : []); notify('servers-changed', null); return true; });
-ipcMain.handle('servers:test', (_e, s) => serversLib.test(s, typeof s.password === 'string' && s.password ? s.password : s.id ? serverPassword(s.id) : ''));
+ipcMain.handle('servers:test', async (_e, s) => { const vpnOpts = await prepareVpn(s); return serversLib.test(s, typeof s.password === 'string' && s.password ? s.password : s.id ? serverPassword(s.id) : '', vpnOpts); });
+ipcMain.handle('vpns:list', () => vpnStore().list());
+ipcMain.handle('vpns:save', (_e, v) => { const saved = vpnStore().save(v); notify('vpns-changed', null); return saved; });
+ipcMain.handle('vpns:remove', (_e, id) => { vpnStore().remove(id); serverStore().clearVpn(id); notify('vpns-changed', null); notify('servers-changed', null); return true; });
+ipcMain.handle('vpns:test', (_e, v, targetHost, targetPort) => vpnStore().test(v, targetHost, targetPort, serverStore().list()));
+ipcMain.handle('vpns:choose-conf', async () => {
+  const r = await dialog.showOpenDialog(win, { title: 'Import WireGuard config', properties: ['openFile'], filters: [{ name: 'WireGuard config', extensions: ['conf'] }, { name: 'All files', extensions: ['*'] }] });
+  if (r.canceled || !r.filePaths[0]) return null;
+  const file = r.filePaths[0];
+  return { name: path.basename(file, path.extname(file)), text: fs.readFileSync(file, 'utf8') };
+});
 ipcMain.handle('servers:choose-key', async () => { const r = await dialog.showOpenDialog(win, { title: 'SSH private key', defaultPath: path.join(os.homedir(), '.ssh'), properties: ['openFile', 'showHiddenFiles'] }); return r.canceled ? null : r.filePaths[0] || null; });
 ipcMain.handle('servers:choose-icon', async () => {
   const r = await dialog.showOpenDialog(win, { title: 'Server icon', properties: ['openFile'], filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'ico', 'svg'] }] });
@@ -1144,10 +1246,11 @@ ipcMain.handle('servers:choose-icon', async () => {
   const img = nativeImage.createFromPath(file); if (img.isEmpty()) throw new Error('Could not read that image');
   return img.resize({ width: 96, height: 96, quality: 'best' }).toDataURL();
 });
-ipcMain.handle('servers:connect', (_e, id) => {
+ipcMain.handle('servers:connect', async (_e, id) => {
   const s = serverStore().get(id); if (!s) throw new Error('Server not found');
+  const vpnOpts = await prepareVpn(s);
   const name = `shell-${++shellSeq}`;
-  const terminal = pty.spawn(process.platform === 'win32' ? 'ssh.exe' : 'ssh', serversLib.sshArgs(s), { name: 'xterm-256color', cols: 100, rows: 24, cwd: os.homedir(), env: process.env });
+  const terminal = pty.spawn(process.platform === 'win32' ? 'ssh.exe' : 'ssh', serversLib.sshArgs(s, vpnOpts), { name: 'xterm-256color', cols: 100, rows: 24, cwd: os.homedir(), env: vpnOpts.env ? { ...process.env, ...vpnOpts.env } : process.env });
   const entry = { terminal, output: '', cwd: `${s.user ? s.user + '@' : ''}${s.host}`, title: s.name, exited: false, server: s.id };
   shells.set(name, entry);
   const answer = serversLib.answerer(serverPassword(s.id), text => terminal.write(text), () => {});
@@ -1185,7 +1288,9 @@ ipcMain.handle('servers:log', () => serversBridge.log.slice(-100));
         }
         const timeout = Math.min(1800, Math.max(5, Number(args.timeout_s) || 120)) * 1000;
         const pw = serverPassword(s.id);
-        const r = tool === 'server_run' ? await serversLib.exec(s, action, timeout, pw) : tool === 'server_upload' ? await serversLib.upload(s, path.resolve(workspace, String(args.local_path)), String(args.remote_path), 600000, pw) : await serversLib.download(s, String(args.remote_path), path.resolve(workspace, String(args.local_path)), 600000, pw);
+        let vpnOpts;
+        try { vpnOpts = await prepareVpn(s); } catch (e) { entry.status = 'failed'; notify('servers-log', entry); return reply({ error: String(e.message || e) }); }
+        const r = tool === 'server_run' ? await serversLib.exec(s, action, timeout, pw, vpnOpts) : tool === 'server_upload' ? await serversLib.upload(s, path.resolve(workspace, String(args.local_path)), String(args.remote_path), 600000, pw, vpnOpts) : await serversLib.download(s, String(args.remote_path), path.resolve(workspace, String(args.local_path)), 600000, pw, vpnOpts);
         entry.status = r.code === 0 ? 'done' : 'failed'; entry.code = r.code; notify('servers-log', entry);
         reply({ text: `exit code ${r.code}\n${r.output || '(no output)'}` });
       } catch (e) { reply({ error: String(e.message || e) }); }
@@ -1205,7 +1310,7 @@ function retryUsageSoon(all) {
   const failed = Object.values(all || {}).filter(u => u.error && !['unsupported', 'not-installed', 'off', 'manual'].includes(u.errorCode));
   if (!failed.length || usageRetry) return;
   const wait = Math.min(300, Math.max(30, ...failed.map(u => u.retryAfter || 30)));
-  usageRetry = setTimeout(() => { usageRetry = null; if (!host.isActive()) return; usageLib.getAll({ providers: failed.map(u => u.provider), resolveCommand, force: true }).then(shareUsage).catch(() => {}); }, wait * 1000);
+  usageRetry = setTimeout(() => { usageRetry = null; if (!host.isActive()) return; usageLib.getAll({ providers: failed.map(u => u.provider), resolveCommand, force: true, forProvider: providerAccountOpts }).then(shareUsage).catch(() => {}); }, wait * 1000);
 }
 // Limits belong to the account, not the project: a new reading goes to every tab (each keeps only the providers it
 // has enabled), so two tabs never show different numbers for the same limit.
@@ -1220,12 +1325,12 @@ async function usageAll(force) {
   // Antigravity is manual only (its /usage spends a model turn): automatic polls fetch the free providers and just
   // carry its last saved reading, so the section can show the last number and when it was read.
   const auto = usageIds().filter(id => usageLib.AUTO.includes(id));
-  const all = await usageLib.getAll({ providers: auto, resolveCommand, force });
-  if (usageIds().includes('antigravity')) all.antigravity = await usageLib.getUsage('antigravity', { resolveCommand, force: false });
+  const all = await usageLib.getAll({ providers: auto, resolveCommand, force, forProvider: providerAccountOpts });
+  if (usageIds().includes('antigravity')) all.antigravity = await usageLib.getUsage('antigravity', { resolveCommand, force: false, ...providerAccountOpts('antigravity') });
   retryUsageSoon(all); return all;
 }
 ipcMain.handle('usage:get', () => usageAll(false));
-ipcMain.handle('usage:refresh', async (_e, id) => { if (demo) { const all = usageLib.demo(); notify('usage:update', all); return all; } if (!usageTracking()) { const all = usageOff(); shareUsage(all); return all; } const all = id ? await usageLib.getAll({ providers: [id], resolveCommand, force: true }) : await usageAll(true); shareUsage(all); return all; });
+ipcMain.handle('usage:refresh', async (_e, id) => { if (demo) { const all = usageLib.demo(); notify('usage:update', all); return all; } if (!usageTracking()) { const all = usageOff(); shareUsage(all); return all; } const all = id ? await usageLib.getAll({ providers: [id], resolveCommand, force: true, forProvider: providerAccountOpts }) : await usageAll(true); shareUsage(all); return all; });
 intervals.push(setInterval(() => { if (usageTracking() && host.isActive() && win && !win.isDestroyed() && win.isVisible() && !win.isMinimized()) usageAll(true).then(shareUsage).catch(() => {}); }, 180000));
 ipcMain.handle('templates:save', (_e, t) => templates.save(workspace, t));
 ipcMain.handle('templates:delete', (_e, file) => templates.remove(file));
@@ -1401,8 +1506,43 @@ ipcMain.handle('boss:change', (_e, template, source) => {
   if (source) { const other = operation.agents.find(a => a.name === source); if (!other || source === 'boss') throw new Error('Agent not found'); template = other.template; agentAction(source, 'dismiss'); }
   if (!template?.provider) throw new Error('Choose a boss');
   const old = processes.get('boss'); if (old) { clearTimeout(old.timer); setAttention('boss', old, null); processes.delete('boss'); old.terminal.kill(); }
-  saved.template = template; saved.provider = template.provider; saved.model = template.model || ''; saved.stopped = false;
+  saved.template = template; saved.provider = template.provider; saved.model = template.model || ''; saved.accountId = accountFor(template.provider)?.id; saved.stopped = false;
   createChat(saved); startAgent('boss', template, undefined, saved, false); saveOperation(); return template;
+});
+ipcMain.handle('boss:switch', (_e, { provider, accountId } = {}) => {
+  const saved = operation?.agents.find(a => a.name === 'boss');
+  if (!saved) throw new Error('Boss not found');
+  const nextProvider = provider || saved.provider;
+  const sameProvider = nextProvider === saved.provider;
+  const old = processes.get('boss');
+  if (old) { clearTimeout(old.timer); setAttention('boss', old, null); processes.delete('boss'); old.terminal.kill(); }
+  if (sameProvider) {
+    if (accountId && accountsLib.PROVIDERS.includes(nextProvider)) {
+      accountStore().activate(nextProvider, accountId);
+      providerChecks.delete(nextProvider);
+      notify('accounts-changed', nextProvider);
+      if (usageTracking()) usageAll(true).then(shareUsage).catch(() => {});
+      saved.accountId = accountId;
+    }
+    saved.stopped = false;
+    startAgent('boss', saved.template, undefined, saved, true);
+    saveOperation();
+    notify('agent-action', { name: 'boss', action: 'restart' });
+    return { provider: saved.provider, accountId: saved.accountId, template: saved.template };
+  }
+  const bossTmpl = templates.list(workspace).find(t => t.extra?.role === 'boss' && t.provider === nextProvider);
+  const nextTemplate = bossTmpl ? { ...bossTmpl, body: saved.template?.body || bossTmpl.body } : { ...(saved.template || {}), provider: nextProvider, model: '' };
+  saved.template = nextTemplate;
+  saved.provider = nextProvider;
+  saved.model = nextTemplate.model || '';
+  saved.accountId = accountFor(nextProvider)?.id;
+  saved.sessionId = undefined;
+  saved.stopped = false;
+  createChat(saved);
+  startAgent('boss', nextTemplate, undefined, saved, false);
+  saveOperation();
+  notify('agent-action', { name: 'boss', action: 'restart' });
+  return { provider: saved.provider, accountId: saved.accountId, template: nextTemplate };
 });
 ipcMain.handle('enlist', async (_e, name, template, task) => { const agent = startAgent(name, template); if (task) await sendMessage(name, task); return { name, template: agent.template }; });
 ipcMain.handle('agent:action', (_e, name, action) => agentAction(name, action));
@@ -1509,7 +1649,7 @@ function dispose() {
   mediaStop?.(); mediaStop = null;
   for (const c of comfyJobs.values()) c.stop(); comfyJobs.clear();
   finishOperation(); watcher?.close(); memoryWatcher?.close(); outputsWatcher?.close(); galleryWatcher?.close(); toolDirWatchers.forEach(w => w.close());
-  filesLib.unwatch(host.id); codeIndexWorker?.postMessage('close'); killTrees(); stopAgents();
+  clearTimeout(codeIndexTimer); filesLib.unwatch(host.id); codeIndexWorker?.postMessage('close'); killTrees(); stopAgents();
   for (const s of shells.values()) try { s.terminal.kill(); } catch {}
   for (const i of intervals) clearInterval(i);
   try { serversBridge.server?.close(); } catch {}

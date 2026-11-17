@@ -371,10 +371,10 @@ app.whenReady().then(() => {
   const loadRest = () => { const next = tabs.find(t => !t.loaded); if (!next) return; loadTab(next); let went = false; const go = () => { if (!went) { went = true; setTimeout(loadRest, 800); } }; next.view.webContents.once('did-finish-load', go); setTimeout(go, 6000); };
   // Tray and the bot come after the first tab has loaded: the window is up sooner, and the tab is the first page.
   let rest = false; const startRest = () => { if (rest) return; rest = true; createTray(); registerVoiceKey(); telegram.start(); if (!process.env.DISPATCH_TEST_HOME || process.env.DISPATCH_TEST_TOOLS) customTools.autostart(); setTimeout(loadRest, 1500); };
-  active.view.webContents.once('did-finish-load', startRest); setTimeout(startRest, 8000);
+  active.view.webContents.once('did-finish-load', () => setTimeout(startRest, 600)); setTimeout(startRest, 8000);
 });
 // On quit every project's agents go down with everything they started.
-app.on('before-quit', () => { quitting = true; for (const t of tabs) try { t.engine.dispose(); } catch {} customTools.stopAll(); telegram.stop(); try { tray?.destroy(); } catch {} });
+app.on('before-quit', () => { quitting = true; for (const t of tabs) try { t.engine.dispose(); } catch {} customTools.stopAll(); require('./vpns.cjs').stopAll(); telegram.stop(); try { tray?.destroy(); } catch {} });
 app.on('will-quit', () => { try { require('electron').globalShortcut.unregisterAll(); } catch {} whisper.stop(); });
 app.on('activate', () => { if (win && !win.isDestroyed()) revealWin(); });
 app.on('window-all-closed', () => app.quit());
