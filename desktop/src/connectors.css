@@ -1,0 +1,39 @@
+/* MCP page: a catalogue in two columns, grouped like an app store, and the list of connected apps. */
+.mcp-page .view-heading { display: flex; align-items: center; gap: 16px; }
+.mcp-top { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 8px; }
+.mcp-top .page-lead { margin: 0; }
+.mcp-search { flex: 0 0 260px; }
+
+.mcp-group { padding: 26px 0 6px; }
+.mcp-group > header { margin-bottom: 10px; }
+.mcp-group h2 { margin: 0; font-size: var(--text-lg); font-weight: 600; }
+.mcp-group p { margin: 2px 0 0; color: var(--text-3); font-size: var(--text-sm); }
+.mcp-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 32px; }
+@media (max-width: 900px) { .mcp-grid { grid-template-columns: minmax(0, 1fr); } .mcp-top { flex-direction: column; align-items: stretch; } .mcp-search { flex-basis: auto; } }
+
+.mcp-item, .mcp-row { display: flex; align-items: center; gap: 14px; min-width: 0; padding: 10px 8px; margin: 0 -8px; border-radius: var(--radius); transition: background-color var(--dur, .15s) ease; }
+.mcp-item:hover { background: var(--hover); }
+.mcp-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.mcp-text b { font-weight: 500; }
+.mcp-text small { color: var(--text-3); font-size: var(--text-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mcp-error { color: var(--danger); white-space: normal; }
+
+.mcp-logo { flex: none; display: grid; place-items: center; width: 38px; height: 38px; border-radius: 9px; background: var(--raised); border: var(--border); color: var(--text); }
+.mcp-logo svg { width: 20px; height: 20px; }
+.mcp-logo b { font-size: 16px; font-weight: 600; }
+
+.mcp-state { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 8px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-2); font: inherit; font-size: var(--text-sm); cursor: pointer; }
+.mcp-state:hover { color: var(--text); background: var(--hover); }
+.mcp-state svg { width: 14px; height: 14px; }
+.mcp-wait { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); font-size: var(--text-sm); white-space: nowrap; }
+
+.mcp-connected { display: flex; flex-direction: column; margin-top: 8px; }
+.mcp-row { margin: 0; padding: 12px 4px; border-radius: 0; border-bottom: var(--border); }
+.mcp-row:last-child { border-bottom: 0; }
+
+.mcp-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; max-width: 520px; padding: 48px 0; }
+.mcp-empty h2 { margin: 0; font-size: var(--text-lg); }
+.mcp-empty p { margin: 0 0 10px; color: var(--text-2); }
+.mcp-foot { margin: 24px 0 0; color: var(--text-3); font-size: var(--text-sm); }
+.mcp-link { display: inline-flex; align-items: center; gap: 4px; color: var(--text); font-size: var(--text-sm); }
+.mcp-link svg { width: 12px; height: 12px; }

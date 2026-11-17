@@ -117,6 +117,7 @@ contextBridge.exposeInMainWorld('army', {
   bossSwitch: opts => invoke('boss:switch', opts),
   templates: { getVisibility: () => invoke('templates:visibility:get'), setVisibility: files => invoke('templates:visibility:set', files), list: () => invoke('templates:list'), save: t => invoke('templates:save', t), saveAgent: (agent, name, scope) => invoke('templates:save-agent', agent, name, scope),remove: file => invoke('templates:delete', file), reveal: file => invoke('templates:reveal', file) },
   servers: { list: () => invoke('servers:list'), save: s => invoke('servers:save', s), remove: id => invoke('servers:remove', id), order: ids => invoke('servers:order', ids), test: s => invoke('servers:test', s), connect: id => invoke('servers:connect', id), chooseKey: () => invoke('servers:choose-key'), chooseIcon: () => invoke('servers:choose-icon'), approve: (id, ok) => invoke('servers:approve', id, ok), pending: () => invoke('servers:pending'), log: () => invoke('servers:log') },
+  connectors: { catalog: () => invoke('connectors:catalog'), list: () => invoke('connectors:list'), connect: input => invoke('connectors:connect', input), cancel: id => invoke('connectors:cancel', id), remove: id => invoke('connectors:remove', id), check: id => invoke('connectors:check', id) },
   vpns: { list: () => invoke('vpns:list'), save: v => invoke('vpns:save', v), remove: id => invoke('vpns:remove', id), test: (v, host, port) => invoke('vpns:test', v, host, port), chooseConf: () => invoke('vpns:choose-conf') },
   ready: () => invoke('app:ready'),
   remote: remoteApi,

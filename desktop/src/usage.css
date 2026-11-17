@@ -36,3 +36,4 @@
 .usage-switch input:focus-visible { outline: 2px solid var(--status-working); outline-offset: 2px; }
 .usage-preview { display: flex; align-items: center; gap: 6px; margin-top: 6px; pointer-events: none; }
 .usage-preview .usage-chip { cursor: default; }
+html[data-theme="frosted"] .usage-tip { -webkit-backdrop-filter: blur(var(--glass-blur)); backdrop-filter: blur(var(--glass-blur)); }

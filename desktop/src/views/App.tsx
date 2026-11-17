@@ -16,11 +16,12 @@ import { MentionMenu, mentionItems, rankMentions, type MentionItem } from "../co
 import { Avatar } from "../components/Avatar";
 import {
   ChatBubbleLeftRightIcon, ChevronDownIcon, Cog6ToothIcon, CpuChipIcon, ServerStackIcon, DocumentIcon, DocumentTextIcon, EnvelopeIcon,
-  CheckIcon, CodeBracketIcon, FolderIcon, LinkIcon, MicrophoneIcon, HomeIcon, MagnifyingGlassIcon, PaperAirplaneIcon, PaperClipIcon, PlusIcon, Squares2X2Icon, StopIcon, CubeIcon, WrenchScrewdriverIcon, TrashIcon, XMarkIcon, BookOpenIcon, ArrowsRightLeftIcon, CircleStackIcon, BeakerIcon,
+  CheckIcon, CodeBracketIcon, FolderIcon, LinkIcon, MicrophoneIcon, HomeIcon, MagnifyingGlassIcon, PaperAirplaneIcon, PaperClipIcon, PlusIcon, Squares2X2Icon, StopIcon, CubeIcon, WrenchScrewdriverIcon, PuzzlePieceIcon, TrashIcon, XMarkIcon, BookOpenIcon, ArrowsRightLeftIcon, CircleStackIcon, BeakerIcon,
 } from "@heroicons/react/16/solid";
 import { ArrowDownIcon } from "@heroicons/react/20/solid";
 import { Skills } from "./Skills";
 import { Share } from "./Share";
+import { Connectors } from "./Connectors";
 import { Schedules } from "../components/Schedules";
 import { UsageSwitch } from "../components/Usage";
 import type { Account } from "../lib/types";
@@ -161,6 +162,7 @@ const NAV: [string, string, string, React.ComponentType<React.SVGProps<SVGSVGEle
   ["templates", "Templates", "Agent templates", DocumentTextIcon],
   ["providers", "Providers", "Providers", CpuChipIcon],
   ["tools", "Tools", "Tools", WrenchScrewdriverIcon],
+  ["mcp", "MCP", "MCP apps", PuzzlePieceIcon],
   ["skills", "Skills", "Skills", BookOpenIcon],
   ["memory", "Memory", "Boss memory", CircleStackIcon],
   ["share", "Share", "Export and import", ArrowsRightLeftIcon],
@@ -919,6 +921,7 @@ export function App() {
           : view === "memory" ? <Memory />
           : view === "servers" ? <Servers focus={serverFocus} />
           : view === "skills" ? <Skills />
+          : view === "mcp" ? <Connectors />
           : view === "share" ? <Share workspace={workspace} openFile={packFile} clearFile={() => setPackFile(null)} openWorkspace={target => openWorkspace(target)} />
           : view === "templates" ? (
             <Templates activeBossFile={agentTemplates.boss?.file} hasBoss={agents.includes("boss")} onReloadBoss={async template => {

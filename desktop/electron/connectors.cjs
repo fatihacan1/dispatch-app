@@ -1,0 +1,268 @@
+// MCP connectors: one-click remote MCP servers (OAuth in the browser), shared with every agent.
+// Agents never see a token. Each connection is served on a loopback proxy that adds the token and refreshes it,
+// so a long-running agent keeps working after the provider's access token expires.
+const http = require('http');
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const { Readable } = require('stream');
+
+// auth: oauth (browser sign-in, dynamic client registration), none (public), token (paste a key),
+// local (a stdio server Dispatch starts with npx). Every oauth entry was checked for registration support.
+const CATALOG = Object.freeze([
+  { id: 'notion', name: 'Notion', group: 'work', desc: 'Search, read and write pages and databases in your workspace.', url: 'https://mcp.notion.com/mcp', auth: 'oauth' },
+  { id: 'linear', name: 'Linear', group: 'work', desc: 'Find, create and update issues, projects and comments.', url: 'https://mcp.linear.app/mcp', auth: 'oauth' },
+  { id: 'atlassian', name: 'Jira and Confluence', icon: 'atlassian', group: 'work', desc: 'Work with Jira issues and Confluence pages.', url: 'https://mcp.atlassian.com/v1/mcp', auth: 'oauth' },
+  { id: 'clickup', name: 'ClickUp', group: 'work', desc: 'Tasks, docs and comments in your ClickUp spaces.', url: 'https://mcp.clickup.com/mcp', auth: 'oauth' },
+  { id: 'monday', name: 'monday.com', group: 'work', desc: 'Boards, items and updates in monday.com.', url: 'https://mcp.monday.com/mcp', auth: 'oauth' },
+  { id: 'airtable', name: 'Airtable', group: 'work', desc: 'Read and edit bases, tables and records.', url: 'https://mcp.airtable.com/mcp', auth: 'oauth' },
+  { id: 'granola', name: 'Granola', group: 'work', desc: 'Your meeting notes and transcripts.', url: 'https://mcp.granola.ai/mcp', auth: 'oauth' },
+  { id: 'intercom', name: 'Intercom', group: 'work', desc: 'Search conversations, tickets and contacts.', url: 'https://mcp.intercom.com/mcp', auth: 'oauth' },
+  { id: 'github', name: 'GitHub', group: 'build', desc: 'Repositories, issues, pull requests and Actions.', url: 'https://api.githubcopilot.com/mcp/', auth: 'token', tokenHelp: 'A personal access token from github.com/settings/tokens', tokenUrl: 'https://github.com/settings/personal-access-tokens/new' },
+  { id: 'vercel', name: 'Vercel', group: 'build', desc: 'Projects, deployments and their logs.', url: 'https://mcp.vercel.com', auth: 'oauth' },
+  { id: 'supabase', name: 'Supabase', group: 'build', desc: 'Databases, tables, SQL, edge functions and logs.', url: 'https://mcp.supabase.com/mcp', auth: 'oauth' },
+  { id: 'neon', name: 'Neon', group: 'build', desc: 'Serverless Postgres projects, branches and queries.', url: 'https://mcp.neon.tech/mcp', auth: 'oauth' },
+  { id: 'prisma', name: 'Prisma Postgres', icon: 'prisma', group: 'build', desc: 'Create and manage Prisma Postgres databases.', url: 'https://mcp.prisma.io/mcp', auth: 'oauth' },
+  { id: 'sentry', name: 'Sentry', group: 'build', desc: 'Errors, issues and performance data from your projects.', url: 'https://mcp.sentry.dev/mcp', auth: 'oauth' },
+  { id: 'cloudflare', name: 'Cloudflare', group: 'build', desc: 'Workers, KV, R2 and D1 in your account.', url: 'https://bindings.mcp.cloudflare.com/mcp', auth: 'oauth' },
+  { id: 'context7', name: 'Context7', group: 'build', desc: 'Up-to-date docs and code examples for any library.', url: 'https://mcp.context7.com/mcp', auth: 'none' },
+  { id: 'deepwiki', name: 'DeepWiki', group: 'build', desc: 'Ask questions about any public GitHub repository.', url: 'https://mcp.deepwiki.com/mcp', auth: 'none' },
+  { id: 'huggingface', name: 'Hugging Face', group: 'build', desc: 'Search models, datasets, papers and Spaces.', url: 'https://huggingface.co/mcp', auth: 'none' },
+  { id: 'chrome-devtools', name: 'Chrome DevTools', icon: 'googlechrome', group: 'build', desc: 'Drive and debug a real Chrome: console, network, performance.', auth: 'local', command: 'npx', args: ['-y', 'chrome-devtools-mcp@latest'] },
+  { id: 'playwright', name: 'Playwright', group: 'build', desc: 'Browse, click and test web pages in a real browser.', auth: 'local', command: 'npx', args: ['-y', '@playwright/mcp@latest'] },
+  { id: 'canva', name: 'Canva', group: 'design', desc: 'Create, edit, resize and export Canva designs.', url: 'https://mcp.canva.com/mcp', auth: 'oauth' },
+  { id: 'figma', name: 'Figma', group: 'design', desc: 'Designs from the Figma desktop app (turn on its MCP server in Dev Mode).', url: 'http://127.0.0.1:3845/mcp', auth: 'none' },
+  { id: 'webflow', name: 'Webflow', group: 'design', desc: 'Sites, CMS collections and pages.', url: 'https://mcp.webflow.com/mcp', auth: 'oauth' },
+  { id: 'wix', name: 'Wix', group: 'design', desc: 'Build and manage Wix sites and their content.', url: 'https://mcp.wix.com/mcp', auth: 'oauth' },
+  { id: 'stripe', name: 'Stripe', group: 'business', desc: 'Customers, payments, invoices and products.', url: 'https://mcp.stripe.com', auth: 'oauth' },
+  { id: 'paypal', name: 'PayPal', group: 'business', desc: 'Invoices, orders, subscriptions and disputes.', url: 'https://mcp.paypal.com/mcp', auth: 'oauth' },
+  { id: 'square', name: 'Square', group: 'business', desc: 'Payments, orders, catalog and customers.', url: 'https://mcp.squareup.com/mcp', auth: 'oauth' },
+  { id: 'zapier', name: 'Zapier', group: 'business', desc: 'Run actions in thousands of apps you set up in Zapier.', url: 'https://mcp.zapier.com/api/mcp/mcp', auth: 'oauth' },
+]);
+const GROUPS = Object.freeze([
+  { id: 'work', name: 'Work and docs', desc: 'Notes, tasks and tickets your team already keeps.' },
+  { id: 'build', name: 'Build and ship', desc: 'Code, databases, deployments, docs and the browser.' },
+  { id: 'design', name: 'Design and sites', desc: 'Design files and website builders.' },
+  { id: 'business', name: 'Payments and automation', desc: 'Money in and out, and workflows across apps.' },
+]);
+
+const slug = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 40) || 'mcp';
+const timeout = (ms = 15000) => AbortSignal.timeout(ms);
+async function getJson(url) { try { const r = await fetch(url, { headers: { accept: 'application/json' }, signal: timeout() }); return r.ok ? await r.json() : null; } catch { return null; } }
+const INIT = { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'Dispatch', version: '1' } } };
+
+/** Reads a JSON-RPC reply from a plain JSON or SSE response. */
+async function readRpc(r, id) {
+  const text = await r.text();
+  if (!/event-stream/.test(r.headers.get('content-type') || '')) { try { return JSON.parse(text); } catch { return null; } }
+  for (const line of text.split(/\r?\n/)) if (line.startsWith('data:')) { try { const m = JSON.parse(line.slice(5)); if (m.id === id) return m; } catch {} }
+  return null;
+}
+
+/** Where to sign in: the protected resource metadata (MCP 2025-06) or, for older servers, the server's own origin. */
+async function discover(url) {
+  let r;
+  try { r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' }, body: JSON.stringify(INIT), signal: timeout() }); }
+  catch (e) { throw new Error(`Could not reach ${new URL(url).host}: ${e.cause?.code || e.message}`); }
+  if (r.status !== 401 && r.status !== 403) { try { await r.body?.cancel(); } catch {} if (r.ok) return { auth: 'none' }; throw new Error(`${new URL(url).host} answered ${r.status}. Check the address.`); }
+  const www = r.headers.get('www-authenticate') || '';
+  const u = new URL(url);
+  const m = /resource_metadata="([^"]+)"/.exec(www);
+  const prm = (m && await getJson(m[1])) || await getJson(`${u.origin}/.well-known/oauth-protected-resource${u.pathname === '/' ? '' : u.pathname}`) || await getJson(`${u.origin}/.well-known/oauth-protected-resource`);
+  const issuer = prm?.authorization_servers?.[0] || u.origin;
+  const a = new URL(issuer); const p = a.pathname.replace(/\/$/, '');
+  const meta = await getJson(`${a.origin}/.well-known/oauth-authorization-server${p}`) || await getJson(`${a.origin}/.well-known/openid-configuration${p}`) || (p && await getJson(`${a.origin}${p}/.well-known/openid-configuration`)) || (p && await getJson(`${a.origin}/.well-known/oauth-authorization-server`));
+  if (!meta?.authorization_endpoint || !meta?.token_endpoint) throw new Error(`${u.host} needs a sign-in Dispatch cannot start (no OAuth metadata). Use a token instead.`);
+  if (!meta.registration_endpoint) throw new Error(`${u.host} only signs in apps it approved in advance, so Dispatch cannot connect to it by itself.`);
+  const scope = /scope="([^"]+)"/.exec(www)?.[1] || (prm?.scopes_supported || []).join(' ');
+  return { auth: 'oauth', meta, scope, resource: prm?.resource || url };
+}
+
+/** A tiny loopback page the browser lands on after sign-in. */
+const landing = (ok, text) => `<!doctype html><meta charset="utf-8"><title>Dispatch</title><style>body{font:15px/1.5 system-ui,sans-serif;background:#111;color:#eee;display:grid;place-items:center;height:100vh;margin:0}@media(prefers-color-scheme:light){body{background:#f6f6f4;color:#111}}main{max-width:420px;padding:24px}h1{font-size:20px;margin:0 0 8px}p{margin:0;opacity:.75}</style><main><h1>${ok ? 'Connected to Dispatch' : 'Sign-in did not finish'}</h1><p>${text}</p></main>`;
+
+/**
+ * create({ file, vault, open, notify }):
+ *   file: connectors.json; vault: { seal, open } (safeStorage); open(url): opens the system browser; notify(): something changed.
+ */
+function create({ file, vault, open, notify = () => {} }) {
+  const read = () => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return { connections: {} }; } };
+  const write = data => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(data, null, 2)); notify(); };
+  const update = (id, patch) => { const d = read(); if (!d.connections[id]) return null; d.connections[id] = { ...d.connections[id], ...patch }; write(d); return d.connections[id]; };
+  const secrets = c => { try { return c.secret ? JSON.parse(vault.open(c.secret)) : {}; } catch { return {}; } };
+  const seal = obj => vault.seal(JSON.stringify(obj));
+  const pending = new Map(); // id -> { cancel }
+  const refreshing = new Map();
+  const proxy = { url: '', token: crypto.randomBytes(16).toString('hex') };
+
+  const entry = id => CATALOG.find(c => c.id === id);
+  const publicView = c => ({ id: c.id, name: c.name, url: c.url || '', auth: c.auth, icon: c.icon || '', custom: !!c.custom, status: c.status, tools: c.tools ?? null, account: c.account || '', addedAt: c.addedAt, error: c.error || '' });
+  const list = () => Object.values(read().connections).map(publicView);
+
+  async function refresh(id) {
+    if (refreshing.has(id)) return refreshing.get(id);
+    const run = (async () => {
+      const c = read().connections[id]; const s = secrets(c);
+      if (!s.refresh_token) throw new Error('no refresh token');
+      const body = new URLSearchParams({ grant_type: 'refresh_token', refresh_token: s.refresh_token, client_id: s.client_id });
+      if (s.client_secret) body.set('client_secret', s.client_secret);
+      if (c.resource) body.set('resource', c.resource);
+      const r = await fetch(s.token_endpoint, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' }, body, signal: timeout() });
+      const t = await r.json().catch(() => ({}));
+      if (!r.ok || !t.access_token) throw new Error(t.error_description || t.error || `refresh failed (${r.status})`);
+      const next = { ...s, access_token: t.access_token, refresh_token: t.refresh_token || s.refresh_token, expires_at: t.expires_in ? Date.now() + t.expires_in * 1000 : 0 };
+      update(id, { secret: seal(next), status: 'connected', error: '' });
+      return next.access_token;
+    })().finally(() => refreshing.delete(id));
+    refreshing.set(id, run);
+    return run;
+  }
+  /** A valid access token, refreshed a minute before it expires. */
+  async function token(id, force = false) {
+    const c = read().connections[id]; if (!c) return '';
+    const s = secrets(c);
+    if (c.auth === 'token') return s.access_token || '';
+    if (c.auth !== 'oauth') return '';
+    if (force || (s.expires_at && s.expires_at - 60000 < Date.now())) {
+      try { return await refresh(id); } catch (e) { update(id, { status: 'expired', error: String(e.message || e) }); return ''; }
+    }
+    return s.access_token || '';
+  }
+
+  /** Calls initialize + tools/list through the upstream to confirm the connection and count tools. */
+  async function check(id) {
+    const c = read().connections[id]; if (!c || c.auth === 'local') return c;
+    const call = async (msg, session, retry = true) => {
+      const t = await token(id);
+      const headers = { 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2025-06-18', ...(t ? { authorization: `Bearer ${t}` } : {}), ...(session ? { 'mcp-session-id': session } : {}) };
+      const r = await fetch(c.url, { method: 'POST', headers, body: JSON.stringify(msg), signal: timeout(20000) });
+      if (r.status === 401 && retry && c.auth === 'oauth') { await token(id, true); return call(msg, session, false); }
+      return r;
+    };
+    try {
+      const r = await call(INIT);
+      if (r.status === 401) { try { await r.body?.cancel(); } catch {} return update(id, { status: 'expired', error: 'Sign-in expired' }); }
+      if (!r.ok) { try { await r.body?.cancel(); } catch {} return update(id, { status: 'error', error: `Server answered ${r.status}` }); }
+      const session = r.headers.get('mcp-session-id') || '';
+      const init = await readRpc(r, 1);
+      const n = await call({ jsonrpc: '2.0', method: 'notifications/initialized' }, session); try { await n.body?.cancel(); } catch {}
+      const tl = await readRpc(await call({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }, session), 2);
+      return update(id, { status: 'connected', error: '', tools: tl?.result?.tools?.length ?? null, serverName: init?.result?.serverInfo?.name || '' });
+    } catch (e) { return update(id, { status: 'error', error: e.cause?.code === 'ECONNREFUSED' ? 'Not running' : String(e.message || e) }); }
+  }
+
+  /** Browser sign-in: register Dispatch with the server, open the consent page, catch the code on loopback. */
+  async function signIn(info) {
+    const { meta, scope, resource } = info;
+    const srv = http.createServer();
+    await new Promise((res, rej) => { srv.once('error', rej); srv.listen(0, '127.0.0.1', res); });
+    const redirect = `http://127.0.0.1:${srv.address().port}/callback`;
+    try {
+      const reg = await fetch(meta.registration_endpoint, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify({ client_name: 'Dispatch', redirect_uris: [redirect], grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'], token_endpoint_auth_method: 'none', ...(scope ? { scope } : {}) }), signal: timeout() });
+      const client = await reg.json().catch(() => ({}));
+      if (!reg.ok || !client.client_id) throw new Error(`The server refused to register Dispatch (${client.error_description || client.error || reg.status}).`);
+      const verifier = crypto.randomBytes(32).toString('base64url');
+      const state = crypto.randomBytes(16).toString('base64url');
+      const auth = new URL(meta.authorization_endpoint);
+      for (const [k, v] of Object.entries({ response_type: 'code', client_id: client.client_id, redirect_uri: redirect, code_challenge: crypto.createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256', state, resource, ...(scope ? { scope } : {}) })) auth.searchParams.set(k, v);
+      const code = await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('Sign-in timed out. Try again.')), 5 * 60000);
+        info.cancel = () => { clearTimeout(timer); reject(new Error('cancelled')); };
+        srv.on('request', (req, res) => {
+          const q = new URL(req.url, redirect);
+          if (q.pathname !== '/callback') { res.writeHead(404); return res.end(); }
+          const ok = q.searchParams.get('state') === state && q.searchParams.get('code');
+          res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+          res.end(landing(!!ok, ok ? 'You can close this tab and go back to Dispatch.' : (q.searchParams.get('error_description') || q.searchParams.get('error') || 'Go back to Dispatch and try again.')));
+          clearTimeout(timer);
+          ok ? resolve(q.searchParams.get('code')) : reject(new Error(q.searchParams.get('error_description') || q.searchParams.get('error') || 'Sign-in was not completed.'));
+        });
+        open(auth.toString());
+      });
+      const body = new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: redirect, client_id: client.client_id, code_verifier: verifier, resource });
+      if (client.client_secret) body.set('client_secret', client.client_secret);
+      const r = await fetch(meta.token_endpoint, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' }, body, signal: timeout() });
+      const t = await r.json().catch(() => ({}));
+      if (!r.ok || !t.access_token) throw new Error(`Sign-in failed: ${t.error_description || t.error || r.status}`);
+      return { client_id: client.client_id, client_secret: client.client_secret || '', token_endpoint: meta.token_endpoint, access_token: t.access_token, refresh_token: t.refresh_token || '', expires_at: t.expires_in ? Date.now() + t.expires_in * 1000 : 0 };
+    } finally { srv.close(); }
+  }
+
+  /** Adds a catalog entry or a custom { name, url, token? }. Opens the browser when the server needs a sign-in. */
+  async function connect(input) {
+    const base = typeof input === 'string' ? entry(input) : input?.catalog ? entry(input.catalog) : null;
+    const custom = !base;
+    const c = base ? { ...base } : { id: 'custom_' + slug(input?.name || input?.url), name: String(input?.name || '').trim(), url: String(input?.url || '').trim(), auth: input?.token ? 'token' : 'auto', custom: true };
+    if (!c.name) throw new Error('Give the server a name.');
+    if (c.auth !== 'local' && !/^https?:\/\//i.test(c.url || '')) throw new Error('The address must start with https://');
+    if (pending.has(c.id)) throw new Error(`${c.name} is already waiting for the browser.`);
+    const info = { cancel: () => {} };
+    pending.set(c.id, info); notify();
+    try {
+      let secret = {};
+      if (c.auth === 'token') { const tk = String(input?.token || '').trim(); if (!tk) throw new Error('Paste a token.'); secret = { access_token: tk }; }
+      else if (c.auth === 'oauth' || c.auth === 'auto') {
+        const found = await discover(c.url);
+        c.auth = found.auth;
+        if (found.auth === 'oauth') { Object.assign(info, found); secret = await signIn(info); c.resource = found.resource; }
+      }
+      const d = read();
+      d.connections[c.id] = { id: c.id, name: c.name, url: c.url || '', auth: c.auth, icon: c.icon || '', custom, resource: c.resource || '', command: c.command, args: c.args, secret: Object.keys(secret).length ? seal(secret) : '', status: 'connected', addedAt: Date.now() };
+      write(d);
+    } finally { pending.delete(c.id); notify(); }
+    await check(c.id);
+    return publicView(read().connections[c.id]);
+  }
+  // 'custom' cancels whichever custom server is waiting (the dialog does not know the id it gets).
+  const cancel = id => { for (const [k, v] of pending) if (k === id || (id === 'custom' && k.startsWith('custom_'))) v.cancel(); };
+  /** Log out: forgets the tokens and the connection. Agents lose it on their next start. */
+  function remove(id) { const d = read(); delete d.connections[id]; write(d); return true; }
+
+  /** What agents get: loopback proxy URLs for remote servers, a command for local ones. */
+  function forAgents() {
+    return Object.values(read().connections).filter(c => c.status !== 'expired').map(c => c.auth === 'local'
+      ? { id: slug(c.id), name: c.name, command: c.command, args: c.args || [] }
+      : { id: slug(c.id), name: c.name, url: proxy.url ? `${proxy.url}/${encodeURIComponent(c.id)}` : '' }).filter(x => x.command || x.url);
+  }
+
+  // Loopback proxy: http://127.0.0.1:<port>/<secret>/<id>. Streams responses (SSE included) back to the agent.
+  const PASS = ['content-type', 'accept', 'mcp-session-id', 'mcp-protocol-version', 'last-event-id'];
+  const server = http.createServer(async (req, res) => {
+    const m = /^\/([0-9a-f]{32})\/([^/?]+)/.exec(req.url || '');
+    const c = m && m[1] === proxy.token ? read().connections[decodeURIComponent(m[2])] : null;
+    if (!c || c.auth === 'local') { res.writeHead(404); return res.end(); }
+    const chunks = []; for await (const ch of req) chunks.push(ch);
+    const body = chunks.length ? Buffer.concat(chunks) : undefined;
+    const ac = new AbortController(); res.on('close', () => ac.abort());
+    const send = async force => {
+      const t = await token(c.id, force);
+      const headers = {}; for (const h of PASS) if (req.headers[h]) headers[h] = req.headers[h];
+      if (t) headers.authorization = `Bearer ${t}`;
+      return fetch(c.url, { method: req.method, headers, body: ['GET', 'HEAD'].includes(req.method) ? undefined : body, signal: ac.signal });
+    };
+    try {
+      let r = await send(false);
+      if (r.status === 401 && c.auth === 'oauth') { try { await r.body?.cancel(); } catch {} r = await send(true); }
+      if (r.status === 401) {
+        try { await r.body?.cancel(); } catch {}
+        update(c.id, { status: 'expired', error: 'Sign-in expired' });
+        // Not 401: the agent's own CLI would try to sign in to the proxy. The message tells the agent what to say.
+        res.writeHead(503, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32001, message: `${c.name} needs a new sign-in. Ask the user to reconnect it in Dispatch under MCP.` } }));
+      }
+      const out = {}; for (const h of ['content-type', 'mcp-session-id', 'cache-control']) { const v = r.headers.get(h); if (v) out[h] = v; }
+      res.writeHead(r.status, out);
+      if (r.body) Readable.fromWeb(r.body).on('error', () => res.destroy()).pipe(res); else res.end();
+    } catch (e) {
+      if (res.headersSent) return res.destroy();
+      res.writeHead(502, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32002, message: `${c.name} could not be reached: ${e.cause?.code || e.message}` } }));
+    }
+  });
+  const ready = new Promise(res => server.listen(0, '127.0.0.1', () => { proxy.url = `http://127.0.0.1:${server.address().port}/${proxy.token}`; res(); }));
+  server.unref?.();
+
+  return { catalog: () => ({ groups: GROUPS, items: CATALOG.map(({ command: _c, args: _a, ...x }) => x) }), list, pending: () => [...pending.keys()], connect, cancel, remove, check, forAgents, ready, token, close: () => server.close() };
+}
+
+module.exports = { CATALOG, GROUPS, create, discover, readRpc, slug };

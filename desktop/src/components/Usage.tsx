@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { ProviderIcon } from "./common";
 import { ago, levelOf, live, remaining, resetClock, resetIn, tightest, useUsage, type ProviderUsage, type UsageMap } from "../lib/usage";
 import "../usage.css";
@@ -23,14 +24,16 @@ export function UsageChips({ open }: { open: (provider: string) => void }) {
         <ProviderIcon className="usage-icon" provider={u.provider} alt="" /><span>{used}%</span>
       </button>;
     })}
-    {tip && shown && <div className="usage-tip" role="tooltip" style={{ left: tip.x, top: tip.y }}>
+    {/* Rendered on <body>: a panel with backdrop-filter (Frosted Glass) becomes the containing block of position:fixed
+        children, which pushed the tooltip off screen and clipped it. */}
+    {tip && shown && createPortal(<div className="usage-tip" role="tooltip" style={{ left: tip.x, top: tip.y }}>
       <div className="usage-tip-title"><b>{NAMES[shown.provider] || shown.provider}</b>{shown.plan && <span className="tag">{shown.plan}</span>}</div>
       {shown.windows.map(w => <div className="usage-tip-row" key={w.id}>
         <span>{w.label}</span><b>{w.usedPercent}% used</b>
         <small>{w.resetsAt ? `resets in ${resetIn(w.resetsAt, now)}` : "no reset time"}</small>
       </div>)}
       {shown.stale && <small className="usage-warn">Last reading kept: {shown.error}</small>}
-    </div>}
+    </div>, document.body)}
   </div>;
 }
 

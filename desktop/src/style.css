@@ -1224,7 +1224,7 @@ input[type=checkbox]:focus-visible { outline: 2px solid var(--focus); outline-of
 .rail-server.dragging, .server-row.dragging { opacity: .35; }
 .server-badge { display: inline-grid; place-items: center; flex: none; border-radius: 8px; object-fit: cover; background: var(--raised); }
 .server-badge.letter { background: var(--selected); color: var(--text); font-weight: 600; }
-.page.servers { display: grid; grid-template-columns: 280px 1fr; gap: 0; padding: 0; overflow: hidden; }
+.page.servers { display: grid; grid-template-columns: 300px 1fr; gap: 0; padding: 0; overflow: hidden; }
 .server-list { display: flex; flex-direction: column; gap: 10px; padding: 24px 16px; border-right: var(--border); overflow: auto; }
 .server-list-head { display: flex; align-items: center; justify-content: space-between; }
 .server-list-head h1 { font-size: var(--text-xl); margin: 0; }
@@ -1453,3 +1453,27 @@ html[data-theme="frosted"] #boot, html[data-theme="frosted"] .boot-overlay { bac
 .boot-sub { margin-top: 8px; font: 400 var(--text-sm)/1.4 var(--font-ui); color: var(--text-3); }
 @keyframes boot-in { from { opacity: 0; transform: translateY(4px) scale(.985); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .boot-trace { animation: none; } .boot-box { animation: none; } }
+
+/* Share: empty kinds in one line, import by drop. */
+.share-missing { margin: 0; color: var(--text-2); font-size: var(--text-sm); }
+.share-drop { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-height: 260px; margin-top: 4px; padding: 32px; text-align: center; border: var(--border-strong); border-radius: var(--radius-lg); background: var(--surface); transition: background-color .15s ease, border-color .15s ease; }
+.share-drop.over { background: var(--hover); border-color: var(--text-3); }
+.share-drop > svg { width: 22px; height: 22px; color: var(--text-3); margin-bottom: 6px; }
+.share-drop b { font-size: var(--text-md); font-weight: 500; }
+.share-drop small { color: var(--text-3); margin-bottom: 14px; }
+.share-drop .tpl-error { margin: 10px 0 0; }
+
+/* Servers: tags on their own line so names and hosts are never cut, quiet VPN rows, a real idle state. */
+.server-row .row-text { gap: 1px; }
+.server-row .row-text b { display: flex; align-items: center; gap: 6px; }
+.server-tags { color: var(--text-3); }
+.server-vpn-head { margin-top: 14px; }
+.server-vpn-head .label { margin: 0; }
+.vpn-glyph { width: 16px; height: 16px; flex: none; margin: 0 8px; color: var(--text-3); }
+.vpn-row .icon-button { display: none; }
+.vpn-row:hover .icon-button, .vpn-row:focus-within .icon-button { display: grid; }
+.server-idle { background: var(--surface); }
+.server-idle > div { display: flex; flex-direction: column; align-items: center; gap: 6px; max-width: 380px; }
+.server-idle svg { width: 22px; height: 22px; color: var(--text-3); }
+.server-idle h3 { margin: 4px 0 0; font-size: var(--text-md); font-weight: 500; color: var(--text); }
+.server-idle p { margin: 0 0 10px; font-size: var(--text-sm); line-height: 1.5; }

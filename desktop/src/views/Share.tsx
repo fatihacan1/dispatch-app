@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import React, { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { ArrowDownTrayIcon, ArrowUpTrayIcon, MagnifyingGlassIcon } from "@heroicons/react/16/solid";
 import { Button } from "../components/common";
 
@@ -84,6 +84,8 @@ function Export() {
       <span className="mem-meta">{m.entities ? `${plural(m.entities, "entry", "entries")} · ${plural(m.relations, "link")}` : "Empty"}</span>
     </label>;
   };
+  // Empty kinds get one quiet line instead of three sections that each say "nothing here".
+  const missing = [!inv.agents.length && "agent templates", !inv.teams.length && "teams", !inv.skills.length && "skills"].filter(Boolean) as string[];
   return <>
     <div className="prov-list">
       <p className="page-lead">Pack what this workspace has learned into one <b>.dispatch</b> file. Whoever opens it gets the same setup. Chats, logs and sign-ins are never included.</p>
@@ -91,16 +93,19 @@ function Export() {
         <div className="share-fields">
           <label className="field">Name<input aria-label="Pack name" value={meta.name} maxLength={120} onChange={e => setMeta({ ...meta, name: e.target.value })} /></label>
           <label className="field">Author<input aria-label="Pack author" placeholder="Optional" value={meta.author} maxLength={120} onChange={e => setMeta({ ...meta, author: e.target.value })} /></label>
-          <label className="field wide">Description<textarea aria-label="Pack description" rows={3} placeholder="What this setup does and how to use it, for example: makes one YouTube video a day in my format." value={meta.description} onChange={e => setMeta({ ...meta, description: e.target.value })} /></label>
+          <label className="field wide">Description<textarea aria-label="Pack description" rows={2} placeholder="What this setup does and how to use it, for example: makes one YouTube video a day in my format." value={meta.description} onChange={e => setMeta({ ...meta, description: e.target.value })} /></label>
         </div>
       </Section>
-      <Group title="Agents" hint="Agent templates: role, provider and model." items={inv.agents} picked={picked} setPicked={setPicked} empty="No agent templates in this workspace yet." meta={a => `${a.role === "boss" ? "Boss · " : ""}${a.provider} · ${SCOPE[a.scope] || a.scope}`} />
-      <Group title="Teams" hint="A boss with its members. Turning a team on also turns on the agents it is built from." items={inv.teams} picked={picked} setPicked={next => {
+      {inv.agents.length > 0 && <Group title="Agents" hint="Agent templates: role, provider and model." items={inv.agents} picked={picked} setPicked={setPicked} empty="" meta={a => `${a.role === "boss" ? "Boss · " : ""}${a.provider} · ${SCOPE[a.scope] || a.scope}`} />}
+      {inv.teams.length > 0 && <Group title="Teams" hint="A boss with its members. Turning a team on also turns on the agents it is built from." items={inv.teams} picked={picked} setPicked={next => {
         // The pack carries snapshots anyway; adding the templates keeps them editable on the other side.
         for (const t of inv.teams) if (next.has(t.id) && !picked.has(t.id)) for (const a of t.uses || []) next.add(a);
         setPicked(next);
-      }} empty="No saved teams yet. Build one under Agent templates, Teams, or save a running team from the side panel." meta={t => `${plural(t.members, "member")} · ${SCOPE[t.scope]}`} />
-      <Group title="Skills" hint="Skills installed in Dispatch or in Claude Code." items={inv.skills} picked={picked} setPicked={setPicked} empty="No skills installed." meta={s => `${SCOPE[s.scope] || s.scope}${s.scripts ? ` · ${plural(s.scripts, "script")}` : ""}`} />
+      }} empty="" meta={t => `${plural(t.members, "member")} · ${SCOPE[t.scope]}`} />}
+      {inv.skills.length > 0 && <Group title="Skills" hint="Skills installed in Dispatch or in Claude Code." items={inv.skills} picked={picked} setPicked={setPicked} empty="" meta={s => `${SCOPE[s.scope] || s.scope}${s.scripts ? ` · ${plural(s.scripts, "script")}` : ""}`} />}
+      {missing.length > 0 && <Section title="Not here yet" hint="Make them under Agent templates and Skills; they show up here.">
+        <p className="share-missing">This workspace has no {missing.length > 1 ? `${missing.slice(0, -1).join(", ")} or ${missing[missing.length - 1]}` : missing[0]} to pack.</p>
+      </Section>}
       <Section title="Memory and extras" hint="What the boss knows, and optional workspace files.">
         <div className="share-list">
           {mem("project", "Workspace memory", "What the boss learned in this workspace.")}
@@ -142,6 +147,7 @@ function Import({ workspace, openFile, clearFile, openWorkspace }: { workspace: 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<any>(null);
+  const [over, setOver] = useState(false);
   const show = useCallback((p: Opened | null) => {
     if (!p) return;
     setPack(p); setSkip(new Set()); setResult(null); setError("");
@@ -165,11 +171,22 @@ function Import({ workspace, openFile, clearFile, openWorkspace }: { workspace: 
   const conflicts = items.filter(x => x.exists && !skip.has(x.path)).length;
   const taking = items.length - skip.size;
   const extras = pack ? pack.settings.length > 0 || !!pack.outputs || Object.keys(pack.memory).length > 0 : false;
+  const drop = (e: React.DragEvent) => {
+    e.preventDefault(); setOver(false); setError("");
+    const f = e.dataTransfer.files[0]; const file = f ? (window as any).army.pathFor(f) : "";
+    if (!file || !/\.dispatch$/i.test(file)) { setError("Drop a .dispatch file."); return; }
+    army().packs.open(file).then(show).catch((err: unknown) => setError(clean(err)));
+  };
   if (!pack) return <div className="prov-list">
-    <p className="page-lead">Open a <b>.dispatch</b> file someone shared. You see everything inside before anything is added. Double-clicking a .dispatch file also opens it here.</p>
+    <p className="page-lead">Open a <b>.dispatch</b> file someone shared. You see everything inside before anything is added.</p>
     {result && <div className="share-result"><b>Imported</b><small>{[plural(result.agents, "agent"), plural(result.teams, "team"), plural(result.skills, "skill"), result.memory ? plural(result.memory, "memory entry", "memory entries") : "", result.schedules ? plural(result.schedules, "paused schedule") : "", result.outputs ? plural(result.outputs, "output") : ""].filter(Boolean).join(" · ")}{result.skipped.length ? ` · skipped ${result.skipped.join(", ")}` : ""}</small></div>}
-    {error && <p className="tpl-error">{error}</p>}
-    <div className="share-open"><Button className="primary" onClick={() => void choose()}><ArrowDownTrayIcon aria-hidden="true" />Open pack…</Button></div>
+    <div className={"share-drop" + (over ? " over" : "")} onDragOver={e => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)} onDrop={drop}>
+      <ArrowDownTrayIcon aria-hidden="true" />
+      <b>Drop a .dispatch file here</b>
+      <small>or double-click one in your folders, it opens here too</small>
+      <Button className="primary" onClick={() => void choose()}>Choose a file…</Button>
+      {error && <p className="tpl-error">{error}</p>}
+    </div>
   </div>;
   return <>
     <div className="prov-list" aria-label="Pack contents">

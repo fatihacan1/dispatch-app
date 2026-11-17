@@ -29,13 +29,20 @@ function configure(provider, template, resolve, localConfig, options = {}) {
     let spec; try { spec = resolve(preset.command); } catch { throw new Error(`${preset.name} MCP is not installed or not in PATH.`); }
     servers[`dispatch_${id}`] = { command: spec.file, args: [...spec.args, ...preset.args] };
   }
+  // Connectors (MCP page): every agent on a supported CLI gets them; other CLIs simply go without.
+  const connected = [];
+  if (SUPPORTED.includes(provider)) for (const c of options.connectors || []) {
+    if (c.url) servers[`mcp_${c.id}`] = { url: c.url };
+    else { try { const spec = resolve(c.command); servers[`mcp_${c.id}`] = { command: spec.file, args: [...spec.args, ...c.args] }; } catch { continue; } }
+    connected.push(c.name);
+  }
   const args = [];
   const config = localConfig ? JSON.parse(localConfig) : {};
-  if (provider === 'claude' && ids.length) args.push('--mcp-config', JSON.stringify({ mcpServers: Object.fromEntries(Object.entries(servers).map(([id, s]) => [id, s.url ? { type: 'http', url: s.url } : s])) }));
+  if (provider === 'claude' && Object.keys(servers).length) args.push('--mcp-config', JSON.stringify({ mcpServers: Object.fromEntries(Object.entries(servers).map(([id, s]) => [id, s.url ? { type: 'http', url: s.url } : s])) }));
   if (provider === 'codex') for (const [id, server] of Object.entries(servers)) if (server.url) args.push('-c', `mcp_servers.${id}={url=${JSON.stringify(server.url)}}`); else args.push('-c', `mcp_servers.${id}={command=${JSON.stringify(server.command)},args=[${server.args.map(x => JSON.stringify(x)).join(',')}]${server.env ? ',env={' + Object.entries(server.env).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(',') + '}' : ''}}`);
   if (provider === 'opencode' || provider === 'local') {
-    if (ids.length) config.mcp = Object.fromEntries(Object.entries(servers).map(([id, server]) => [id, server.url ? { type: 'remote', url: server.url, enabled: true } : { type: 'local', command: [server.command, ...server.args], enabled: true, ...(server.env ? { environment: server.env } : {}) }]));
+    if (Object.keys(servers).length) config.mcp = Object.fromEntries(Object.entries(servers).map(([id, server]) => [id, server.url ? { type: 'remote', url: server.url, enabled: true } : { type: 'local', command: [server.command, ...server.args], enabled: true, ...(server.env ? { environment: server.env } : {}) }]));
   }
-  return { args, env: Object.keys(config).length ? { OPENCODE_CONFIG_CONTENT: JSON.stringify(config) } : {}, ids };
+  return { args, env: Object.keys(config).length ? { OPENCODE_CONFIG_CONTENT: JSON.stringify(config) } : {}, ids, connected };
 }
 module.exports = { PRESETS, selected, configure, setBuiltinEnv, setRemoteUrl };

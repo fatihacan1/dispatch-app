@@ -241,26 +241,23 @@ export function Servers({ focus }: { focus: { id: string; n: number } | null }) 
     <aside className="server-list">
       <div className="server-list-head"><h1>Servers</h1><Button className="secondary" onClick={() => setEditing({})}><PlusIcon aria-hidden="true" />Add</Button></div>
       {list.length === 0 ? <div className="server-empty"><ServerStackIcon aria-hidden="true" /><p>Save the servers you use. Open them as terminals, and let agents work on them if you want.</p></div>
-        : <div className="rows" role="listbox" aria-label="Servers">{list.map(s => {
+        : <div className="rows" role="listbox" aria-label="Servers" title={list.length > 1 ? "Drag to reorder. The same order shows in the bottom bar." : undefined}>{list.map(s => {
           const vpn = s.vpnId ? vpns.find(v => v.id === s.vpnId) : undefined;
+          const tags = [vpn && "VPN", s.access === "ask" ? "Agents ask" : s.access === "on" ? "Agents allowed" : ""].filter(Boolean).join(" · ");
           return <div key={s.id} role="option" aria-selected={current?.id === s.id} tabIndex={0} className={"list-row server-row" + (current?.id === s.id ? " selected" : "") + (dragging === s.id ? " dragging" : "")} {...props(s.id)}
             onClick={() => setSelected(s.id)} onDoubleClick={() => void connect(s.id)} onContextMenu={e => { e.preventDefault(); setSelected(s.id); setMenu({ x: e.clientX, y: e.clientY, server: s }); }} onKeyDown={e => { if (e.key === "Enter") void connect(s.id); }}>
-            <ServerBadge server={s} />
-            <span className="row-text"><b>{s.name}</b><small>{s.user ? s.user + "@" : ""}{s.host}{s.port !== 22 ? ":" + s.port : ""}</small></span>
-            {vpn && <span className="server-access" title={`VPN: ${vpn.name}`}>VPN</span>}
-            {s.access !== "off" && <span className="server-access" title={ACCESS.find(a => a[0] === s.access)?.[2]}>{s.access === "ask" ? "Agents ask" : "Agents"}</span>}
-            {shells.some(sh => sh.server === s.id && !sh.exited) && <span className="server-live" title="Terminal open" />}
+            <ServerBadge server={s} size={32} />
+            <span className="row-text"><b>{s.name}{shells.some(sh => sh.server === s.id && !sh.exited) && <span className="server-live" title="Terminal open" />}</b><small>{s.user ? s.user + "@" : ""}{s.host}{s.port !== 22 ? ":" + s.port : ""}</small>{tags && <small className="server-tags" title={[vpn && `VPN: ${vpn.name}`, ACCESS.find(a => a[0] === s.access)?.[2]].filter(Boolean).join(" ")}>{tags}</small>}</span>
           </div>;
         })}</div>}
-      {list.length > 1 && <p className="setting-note">Drag to reorder. The same order shows in the left bar.</p>}
-      <div className="server-list-head" style={{ marginTop: 12 }}>
-        <h2 className="label" style={{ margin: 0 }}>My VPNs</h2>
-        <Button className="secondary" onClick={() => setEditingVpn({ type: "wireguard" })}><PlusIcon aria-hidden="true" />Add</Button>
+      <div className="server-list-head server-vpn-head">
+        <h2 className="label">VPNs</h2>
+        <Button className="ghost" onClick={() => setEditingVpn({ type: "wireguard" })}><PlusIcon aria-hidden="true" />Add</Button>
       </div>
       {vpns.length === 0
-        ? <p className="setting-note">No VPNs yet. Add WireGuard, a SOCKS5/HTTP proxy, or an SSH jump host.</p>
-        : <div className="rows" role="list" aria-label="My VPNs">{vpns.map(v => <div key={v.id} role="listitem" className="list-row server-row" onClick={() => setEditingVpn(v)}>
-          <ShieldCheckIcon style={{ width: 16, height: 16, flex: "none", color: "var(--text-2)" }} aria-hidden="true" />
+        ? <p className="setting-note">WireGuard, a SOCKS5/HTTP proxy or an SSH jump host. Pick one per server.</p>
+        : <div className="rows" role="list" aria-label="VPNs">{vpns.map(v => <div key={v.id} role="listitem" className="list-row server-row vpn-row" onClick={() => setEditingVpn(v)}>
+          <ShieldCheckIcon className="vpn-glyph" aria-hidden="true" />
           <span className="row-text"><b>{v.name}</b><small>{vpnSubtitle(v)}</small></span>
           <button type="button" className="icon-button" title={`Edit ${v.name}`} aria-label={`Edit ${v.name}`} onClick={e => { e.stopPropagation(); setEditingVpn(v); }}><PencilSquareIcon /></button>
           <button type="button" className="icon-button" title={`Delete ${v.name}`} aria-label={`Delete ${v.name}`} onClick={e => { e.stopPropagation(); void removeVpn(v); }}><TrashIcon /></button>
@@ -285,7 +282,14 @@ export function Servers({ focus }: { focus: { id: string; n: number } | null }) 
             </div>)}
           </div>
           <div className="term-body">{shown && <Console key={shown.name} name={shown.name} />}</div>
-        </div> : <div className="server-idle"><p>Not connected. Connect opens an SSH terminal here; if the server asks for a password, type it in the terminal.</p></div>}
+        </div> : <div className="server-idle">
+          <div>
+            <CommandLineIcon aria-hidden="true" />
+            <h3>Not connected</h3>
+            <p>Connect opens an SSH terminal here. If {current.name} asks for a password, type it in the terminal{current.hasPassword ? " (Dispatch types the saved one for you)" : ""}.</p>
+            <Button className="secondary" onClick={() => void connect(current.id)}>Connect to {current.name}</Button>
+          </div>
+        </div>}
         <div className="server-activity">
           <h3 className="label">Agent activity</h3>
           {current.access === "off" ? <p className="empty-line">Agents cannot use this server. Turn it on under Edit, Agents.</p>
