@@ -11,7 +11,7 @@ const CACHE = path.join(process.env.DISPATCH_HOME || os.homedir(), '.dispatch', 
 const PROVIDERS = [
   { id: 'claude', name: 'Claude Code', bin: 'claude', pkg: '@anthropic-ai/claude-code', update: 'claude update', status: ['auth', 'status', '--json'], login: ['auth', 'login'], logout: ['auth', 'logout'],
     install: WIN ? 'irm https://claude.ai/install.ps1 | iex' : 'curl -fsSL https://claude.ai/install.sh | bash', uninstall: 'npm uninstall -g @anthropic-ai/claude-code',
-    known: ['claude-fable-5-2', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'] },
+    known: ['claude-fable-5-2', 'claude-mythos-5-2', 'claude-mythos-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'] },
   { id: 'codex', name: 'Codex', bin: 'codex', status: ['login', 'status'], login: ['login'], logout: ['logout'],
     pkg: '@openai/codex', update: 'npm install -g @openai/codex@latest', install: 'npm install -g @openai/codex', uninstall: 'npm uninstall -g @openai/codex', known: ['gpt-6.1-terra', 'gpt-6.1-sol'] },
   { id: 'antigravity', name: 'Antigravity', bin: 'agy', update: 'agy update', status: ['models'], login: [], logout: null, models: ['models'],
@@ -57,6 +57,48 @@ function codexCachedModels(codexDir) {
     const list = (Array.isArray(j) ? j : j.models || j.data || []).map(m => typeof m === 'string' ? m : m.slug || m.id || m.name).filter(Boolean);
     return [...new Set(list)];
   } catch { return []; }
+}
+
+const CLAUDE_FAMILIES = ['fable', 'mythos', 'opus', 'sonnet', 'haiku'];
+let _claudeBundleCache = null;
+
+/** Keep current-generation Claude model IDs (5.x and newer), dropping dated, -v1, and older IDs. */
+function filterClaudeModels(ids) {
+  const seen = new Set();
+  const parsed = [];
+  for (const raw of ids || []) {
+    const id = String(raw).trim().toLowerCase();
+    const m = /^claude-(fable|mythos|opus|sonnet|haiku)-(\d+)-(\d+)$/.exec(id);
+    if (!m) continue;
+    const major = Number(m[2]);
+    const minor = Number(m[3]);
+    if (major < 5 || seen.has(id)) continue;
+    seen.add(id);
+    parsed.push({ id, family: m[1], major, minor });
+  }
+  parsed.sort((a, b) => (b.major - a.major) || (b.minor - a.minor) || (CLAUDE_FAMILIES.indexOf(a.family) - CLAUDE_FAMILIES.indexOf(b.family)));
+  return parsed.map(x => x.id);
+}
+
+/** Read known current-generation Claude model IDs from the installed CLI bundle, cached once per app start. */
+function claudeBundleModels(binPath) {
+  if (!binPath && _claudeBundleCache !== null) return _claudeBundleCache;
+  const candidates = binPath ? [binPath] : [
+    path.join(os.homedir(), '.local', 'bin', WIN ? 'claude.exe' : 'claude'),
+    ...(!WIN ? [path.join(os.homedir(), '.local', 'bin', 'claude.exe')] : []),
+  ];
+  let found = [];
+  for (const p of candidates) {
+    try {
+      if (!fs.existsSync(p)) continue;
+      const real = fs.realpathSync(p);
+      const text = fs.readFileSync(real, 'latin1');
+      found = filterClaudeModels(text.match(/claude-(?:fable|mythos|opus|sonnet|haiku)-[a-z0-9-]+/gi) || []);
+      if (found.length) break;
+    } catch {}
+  }
+  if (!binPath) _claudeBundleCache = found;
+  return found;
 }
 
 function parseModels(id, result) {
@@ -137,7 +179,8 @@ async function check(resolveCommand, id, opts = {}) {
   const a = parseAuth(p, status || { ok: true, out: '' }, opts);
   const cache = readCache();
   const cachedCodex = id === 'codex' ? codexCachedModels(opts.accountDir) : [];
-  let models = withKnown(p, cache[id]?.models?.length ? cache[id].models : (cachedCodex.length ? cachedCodex : p.known));
+  const baseModels = cache[id]?.models?.length ? cache[id].models : (cachedCodex.length ? cachedCodex : p.known);
+  let models = withKnown(p, id === 'claude' ? [...claudeBundleModels(), ...baseModels] : baseModels);
   if (a.auth === 'signed-in' && p.models) models = await refreshModels(resolveCommand, id, id === 'antigravity' ? status : undefined, opts);
   return { id, name: p.name, installed: true, version, path: spec.args.at(-1) || spec.file, ...a, models, canLogout: !!p.logout || (id === 'antigravity' && WIN) };
 }
@@ -146,6 +189,7 @@ async function refreshModels(resolveCommand, id, recorded, opts = {}) {
   const p = PROVIDERS.find(x => x.id === id);
   let models = [];
   if (id === 'codex') models = codexCachedModels(opts.accountDir);
+  if (id === 'claude') models = withKnown(p, claudeBundleModels());
   if (!models.length && p.models) {
     try { const r = recorded || await run(resolveCommand(p.bin), p.models, 20000, opts.env); models = parseModels(id, r); } catch {}
   }
@@ -193,6 +237,14 @@ function actionSpec(resolveCommand, id, kind) {
 // Models a CLI reported earlier are kept, and the known ones always added: a model released after the last refresh
 // (Claude Fable) was missing from the dropdown until the user pressed Refresh models.
 function withKnown(p, models) { return [...new Set([...p.known.filter(m => m !== 'default' || !models.length), ...models])]; }
-function allModels() { const c = readCache(); const out = {}; for (const p of PROVIDERS) out[p.id] = withKnown(p, c[p.id]?.models?.length ? c[p.id].models : (p.id === 'codex' && codexCachedModels().length ? codexCachedModels() : p.known)); return out; }
+function allModels() {
+  const c = readCache();
+  const out = {};
+  for (const p of PROVIDERS) {
+    const cached = c[p.id]?.models?.length ? c[p.id].models : (p.id === 'codex' && codexCachedModels().length ? codexCachedModels() : p.known);
+    out[p.id] = withKnown(p, p.id === 'claude' ? [...claudeBundleModels(), ...cached] : cached);
+  }
+  return out;
+}
 
-module.exports = { PROVIDERS, EFFORTS, PERMISSIONS, check, refreshModels, actionSpec, allModels, updateInfo, parseAuth, parseModels };
+module.exports = { PROVIDERS, EFFORTS, PERMISSIONS, check, refreshModels, actionSpec, allModels, updateInfo, parseAuth, parseModels, filterClaudeModels, claudeBundleModels };
