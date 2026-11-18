@@ -32,8 +32,8 @@ test('connected MCP apps reach every supported agent and are skipped elsewhere',
  assert.deepEqual(JSON.parse(claude.args[1]).mcpServers, { mcp_notion: { type: 'http', url: connectors[0].url }, mcp_playwright: { command: '/bin/npx', args: ['-y', '@playwright/mcp@latest'] } });
  assert.deepEqual(claude.connected, ['Notion', 'Playwright']);
  assert.ok(configure('codex', { extra: {} }, resolver, null, { connectors }).args.some(a => a.startsWith('mcp_servers.mcp_notion={url=')));
- const ag = configure('antigravity', { extra: {} }, resolver, null, { connectors });
- assert.deepEqual([ag.args, ag.connected], [[], []]);
+ const qoder = configure('qoder', { extra: {} }, resolver, null, { connectors });
+ assert.deepEqual([qoder.args, qoder.connected], [[], []]);
  assert.deepEqual(configure('claude', { extra: {} }, () => { throw Error('no npx'); }, null, { connectors }).connected, ['Notion'], 'a missing npx drops only that app');
 });
 test('memory is boss-only and never comes from a template', () => {
@@ -41,4 +41,30 @@ test('memory is boss-only and never comes from a template', () => {
  assert.ok(configure('claude', { extra: {} }, resolver, null, { memory: true }).ids.includes('memory'));
  assert.ok(!configure('claude', { extra: {} }, resolver).ids.includes('memory'));
  assert.deepEqual(configure('qoder', { extra: {} }, resolver, null, { memory: true }).ids, [], 'unsupported provider gets no memory and no error');
+});
+test('antigravity and gemini receive stdio, HTTP, and connected MCP servers', () => {
+ const url = 'http://127.0.0.1:8000/mcp';
+ const connectors = [{ id: 'canva', name: 'Canva', url: 'http://127.0.0.1:5/x/canva' }];
+ const ag = configure('antigravity', { extra: { dispatch_mcp: 'rustxng,unreal' } }, resolver, null, { connectors, memory: true });
+ assert.deepEqual(ag.antigravityConfig, {
+  mcpServers: {
+   dispatch_rustxng: { command: '/bin/rustxng', args: ['mcp'] },
+   dispatch_unreal: { url },
+   dispatch_memory: { command: process.execPath, args: [require('path').join(__dirname, 'mcp-memory.cjs')], env: { ELECTRON_RUN_AS_NODE: '1' } },
+   mcp_canva: { url: connectors[0].url },
+  },
+ });
+ assert.deepEqual(ag.connected, ['Canva']);
+ assert.equal(configure('antigravity', { extra: {} }, resolver).antigravityConfig, null);
+
+ const gem = configure('gemini', { extra: { dispatch_mcp: 'ddgs,unreal' } }, resolver, null, { connectors });
+ assert.deepEqual(gem.geminiConfig, {
+  mcpServers: {
+   dispatch_ddgs: { command: '/bin/ddgs', args: ['mcp'] },
+   dispatch_unreal: { httpUrl: url },
+   mcp_canva: { httpUrl: connectors[0].url },
+  },
+ });
+ assert.deepEqual(gem.connected, ['Canva']);
+ assert.equal(configure('gemini', { extra: {} }, resolver).geminiConfig, null);
 });

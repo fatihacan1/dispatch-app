@@ -1,14 +1,64 @@
 import React, { useEffect, useState } from "react";
 import { Button } from "./common";
-import type { AgentQuestion, QuestionAnswer } from "../lib/types";
+import type { AgentQuestion, PluginField, PluginQuestionAnswer, QuestionAnswer } from "../lib/types";
+
+function PluginQuestionCard({ agent, question, openTerminal, onError }: { agent: string; question: AgentQuestion; openTerminal: () => void; onError: (text: string) => void }) {
+  const fields: PluginField[] = question.fields || [];
+  const [values, setValues] = useState<Record<number, string | boolean>>(() => Object.fromEntries(fields.map((f, i) => [i, f.value])));
+  const [sending, setSending] = useState(false);
+  useEffect(() => { setValues(Object.fromEntries((question.fields || []).map((f, i) => [i, f.value]))); setSending(false); }, [question.id]);
+  const send = async (action: "accept" | "decline") => {
+    if (sending) return;
+    setSending(true);
+    const payload: PluginQuestionAnswer = action === "decline" ? { action } : { action, ...(question.parseable ? { values } : {}) };
+    try { await window.army.questions.answer(agent, payload); }
+    catch (e) { setSending(false); onError(String(e).replace(/^Error:\s*(Error invoking remote method '[^']+':\s*)?(Error:\s*)?/, "")); }
+  };
+  const missingRequired = !!question.parseable && fields.some((f, i) => f.required && f.kind !== "boolean" && !String(values[i] ?? "").trim());
+  return (
+    <section className="question-card" aria-label={`${agent} plugin question`}>
+      <p className="question-from"><b>{agent}</b> · {question.title || "Plugin requests your input"}</p>
+      {question.message && <p className="question-hint">{question.message}</p>}
+      {question.parseable ? (
+        <div className="question-options">
+          {fields.map((f, i) => (
+            <label key={i} className="question" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span className="question-label"><b>{f.label}{f.required ? " *" : ""}</b>{f.description && <small>{f.description}</small>}</span>
+              {f.kind === "boolean" ? (
+                <button type="button" className={"question-option" + (values[i] ? " on" : "")} role="checkbox" aria-checked={!!values[i]} disabled={sending}
+                  onClick={() => setValues(v => ({ ...v, [i]: !v[i] }))}>
+                  <span className="question-key" aria-hidden="true">{values[i] ? "×" : " "}</span>
+                  <span className="question-label"><b>{values[i] ? "Yes" : "No"}</b></span>
+                </button>
+              ) : (
+                <input className="question-other" type={f.kind === "number" ? "number" : "text"} disabled={sending}
+                  placeholder={f.required ? "Required" : "Optional"} value={String(values[i] ?? "")}
+                  onChange={e => setValues(v => ({ ...v, [i]: e.target.value }))} />
+              )}
+            </label>
+          ))}
+        </div>
+      ) : (
+        <p className="question-hint">{question.totalFields ? `${question.totalFields} fields — fill them in the terminal, or Accept defaults / Decline here.` : "Fill in the terminal, or Accept / Decline here."}</p>
+      )}
+      <div className="question-foot">
+        <Button className="ghost" onClick={openTerminal}>Answer in terminal</Button>
+        <Button className="ghost" disabled={sending} onClick={() => void send("decline")}>Decline</Button>
+        <Button className="primary" disabled={sending || missingRequired} onClick={() => void send("accept")}>{sending ? "Sending…" : "Accept"}</Button>
+      </div>
+    </section>
+  );
+}
 
 /** A question an agent asked with Claude's AskUserQuestion, answerable from the chat instead of its terminal. */
 export function QuestionCard({ agent, question, openTerminal, onError }: { agent: string; question: AgentQuestion; openTerminal: () => void; onError: (text: string) => void }) {
-  const [answers, setAnswers] = useState<QuestionAnswer[]>(() => question.questions.map(() => ({ picks: [] })));
+  if (question.kind === "plugin") return <PluginQuestionCard agent={agent} question={question} openTerminal={openTerminal} onError={onError} />;
+  const qs = question.questions || [];
+  const [answers, setAnswers] = useState<QuestionAnswer[]>(() => qs.map(() => ({ picks: [] })));
   const [sending, setSending] = useState(false);
-  useEffect(() => { setAnswers(question.questions.map(() => ({ picks: [] }))); setSending(false); }, [question.id]);
+  useEffect(() => { setAnswers((question.questions || []).map(() => ({ picks: [] }))); setSending(false); }, [question.id]);
   // One question with one choice: a click answers it, like in the terminal.
-  const instant = question.questions.length === 1 && !question.questions[0].multiSelect;
+  const instant = qs.length === 1 && !qs[0].multiSelect;
   const submit = async (list = answers) => {
     if (sending) return;
     setSending(true);
@@ -16,19 +66,19 @@ export function QuestionCard({ agent, question, openTerminal, onError }: { agent
     catch (e) { setSending(false); onError(String(e).replace(/^Error:\s*(Error invoking remote method '[^']+':\s*)?(Error:\s*)?/, "")); }
   };
   const pick = (qi: number, oi: number) => {
-    const q = question.questions[qi];
+    const q = qs[qi];
     const next = answers.map((a, i) => i !== qi ? a : q.multiSelect ? { ...a, picks: a.picks.includes(oi) ? a.picks.filter(p => p !== oi) : [...a.picks, oi].sort() } : { picks: [oi], other: "" });
     setAnswers(next);
     if (instant) void submit(next);
   };
-  const setOther = (qi: number, other: string) => setAnswers(v => v.map((a, i) => i !== qi ? a : { picks: question.questions[qi].multiSelect ? a.picks : [], other }));
+  const setOther = (qi: number, other: string) => setAnswers(v => v.map((a, i) => i !== qi ? a : { picks: qs[qi].multiSelect ? a.picks : [], other }));
   const ready = answers.every(a => a.picks.length || (a.other || "").trim());
   return (
     <section className="question-card" aria-label={`${agent} asks you`}>
       <p className="question-from"><b>{agent}</b> is waiting for your answer</p>
-      {question.questions.map((q, qi) => (
+      {qs.map((q, qi) => (
         <fieldset className="question" key={qi} disabled={sending}>
-          <legend>{q.header && question.questions.length > 1 && <small>{q.header}</small>}{q.question}</legend>
+          <legend>{q.header && qs.length > 1 && <small>{q.header}</small>}{q.question}</legend>
           {q.multiSelect && <p className="question-hint">Pick one or more</p>}
           <div className="question-options">
             {q.options.map((o, oi) => {

@@ -1,5 +1,18 @@
 export type Message = { id: string; from: string; to: string; text: string; chats?: Record<string, string> };
-export type AgentQuestion = { id: string; at: string; questions: { question: string; header: string; multiSelect: boolean; options: { label: string; description: string }[] }[] };
+export type PluginField = { label: string; description: string; kind: "text" | "number" | "boolean" | "enum"; required: boolean; hasValue: boolean; value: string | boolean };
+export type PluginQuestionAnswer = { action: "accept" | "decline"; values?: Record<number, string | boolean> };
+export type AgentQuestion = {
+  id: string;
+  at: string;
+  kind?: "plugin";
+  questions?: { question: string; header: string; multiSelect: boolean; options: { label: string; description: string }[] }[];
+  server?: string;
+  title?: string;
+  message?: string;
+  parseable?: boolean;
+  totalFields?: number;
+  fields?: PluginField[];
+};
 export type CustomTool = { id: string; name: string; command: string; cwd: string; note: string; autostart: boolean; agents: boolean; stopped?: boolean; terminal: string; log: string; running: boolean; exitCode: number | null; startedAt: string | null };
 export type TaskCard = { id: string; agent: string; lead: string; title: string; text: string; startedAt: string; status: "working" | "waiting" | "stalled" | "done" | "stopped"; endedAt: string | null; reason?: string | null; waitReason?: string; stalledAt?: string };
 export type QuestionAnswer ={ picks: number[]; other?: string };
@@ -21,7 +34,7 @@ declare global {
         start(id: string): Promise<string>; stop(id: string): Promise<boolean>;
         chooseFile(): Promise<{ command: string; cwd: string; name: string } | null>; chooseFolder(): Promise<string | null>;
       };
-      questions: { list(): Promise<Record<string, AgentQuestion>>; answer(name: string, answers: QuestionAnswer[]): Promise<boolean> };
+      questions: { list(): Promise<Record<string, AgentQuestion>>; answer(name: string, answers: QuestionAnswer[] | PluginQuestionAnswer): Promise<boolean> };
       chats: { list(name: string): Promise<any[]>; switch(name: string, id?: string): Promise<any> };
       enlist(name: string, template: any, task: string): Promise<any>;
       agentAction(name: string, action: string): Promise<boolean>;

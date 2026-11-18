@@ -11,7 +11,7 @@ const { restartRoster } = require('./roster.cjs');
 const gitLib = require('./git.cjs');
 const { parseMessage } = require('./bus.cjs');
 const { createDemoTerminal } = require('./demo-terminal.cjs');
-const { attentionFrom, shouldClearAttention, trustAnswer, nudgeAnswer, BLOCKING, normalize, progressKey, approvalSummary } = require('./attention.cjs');
+const { attentionFrom, shouldClearAttention, trustAnswer, nudgeAnswer, parsePluginQuestion, pluginQuestionKeys, BLOCKING, normalize, progressKey, approvalSummary } = require('./attention.cjs');
 const localAI = require('./local-ai.cjs');
 const mcp = require('./mcp.cjs');
 const storage = require('./storage.cjs');
@@ -111,6 +111,14 @@ function tgApprovalGone(name, agent) {
   }, 3000);
 }
 function telegramButton(data) {
+  const pm = /^pq:([0-9a-f]+):([ad])$/.exec(data);
+  if (pm) {
+    const entry = [...processes.entries()].find(([, ag]) => ag.question?.kind === 'plugin' && ag.question?.tgNonce === pm[1]);
+    if (!entry) return null;
+    const [name, agent] = entry, accept = pm[2] === 'a', title = agent.question.title || 'Plugin question';
+    void answerQuestion(name, { action: accept ? 'accept' : 'decline' }, 'Telegram').catch(() => {});
+    return { toast: accept ? 'Accepted' : 'Declined', text: `${title}\n\n${accept ? 'Accepted' : 'Declined'} from Telegram.` };
+  }
   const m = /^ap:([0-9a-f]+):([yn])$/.exec(data); if (!m) return null;
   const entry = [...processes.entries()].find(([, ag]) => ag.tgApproval?.nonce === m[1]); if (!entry) return null;
   const [name, agent] = entry, a = agent.tgApproval, yes = m[2] === 'y';
@@ -150,20 +158,27 @@ function answerTrust(agent) {
 // Menu keys one at a time, after the menu has settled. Down and Enter in one write reached Claude's trust menu as
 // one input: Enter took the row that was selected before (No, exit) and the agent quit.
 function typeKeys(agent, keys, first = 400) {
-  const parts = String(keys).match(/\x1b\[[A-D]|\r|[^\x1b\r]+/g) || [];
+  const parts = String(keys).match(/\x1b\[[A-D]|\x1b|\r|\x7f|[^\x1b\r\x7f]+/g) || [];
   agent.answering = true; // no message is pasted between the keys
   parts.forEach((k, i) => setTimeout(() => { try { agent.terminal.write(k); } catch {} }, first + i * 250));
   setTimeout(() => { agent.answering = false; if (agent.ready && !agent.blocked && agent.queue.length) deliver(agent); }, first + parts.length * 250 + 300);
 }
 
-// ── Questions an agent asks with Claude's AskUserQuestion: shown in the chat (and on Telegram), answered from there ──
+// ── Questions an agent asks with Claude's AskUserQuestion or MCP elicitation: shown in chat (and Telegram) ──
 function showQuestion(name, agent, ask) {
-  agent.question = { ...ask, at: new Date().toISOString() };
+  const tgNonce = ask.kind === 'plugin' ? crypto.randomBytes(5).toString('hex') : undefined;
+  agent.question = { ...ask, ...(tgNonce ? { tgNonce } : {}), at: new Date().toISOString() };
   notify('question', { name, question: agent.question });
   // A conversation from the phone is going on with this agent: ask there too, the reply answers it.
   if (telegram.connected() && tgOwner() === name && Date.now() - tgWaiting < 30 * 60e3) {
-    const text = ask.questions.map(q => `${q.question}${q.multiSelect ? ' (several allowed: 1,3)' : ''}\n${q.options.map((o, i) => `${i + 1}. ${o.label}${o.description ? ` (${o.description})` : ''}`).join('\n')}`).join('\n\n');
-    void telegram.send(`[${path.basename(workspace)}${name !== 'boss' ? ` · ${name}` : ''}] ${name} asks:\n${text}\n\nReply with a number, or write your own answer.`).catch(() => {});
+    if (ask.kind === 'plugin') {
+      const fields = (ask.fields || []).slice(0, 8).map(f => `- ${f.label}${f.required ? ' *' : ''}${f.value !== '' && f.value !== false ? `: ${f.value}` : ''}`).join('\n');
+      const body = [ask.title || `MCP server "${ask.server || 'plugin'}" requests your input`, ask.message, fields].filter(Boolean).join('\n');
+      void telegram.send(`[${path.basename(workspace)}${name !== 'boss' ? ` · ${name}` : ''}] ${name} asks:\n${body}\n\nTap Accept or Decline, or reply "accept" / "decline".`, { buttons: [[{ text: 'Accept', data: `pq:${tgNonce}:a` }, { text: 'Decline', data: `pq:${tgNonce}:d` }]] }).catch(() => {});
+    } else {
+      const text = ask.questions.map(q => `${q.question}${q.multiSelect ? ' (several allowed: 1,3)' : ''}\n${q.options.map((o, i) => `${i + 1}. ${o.label}${o.description ? ` (${o.description})` : ''}`).join('\n')}`).join('\n\n');
+      void telegram.send(`[${path.basename(workspace)}${name !== 'boss' ? ` · ${name}` : ''}] ${name} asks:\n${text}\n\nReply with a number, or write your own answer.`).catch(() => {});
+    }
   }
 }
 function clearQuestion(name, agent) { if (!agent?.question) return; agent.question = null; notify('question', { name, question: null }); }
@@ -178,6 +193,21 @@ async function answerQuestion(name, answers, via = '') {
   const agent = processes.get(name), q = agent?.question;
   if (!q) throw new Error(`${name} has no open question. It may have been answered in its terminal.`);
   if (agent.answering) throw new Error(`${name} is already taking an answer.`);
+  if (q.kind === 'plugin') {
+    const resp = answers && !Array.isArray(answers) ? answers : { action: 'accept' };
+    const keys = pluginQuestionKeys(q, resp);
+    clearTimeout(agent.timer);
+    agent.promptBuffer = ''; agent.awaitingAnswer = true;
+    typeKeys(agent, keys, 0);
+    const label = resp.action === 'decline' ? 'Declined' : 'Accepted';
+    const extra = resp.action !== 'decline' && q.parseable && resp.values
+      ? q.fields.map((f, i) => resp.values[i] !== undefined && resp.values[i] !== f.value ? `${f.label}: ${resp.values[i]}` : '').filter(Boolean).join(', ')
+      : '';
+    const said = extra ? `${label} (${extra})` : label;
+    emitMessage({ from: 'you', to: name, text: via ? `[via ${via}] ${said}` : said });
+    clearQuestion(name, agent);
+    return true;
+  }
   const groups = activity.questionKeys(q.questions, Array.isArray(answers) ? answers : []);
   agent.answering = true; clearTimeout(agent.timer);
   try {
@@ -447,7 +477,7 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
   const allWorkflows = workflowsLib.list(workspace);
   const prompt = `${template.body || ''}${workflowsLib.promptFor(template, allWorkflows)}\nCode index (saves tokens): this workspace has a symbol index. Reading whole files and running broad searches costs many tokens, so look things up in the index first: to find a function, class, type or component, run dispatch index search <name>; it returns file paths and line numbers. Then read only those lines (offset/limit), not the whole file. If the command fails, finds nothing, or you need text that is not a symbol name, fall back to your usual way (grep, glob, reading files). The index may lag edits made in the last seconds, so check the lines you open.\nYou are ${name}. You report to ${name === 'boss' ? 'you (the user)' : enlistedBy && enlistedBy !== 'user' ? enlistedBy : 'boss'}. Squad: ${[...new Set([...operation.agents.map(a => a.name), ...rosterHint, name])].map(n => `${n} (${operation.agents.find(a => a.name === n)?.stopped ? 'stopped' : processes.has(n) || n === name ? 'running' : 'starting'})`).join(', ')}. ${direct
     ? `The user reads your replies in the Dispatch chat exactly as you write them here, rendered as Markdown. ${name === 'boss' ? 'To talk to the user' : 'When a message is from you (the user)'}, simply write your answer as your normal final reply: use short paragraphs, headings, lists, tables and code blocks where they help. Never run dispatch send --to you; that would show the user a second, unformatted copy. Use dispatch send only for other agents: when another agent gave you the task or you need its input, report with dispatch send --to <agent> "<report>".`
-    : `When you finish a task or need input, report to the requester using dispatch send --to <requester> "<short report>". For a message from you, run dispatch send --to you "<short report>"; for a message from another agent, use that agent's name.`} A message with line breaks, quotes or backticks gets cut by the shell: write it to a file and send it with dispatch send --to <agent> --file <path> (dispatch spawn takes --task-file <path> the same way). Keep reports to other agents short. Use dispatch list to see the squad.${name === 'boss' ? ' Use dispatch tasks to see what each agent is doing instead of reading logs.' : ''}${name === 'boss' ? `\nAvailable providers (plan and notes are supplied by the user):\n${providerInfo}\nTemplate catalogue:\n${catalogue}\nUse dispatch spawn --template <name> --name <id> --task <task> and dispatch template create --name <name> --provider <provider> --description <description> --role <prompt>.${workflowsLib.catalogueFor(allWorkflows)}\n${SCHEDULE_HELP}${telegramHelp()}` : (tgOwner() === name ? telegramHelp(name) : '')}\nShared outputs: save every finished deliverable (images, video, audio, documents, exports) in ${path.join(workspace, '.dispatch', 'outputs', name)} so the user and the other agents can find it. Run dispatch outputs [agent] to see what the squad has produced and reuse those files by path. To show an image, video or audio in the chat, save it in that folder and write ![short description](<full path>) in your reply (images render and videos/audio play inline). Also download any image, video or audio produced by tools or plugins (MCP)—including URL-only results—into that folder and show it the same way.${host.customTools?.prompt() || ''}${mcpConfig.connected.length ? `\nConnected apps (MCP, signed in by the user in Dispatch): ${mcpConfig.connected.join(', ')}. Their tools come from the mcp_* servers; use them when a task involves these apps.` : ''}${memoryText}`;
+    : `When you finish a task or need input, report to the requester using dispatch send --to <requester> "<short report>". For a message from you, run dispatch send --to you "<short report>"; for a message from another agent, use that agent's name.`} A message with line breaks, quotes or backticks gets cut by the shell: write it to a file and send it with dispatch send --to <agent> --file <path> (dispatch spawn takes --task-file <path> the same way). Keep reports to other agents short. Use dispatch list to see the squad.${name === 'boss' ? ' Use dispatch tasks to see what each agent is doing instead of reading logs.' : ''}${name === 'boss' ? `\nAvailable providers (plan and notes are supplied by the user):\n${providerInfo}\nTemplate catalogue:\n${catalogue}\nUse dispatch spawn --template <name> --name <id> --task <task> and dispatch template create --name <name> --provider <provider> --description <description> --role <prompt>.${workflowsLib.catalogueFor(allWorkflows)}\n${SCHEDULE_HELP}${telegramHelp()}` : (tgOwner() === name ? telegramHelp(name) : '')}\nShared outputs: save every finished deliverable (images, video, audio, documents, exports) in ${path.join(workspace, '.dispatch', 'outputs', name)} so the user and the other agents can find it. Run dispatch outputs [agent] to see what the squad has produced and reuse those files by path. To show an image, video or audio in the chat, save it in that folder and write ![short description](<full path>) in your reply (images render and videos/audio play inline). Also download any image, video or audio produced by tools or plugins (MCP)—including URL-only results—into that folder and show it the same way.${host.customTools?.prompt() || ''}${mcpConfig.connected.length ? `\nConnected apps (MCP, signed in by the user in Dispatch): ${mcpConfig.connected.join(', ')}. Their tools come from the mcp_* servers; use them when a task involves these apps.\nLong plugin jobs (video, image, audio generation, exports): plugins do not call back when a job finishes, so do not end your turn while a job you started is running. Poll its status tool at a calm pace with a shell sleep between checks (about 30s, then 60s, then every 60-90s), and stop after about 20 minutes to tell your lead.\nFiles for plugins: remote plugins cannot read local files, so use the plugin's upload tool if it accepts file content (base64) or a URL. If it only accepts a public URL and none exists, ask the user instead of guessing.` : ''}${memoryText}`;
   if (!saved) { saved = { name, template, provider, model: template.model || '', enlistedBy }; operation.agents.push(saved); createChat(saved); resumeSession = false; } else if (!saved.chatId) { const previousSession = saved.sessionId; const chat = createChat(saved); if (previousSession) { chat.sessionId = previousSession; saved.sessionId = previousSession; writeChat(name, chat); saveOperation(); } }
   const account = accountsLib.PROVIDERS.includes(provider) ? accountFor(provider, saved.accountId) : null;
   if (account) saved.accountId = account.id;
@@ -464,6 +494,35 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
   if (provider === 'antigravity' && !demo) {
     const file = path.join(workspace, '.dispatch', 'antigravity-session.json');
     try { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify({ enableTerminalSandbox: false })); args.push('--settings', file); } catch {}
+    const agyMcpDir = path.join(workspace, '.dispatch', 'antigravity-mcp', name);
+    try {
+      fs.rmSync(agyMcpDir, { recursive: true, force: true });
+      if (mcpConfig.antigravityConfig) {
+        const pluginDir = path.join(agyMcpDir, '.agents', 'plugins', 'dispatch-mcp');
+        fs.mkdirSync(pluginDir, { recursive: true });
+        fs.writeFileSync(path.join(pluginDir, 'plugin.json'), JSON.stringify({ name: 'dispatch-mcp' }));
+        fs.writeFileSync(path.join(pluginDir, 'mcp_config.json'), JSON.stringify(mcpConfig.antigravityConfig));
+        args.push('--add-dir', agyMcpDir);
+      }
+    } catch {}
+  }
+  const geminiEnv = {};
+  if (provider === 'gemini' && !demo) {
+    const geminiFile = path.join(workspace, '.dispatch', `gemini-settings-${name}.json`);
+    try {
+      if (mcpConfig.geminiConfig) {
+        let base = {};
+        if (process.env.GEMINI_CLI_SYSTEM_SETTINGS_PATH && fs.existsSync(process.env.GEMINI_CLI_SYSTEM_SETTINGS_PATH)) {
+          try { base = JSON.parse(fs.readFileSync(process.env.GEMINI_CLI_SYSTEM_SETTINGS_PATH, 'utf8')); } catch {}
+        }
+        const merged = { ...base, mcpServers: { ...(base.mcpServers || {}), ...mcpConfig.geminiConfig.mcpServers } };
+        fs.mkdirSync(path.dirname(geminiFile), { recursive: true });
+        fs.writeFileSync(geminiFile, JSON.stringify(merged));
+        geminiEnv.GEMINI_CLI_SYSTEM_SETTINGS_PATH = geminiFile;
+      } else {
+        fs.rmSync(geminiFile, { force: true });
+      }
+    } catch {}
   }
   // The shared Codex daemon may run in another workspace with a different
   // environment. Each Dispatch agent needs its own bus and identity.
@@ -493,7 +552,7 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
   if (provider === 'claude') args.push('--append-system-prompt', prompt, resumeSession ? '--resume' : '--session-id', session);
   const resolved = demo ? null : resolveCommand(command);
   const accountEnv = account ? accountsLib.envFor(provider, account) : {};
-  const terminal = demo ? createDemoTerminal(name, workspace, bin()) : pty.spawn(resolved.file, [...resolved.args, ...args], { name: 'xterm-256color', cols: 100, rows: 30, cwd: workspace, env: { ...process.env, ...accountEnv, ...mcpConfig.env, ...(memoryOn && provider === 'claude' && mem.settings().disableProviderMemory ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' } : {}), DISPATCH_INDEX_INFO: codeIndexInfo || '', DISPATCH_AGENT: name, MYARMY_AGENT: name, DISPATCH_HOME: path.join(workspace, '.dispatch'), MYARMY_HOME: path.join(workspace, '.dispatch'), PATH: `${path.dirname(bin())}${path.delimiter}${process.env.PATH}` } });
+  const terminal = demo ? createDemoTerminal(name, workspace, bin()) : pty.spawn(resolved.file, [...resolved.args, ...args], { name: 'xterm-256color', cols: 100, rows: 30, cwd: workspace, env: { ...process.env, ...accountEnv, ...mcpConfig.env, ...geminiEnv, ...(memoryOn && provider === 'claude' && mem.settings().disableProviderMemory ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' } : {}), DISPATCH_INDEX_INFO: codeIndexInfo || '', DISPATCH_AGENT: name, MYARMY_AGENT: name, DISPATCH_HOME: path.join(workspace, '.dispatch'), MYARMY_HOME: path.join(workspace, '.dispatch'), PATH: `${path.dirname(bin())}${path.delimiter}${process.env.PATH}` } });
   const agent = { terminal, queue: [], output: '', lastOutput: Date.now(), atPrompt: false, template, session, enlistedBy, command, args, prompt, tracksTurns: direct, accountId: account?.id || null, accountDir: account?.dir || null }; processes.set(name, agent);
   // Transcript: live thinking, tool steps and interim text for the chat, the real turn state, and the reply itself.
   // agy is started without --conversation, so it always opens a new conversation: following the saved one watched
@@ -554,7 +613,7 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
   // Busy TUIs (spinners) send dozens of chunks a second per agent. Trimming the 200 KB buffer on every chunk copied
   // it each time and froze the main process (window could not even be moved) with many agents: trim only past 300 KB.
   terminal.onData(data => { agent.sawOutput = true; noteProgress(agent, data, name); if (provider === 'antigravity' && /[⠁-⣿]/.test(data)) agent.spinAt = Date.now(); agent.output += data; if (agent.output.length > 300000) agent.output = agent.output.slice(-200000);
-    agent.promptBuffer = ((agent.promptBuffer || '') + data).slice(-5000);
+    if (!(agent.attention === 'Plugin question' && !progressKey(data))) agent.promptBuffer = ((agent.promptBuffer || '') + data).slice(-5000);
     // A choice the CLI wants that has one safe answer (Codex: keep the model when the limit is near).
     const nudge = nudgeAnswer(provider, agent.promptBuffer);
     if (nudge && Date.now() - (agent.nudgedAt || 0) > 5000) { agent.nudgedAt = Date.now(); setTimeout(() => { if (processes.get(name) !== agent) return; agent.promptBuffer = ''; try { terminal.write(nudge); } catch {} }, 700); }
@@ -579,7 +638,7 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
     if (detected === 'Sign in' && !agent.signinTold) { agent.signinTold = true; tellSignIn(name, agent, provider, false); }
     // The prompt is gone from the screen (answered here, in the terminal, or by the CLI itself): the agent is free
     // again. Without this one "needs you" stuck for good and every later message waited in the queue.
-    if (!detected && (agent.awaitingAnswer || agent.attention || agent.held)) { agent.awaitingAnswer = false; agent.held = false; clearTimeout(agent.trustTimer); agent.trustTimer = null; if (agent.attention) setAttention(name, agent, null); else agent.blocked = false; if (!agent.ready) setTimeout(agent.initialize, 1000); else if (agent.queue.length) deliver(agent); }
+    if (!detected && (agent.awaitingAnswer || agent.attention || agent.held)) { agent.awaitingAnswer = false; agent.held = false; clearTimeout(agent.trustTimer); agent.trustTimer = null; if (agent.question?.kind === 'plugin') clearQuestion(name, agent); if (agent.attention) setAttention(name, agent, null); else agent.blocked = false; if (!agent.ready) setTimeout(agent.initialize, 1000); else if (agent.queue.length) deliver(agent); }
     if (detected && !agent.awaitingAnswer) {
       // A project already trusted in Dispatch (this tab's folder, .dispatch/trust.json): the CLI's trust menu is
       // answered quietly. Showing the dialog first only made it flash up and vanish. It shows if no answer fits.
@@ -588,7 +647,14 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
         const answer = trustAnswer(provider, agent.promptBuffer || '');
         if (answer) { clearTimeout(agent.trustTimer); agent.trustTimer = null; agent.promptBuffer = ''; agent.awaitingAnswer = true; typeKeys(agent, answer, 700); }
         else if (!agent.trustTimer) agent.trustTimer = setTimeout(() => { agent.trustTimer = null; if (processes.get(name) === agent && agent.held && !agent.awaitingAnswer) setAttention(name, agent, 'Trust folder'); }, 3000);
-      } else { setAttention(name, agent, detected); if (detected === 'Trust folder' && trusted()) answerTrust(agent); }
+      } else {
+        setAttention(name, agent, detected);
+        if (detected === 'Trust folder' && trusted()) answerTrust(agent);
+        if (detected === 'Plugin question' && agent.question?.kind !== 'plugin') {
+          const parsed = parsePluginQuestion(agent.promptBuffer);
+          showQuestion(name, agent, { id: `plugin-${Date.now()}`, kind: 'plugin', ...(parsed || { server: '', title: 'Plugin requests your input', message: '', fields: [], parseable: false, totalFields: 0 }) });
+        }
+      }
     }
     agent.lastOutput = Date.now(); const codexState = [...data.matchAll(/\x1b\]7501;state=(idle|working|done):app=codex/g)].at(-1); if (codexState) { agent.codexStateKnown = true; agent.atPrompt = codexState[1] !== 'working'; if (codexState[1] === 'working') agent.turnAt = Date.now(); if (shouldClearAttention(agent.attention, { codexState: codexState[1] })) clearAttention(name, agent); } else if (provider !== 'codex') agent.atPrompt = /(?:^|[\r\n])\s*[>\u276f$]\s*$/.test(agent.output.slice(-4000).replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')); if (agent.queue.length && (provider !== 'codex' || agent.atPrompt)) deliver(agent); terminalOut(name, data); });
   terminal.onExit(() => { agent.stopActivity?.(); clearQuestion(name, agent); if (processes.get(name) === agent) {
@@ -920,6 +986,13 @@ async function telegramIn(text, files = []) {
   // The owner is waiting on its own question: the message from the phone is the answer (a number picks an option).
   const asking = processes.get(owner)?.question;
   if (asking && !files.length && String(text).trim()) {
+    if (asking.kind === 'plugin') {
+      const t = String(text).trim().toLowerCase();
+      if (/^(?:accept|yes|ok)$/.test(t)) { await answerQuestion(owner, { action: 'accept' }, 'Telegram'); return; }
+      if (/^(?:decline|cancel|no)$/.test(t)) { await answerQuestion(owner, { action: 'decline' }, 'Telegram'); return; }
+      await telegram.send(`[${path.basename(workspace)}] ${owner} is waiting on a plugin form; tap Accept/Decline, reply "accept" / "decline", or answer it in Dispatch.`).catch(() => {});
+      return;
+    }
     if (asking.questions.length > 1) { await telegram.send(`[${path.basename(workspace)}] ${owner} asked several questions at once; answer them in Dispatch.`).catch(() => {}); return; }
     await answerQuestion(owner, [replyAsAnswer(asking.questions[0], text)], 'Telegram'); return;
   }
@@ -1746,7 +1819,7 @@ ipcMain.handle('attachments:save', async (_e, files) => {
   } catch (error) { await Promise.all(saved.map(file => fs.promises.unlink(file).catch(() => {}))); throw error; }
 });
 // A message typed in the chat while the agent waits on a one-question menu is the answer to it (a number picks).
-ipcMain.handle('send', (_e, to, text) => { const q = processes.get(to)?.question; if (q && q.questions.length === 1 && String(text || '').trim() && !/\n/.test(String(text).trim())) return answerQuestion(to, [replyAsAnswer(q.questions[0], text)]); return sendMessage(to, text); });
+ipcMain.handle('send', (_e, to, text) => { const q = processes.get(to)?.question; if (q && !q.kind && q.questions?.length === 1 && String(text || '').trim() && !/\n/.test(String(text).trim())) return answerQuestion(to, [replyAsAnswer(q.questions[0], text)]); return sendMessage(to, text); });
 ipcMain.handle('questions:list', () => Object.fromEntries([...processes].filter(([, a]) => a.question).map(([name, a]) => [name, a.question])));
 ipcMain.handle('question:answer', (_e, name, answers) => answerQuestion(String(name), answers));
 ipcMain.on('input', (_e, name, data) => { if (host.customTools?.input(name, data)) return; const shell = shells.get(name); if (shell) { if (!shell.exited) shell.terminal.write(data); return; } const agent = processes.get(name); if (!agent) return; if (agent.attention === 'Trust folder') agent.trustInteracted = true; if (agent.blocked && /[\r\n]/.test(data)) { agent.promptBuffer = ''; agent.awaitingAnswer = true; } agent.terminal.write(data); });

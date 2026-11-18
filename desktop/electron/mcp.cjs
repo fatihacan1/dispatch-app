@@ -2,7 +2,7 @@
 const path = require('path');
 // builtin: an MCP server shipped with Dispatch, run with Electron's own Node (no PATH lookup).
 const PRESETS = Object.freeze({ rustxng: { name: 'RustXNG', command: 'rustxng', args: ['mcp'] }, ddgs: { name: 'DDGS', command: 'ddgs', args: ['mcp'] }, comfyui: { name: 'ComfyUI', builtin: path.join(__dirname, 'mcp-comfy.cjs'), args: [] }, voicestudio: { name: 'VoiceStudio', builtin: path.join(__dirname, 'mcp-voice.cjs'), args: [] }, memory: { name: 'Memory', builtin: path.join(__dirname, 'mcp-memory.cjs'), args: [], bossOnly: true }, unreal: { name: 'Unreal', remote: true }, blender: { name: 'Blender', builtin: path.join(__dirname, 'mcp-blender.cjs'), args: [] }, servers: { name: 'Servers', builtin: path.join(__dirname, 'mcp-servers.cjs'), args: [], auto: true } });
-const SUPPORTED = ['claude', 'codex', 'opencode', 'local'];
+const SUPPORTED = ['claude', 'codex', 'opencode', 'local', 'antigravity', 'gemini'];
 let builtinEnv = () => ({});
 function setBuiltinEnv(fn) { builtinEnv = fn; }
 // remote: an HTTP MCP server Dispatch does not start (Unreal's runs inside the editor).
@@ -38,11 +38,14 @@ function configure(provider, template, resolve, localConfig, options = {}) {
   }
   const args = [];
   const config = localConfig ? JSON.parse(localConfig) : {};
-  if (provider === 'claude' && Object.keys(servers).length) args.push('--mcp-config', JSON.stringify({ mcpServers: Object.fromEntries(Object.entries(servers).map(([id, s]) => [id, s.url ? { type: 'http', url: s.url } : s])) }));
+  const hasServers = Object.keys(servers).length > 0;
+  if (provider === 'claude' && hasServers) args.push('--mcp-config', JSON.stringify({ mcpServers: Object.fromEntries(Object.entries(servers).map(([id, s]) => [id, s.url ? { type: 'http', url: s.url } : s])) }));
   if (provider === 'codex') for (const [id, server] of Object.entries(servers)) if (server.url) args.push('-c', `mcp_servers.${id}={url=${JSON.stringify(server.url)}}`); else args.push('-c', `mcp_servers.${id}={command=${JSON.stringify(server.command)},args=[${server.args.map(x => JSON.stringify(x)).join(',')}]${server.env ? ',env={' + Object.entries(server.env).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(',') + '}' : ''}}`);
   if (provider === 'opencode' || provider === 'local') {
-    if (Object.keys(servers).length) config.mcp = Object.fromEntries(Object.entries(servers).map(([id, server]) => [id, server.url ? { type: 'remote', url: server.url, enabled: true } : { type: 'local', command: [server.command, ...server.args], enabled: true, ...(server.env ? { environment: server.env } : {}) }]));
+    if (hasServers) config.mcp = Object.fromEntries(Object.entries(servers).map(([id, server]) => [id, server.url ? { type: 'remote', url: server.url, enabled: true } : { type: 'local', command: [server.command, ...server.args], enabled: true, ...(server.env ? { environment: server.env } : {}) }]));
   }
-  return { args, env: Object.keys(config).length ? { OPENCODE_CONFIG_CONTENT: JSON.stringify(config) } : {}, ids, connected };
+  const antigravityConfig = provider === 'antigravity' && hasServers ? { mcpServers: Object.fromEntries(Object.entries(servers).map(([id, s]) => [id, s.url ? { url: s.url } : s])) } : null;
+  const geminiConfig = provider === 'gemini' && hasServers ? { mcpServers: Object.fromEntries(Object.entries(servers).map(([id, s]) => [id, s.url ? { httpUrl: s.url } : s])) } : null;
+  return { args, env: Object.keys(config).length ? { OPENCODE_CONFIG_CONTENT: JSON.stringify(config) } : {}, ids, connected, antigravityConfig, geminiConfig };
 }
 module.exports = { PRESETS, selected, configure, setBuiltinEnv, setRemoteUrl };

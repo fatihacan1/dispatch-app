@@ -38,6 +38,12 @@ function signInPrompt(t, { provider, hadTurn } = {}) {
   }
   return false;
 }
+// Claude Code's MCP elicitation form: "MCP server “name” requests your input" + footer actions.
+function pluginQuestionPrompt(t) {
+  return /mcp server ["“][^"”\n]{1,80}["”] requests your input/.test(t)
+    && /esc to cancel/.test(t)
+    && (/accept\s+decline/.test(t) || /↑\/↓ to navigate/.test(t));
+}
 function attentionFrom(text, opts) {
   // agy 1.5.10 greets with "You are currently not signed in. Signing in..." and then signs in by itself. A real
   // logout makes it quit with "not logged into Antigravity" (engine onExit), so this greeting is never a login screen.
@@ -46,6 +52,8 @@ function attentionFrom(text, opts) {
   if (/trust (?:the files in )?this (?:folder|workspace|directory|project)\?|yes, i trust this folder|accessing\s*workspace.*safety\s*check/.test(t)) return 'Trust folder';
   // Claude's AskUserQuestion menu (and its "review your answers" step): the agent waits for a choice.
   if ((/chat about this/.test(t) && /enter to select/.test(t) && /arrow keys to navigate/.test(t)) || /ready to submit your answers\?/.test(t)) return 'Question';
+  // MCP elicitation form from a plugin/server while a tool call is waiting for user input.
+  if (pluginQuestionPrompt(t)) return 'Plugin question';
   // A real login screen, not an agent that merely writes about logins while it works on auth code.
   if (signInPrompt(t, opts)) return 'Sign in';
   if (approvalPrompt(t)) return 'Approve command';
@@ -54,7 +62,7 @@ function attentionFrom(text, opts) {
   return null;
 }
 // Prompts that wait for a key: nothing may be pasted into them. Anything else is only shown to the user.
-const BLOCKING = ['Trust folder', 'Sign in', 'Approve command', 'Question'];
+const BLOCKING = ['Trust folder', 'Sign in', 'Approve command', 'Question', 'Plugin question'];
 // If the CLI is clearly back at its prompt or working, a stale attention must not hold the queue forever.
 function shouldClearAttention(attention, { turn, hasSteps, codexState } = {}) {
   // Only a Sign in can be proven stale by the transcript. Claude and agy write the tool step BEFORE they show the
@@ -92,4 +100,83 @@ function approvalSummary(text) {
   const before = t.slice(Math.max(0, last.index - 300), last.index).split(/[❯›●]|\(esc\)/).pop().trim();
   return `${before}${before ? '\n' : ''}${last[0].trim()}`.slice(-400);
 }
-module.exports = { approvalPrompt, approvalSummary, progressKey, attentionFrom, shouldClearAttention, trustAnswer, nudgeAnswer, BLOCKING, normalize };
+// Parse Claude Code's MCP elicitation form from terminal output into title, message, fields, and parseability.
+function parsePluginQuestion(text) {
+  const lines = String(text || '')
+    .replace(/\x1b\[(\d+);(\d+)H/g, '\n')
+    .replace(/\x1b\[\d*C/g, ' ')
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '')
+    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '')
+    .split(/[\r\n]+/)
+    .map(l => l.replace(/[─-╿]/g, ' ').trim())
+    .filter(l => l && l !== '●');
+  const headRe = /^MCP server ["“]([^"”\n]{1,80})["”] requests your input$/i;
+  let start = -1, server = '';
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const m = headRe.exec(lines[i]);
+    if (m) { start = i; server = m[1].trim(); break; }
+  }
+  if (start < 0) return null;
+  const title = lines[start];
+  const msgLines = [], fields = [];
+  let hasMore = false, moreDown = 0, unexpandedEnum = false;
+  for (let i = start + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^(?:>\s*)?Accept\b/i.test(line) || /^Esc to cancel\b/i.test(line)) break;
+    const more = /^([↑↓])\s+(\d+)\s+more$/i.exec(line);
+    if (more) { hasMore = true; if (more[1] === '↓') moreDown += Number(more[2]); continue; }
+    const fm = /^(?:>\s*)?(√\s*)?(\*\s*)?([^:\n]{1,80}):\s*(.*)$/.exec(line);
+    if (fm && (fm[4].trim() !== '' || fm[1] || fm[2]) && (!fields.length || fm[1] || fm[2] || /^(?:not set|type something…|\[[ ×x]\]|▸|-?\d)/i.test(fm[4].trim()) || /\b(?:string|boolean|integer|number|enum)\b/i.test(fm[3]))) {
+      const hasValue = !!fm[1], required = !!fm[2], label = fm[3].trim(), rawVal = fm[4].trim();
+      const unset = /^(?:not set|type something…)$/i.test(rawVal);
+      let kind = 'text', value = unset ? '' : rawVal;
+      if (/^\[[ ×x]\]$/i.test(rawVal) || (unset && /\bboolean\b/i.test(label))) {
+        kind = 'boolean'; value = /^\[[×x]\]$/i.test(rawVal);
+      } else if (rawVal.startsWith('▸')) {
+        kind = 'enum'; value = rawVal.replace(/^▸\s*/, '').trim(); unexpandedEnum = true;
+      } else if (/\b(?:integer|number)\b/i.test(label) || (hasValue && /^-?\d+(?:\.\d+)?$/.test(rawVal))) {
+        kind = 'number';
+      }
+      fields.push({ label, description: '', kind, required, hasValue, value });
+      continue;
+    }
+    if (!fields.length) msgLines.push(line);
+    else if (!fields[fields.length - 1].description) {
+      const prev = fields[fields.length - 1];
+      prev.description = line;
+      if (prev.kind === 'text' && !prev.hasValue && /\bboolean\b/i.test(line)) { prev.kind = 'boolean'; prev.value = false; }
+    }
+  }
+  const message = msgLines.join(' ');
+  const parseable = fields.length > 0 && !hasMore && !unexpandedEnum;
+  return { server, title, message, fields, parseable, totalFields: fields.length + moreDown };
+}
+// Key sequence to answer an MCP elicitation form from field 0.
+function pluginQuestionKeys(pq, response) {
+  const action = response?.action === 'decline' ? 'decline' : 'accept';
+  if (action === 'decline') return '\x1b';
+  const DOWN = '\x1b[B';
+  if (!pq?.parseable || !response?.values) {
+    const steps = Math.max(0, Number(pq?.totalFields) || 0);
+    return DOWN.repeat(steps) + '\r';
+  }
+  const values = response.values || {};
+  let keys = '';
+  for (let i = 0; i < pq.fields.length; i++) {
+    const f = pq.fields[i], next = values[i];
+    if (next !== undefined) {
+      if (f.kind === 'boolean') {
+        if (Boolean(next) !== Boolean(f.value)) keys += ' ';
+      } else {
+        const s = String(next ?? '').replace(/[\r\n\t\x1b]+/g, ' ').trim();
+        if (s !== String(f.value ?? '')) {
+          if (f.hasValue) keys += '\x7f';
+          if (s) keys += s;
+        }
+      }
+    }
+    keys += DOWN;
+  }
+  return keys + '\r';
+}
+module.exports = { approvalPrompt, approvalSummary, progressKey, attentionFrom, shouldClearAttention, trustAnswer, nudgeAnswer, parsePluginQuestion, pluginQuestionKeys, BLOCKING, normalize };

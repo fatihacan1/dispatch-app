@@ -125,3 +125,36 @@ test('progress key ignores spinner redraws and elapsed timers, but sees tokens a
  assert.equal(progressKey('\x1b[?25l\x1b[2;3H\u280b'), '');
  assert.ok(progressKey('Read 3 files'));
 });
+test('claude MCP elicitation (Plugin question): detects real form, ignores ordinary text, parses fields & keys', () => {
+ const { BLOCKING, parsePluginQuestion, pluginQuestionKeys, shouldClearAttention } = require('./attention.cjs');
+ const captured = '─────────────────────────────────────────────────────────────────\x1b[1m\x1b[10;3HMCP server “everything” requests your input\x1b[m\x1b[K\x1b[12;3HPlease provide inputs for the following fields:\x1b[m\x1b[14;3H>\x1b[1C*\x1b[1m\x1b[1CString\x1b[22m: \x1b[m\x1b[2mType something…\x1b[22m\x1b[15;3H     \x1b[38;2;153;153;153mYour full, legal name\x1b[m\x1b[17;3H   Boolean:\x1b[1Cnot set\x1b[m\x1b[18;3H     Agree to the terms and conditions\x1b[m\x1b[20;3H  √\x1b[1CString\x1b[1Cwith\x1b[1Cdefault:\x1b[1CIt\x1b[1Cwas\x1b[1Ca\x1b[1Cdark\x1b[1Cand\x1b[1Cstormy\x1b[1Cnight.\x1b[21;3H     Favorite first line of a story\x1b[m\x1b[32;3H  √\x1b[1CInteger:\x1b[1C42\x1b[33;3H     │ Your favorite integer\x1b[m\x1b[38;5H↓ 5 more\x1b[39;3H  Accept    Decline\r\n\n  Esc to cancel · ↑/↓ to navigate · Backspace to unset';
+ assert.equal(attentionFrom(captured), 'Plugin question');
+ assert.ok(BLOCKING.includes('Plugin question'));
+ assert.equal(shouldClearAttention('Plugin question', { turn: true }), false);
+ assert.equal(shouldClearAttention('Plugin question', { turn: false }), true);
+
+ // Ordinary text mentioning MCP elicitation must never trigger
+ assert.equal(attentionFrom('When an MCP server requests your input, Claude shows Accept and Decline.'), null);
+ assert.equal(attentionFrom('MCP server "everything" requests your input in the docs.'), null);
+
+ // Captured form has "↓ 5 more", so parseable=false but totalFields=9 (4 visible + 5 more)
+ const parsed = parsePluginQuestion(captured);
+ assert.equal(parsed.server, 'everything');
+ assert.equal(parsed.message, 'Please provide inputs for the following fields:');
+ assert.equal(parsed.parseable, false);
+ assert.equal(parsed.totalFields, 9);
+ assert.equal(parsed.fields.length, 4);
+ assert.equal(parsed.fields[0].required, true);
+ assert.equal(parsed.fields[1].kind, 'boolean');
+ assert.equal(parsed.fields[3].kind, 'number');
+ assert.equal(pluginQuestionKeys(parsed, { action: 'decline' }), '\x1b');
+ assert.equal(pluginQuestionKeys(parsed, { action: 'accept' }), '\x1b[B'.repeat(9) + '\r');
+
+ // Small form without scroll or unexpanded enums is parseable
+ const small = 'MCP server “demo” requests your input\r\nEnter details:\r\n> * Name: Type something…\r\n  Your name\r\n  Confirm: not set\r\n  Boolean flag\r\n  √ Count: 7\r\n  How many\r\n  Accept    Decline\r\nEsc to cancel · ↑/↓ to navigate · Backspace to unset';
+ const pSmall = parsePluginQuestion(small);
+ assert.equal(pSmall.parseable, true);
+ assert.equal(pSmall.fields.length, 3);
+ assert.equal(pSmall.fields[1].kind, 'boolean');
+ assert.equal(pluginQuestionKeys(pSmall, { action: 'accept', values: { 0: 'Alice', 1: true, 2: '10' } }), 'Alice\x1b[B \x1b[B\x7f10\x1b[B\r');
+});

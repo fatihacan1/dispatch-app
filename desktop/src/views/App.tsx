@@ -606,7 +606,7 @@ export function App() {
     try {
       // The agent waits on a one-question menu: what is typed here answers it ("2" picks the second option).
       const asking = questions[selected];
-      if (asking && asking.questions.length === 1 && !files.length && !body.trim().includes("\n")) {
+      if (asking && !asking.kind && asking.questions?.length === 1 && !files.length && !body.trim().includes("\n")) {
         const q = asking.questions[0], t = body.trim();
         const nums = /^\d+(\s*[,\s]\s*\d+)*$/.test(t) ? t.split(/[,\s]+/).map(n => Number(n) - 1).filter(p => p >= 0 && p < q.options.length) : [];
         await window.army.questions.answer(selected, [nums.length ? { picks: q.multiSelect ? nums : nums.slice(0, 1) } : { picks: [], other: t }]);
