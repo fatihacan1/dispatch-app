@@ -33,11 +33,63 @@ function inlineList(p: string): { lead: string; items: string[] } | null {
 // "![alt](D:\path\shot.png)" or "![alt](<path with spaces.png>)" on its own line: an image an agent shows from its outputs.
 // Local paths only; the main process decides which files may be read (electron/chat-image.cjs).
 const IMAGE = /^\s*!\[([^\]\n]*)\]\((.+)\)\s*$/;
+const LINK = /^\s*\[([^\]\n]*)\]\((.+)\)\s*$/;
+const VIDEO_EXT = /\.(mp4|webm|mov|m4v)$/i;
+const AUDIO_EXT = /\.(mp3|wav|ogg|m4a|flac)$/i;
+const LOCAL_PATH = /^(?:[a-z]:[\\/]|\\\\|\/|\.\.?[\\/])/i;
+
+function mediaExtKind(target: string): "video" | "audio" | null {
+  if (VIDEO_EXT.test(target)) return "video";
+  if (AUDIO_EXT.test(target)) return "audio";
+  return null;
+}
+
+export function mediaAt(line: string): { kind: "video" | "audio"; alt: string; src: string; remote: boolean } | null {
+  let alt = "", raw = "";
+  const m = line.match(IMAGE) || line.match(LINK);
+  if (m) {
+    alt = m[1].trim();
+    raw = m[2].trim().replace(/^<(.+)>$/, "$1").trim();
+  } else {
+    const t = line.trim();
+    if (!t) return null;
+    if (t.startsWith("<") && t.endsWith(">")) raw = t.slice(1, -1).trim();
+    else if (/^https:\/\//i.test(t) && !/\s/.test(t)) raw = t;
+    else if (LOCAL_PATH.test(t) || (!/\s/.test(t) && /[\\/]/.test(t))) raw = t;
+    else return null;
+  }
+  if (!raw) return null;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) || /^data:/i.test(raw)) {
+    if (!/^https:\/\//i.test(raw)) return null;
+    try {
+      const kind = mediaExtKind(new URL(raw).pathname);
+      return kind ? { kind, alt, src: raw, remote: true } : null;
+    } catch { return null; }
+  }
+  const kind = mediaExtKind(raw);
+  return kind ? { kind, alt, src: raw, remote: false } : null;
+}
+
 export function imageAt(line: string): { alt: string; src: string } | null {
   const m = line.match(IMAGE); if (!m) return null;
   const src = m[2].trim().replace(/^<(.+)>$/, "$1").trim();
-  if (!src || /^[a-z][a-z0-9+.-]*:\/\//i.test(src) || /^data:/i.test(src)) return null;
+  if (!src || /^[a-z][a-z0-9+.-]*:\/\//i.test(src) || /^data:/i.test(src) || mediaExtKind(src)) return null;
   return { alt: m[1].trim(), src };
+}
+function ChatMedia({ kind, alt, src, remote }: { kind: "video" | "audio"; alt: string; src: string; remote: boolean }) {
+  const [url, setUrl] = useState<string | null | undefined>(remote ? src : undefined);
+  useEffect(() => {
+    if (remote) { setUrl(src); return; }
+    let on = true; const api = (window as any).army?.chatImage;
+    if (!api?.media) { setUrl(null); return; }
+    api.media(src).then((res: { url?: string } | null) => { if (on) setUrl(res?.url || null); }).catch(() => { if (on) setUrl(null); });
+    return () => { on = false; };
+  }, [src, remote]);
+  const name = src.split(/[\\/]/).pop()?.split("?")[0] || src;
+  if (!url) return <p className="md-image-missing">{url === undefined ? `Loading ${kind}` : `${kind === "video" ? "Video" : "Audio"} not available`}: {alt || name}</p>;
+  return kind === "video"
+    ? <video className="md-video" src={url} controls preload="metadata" title={alt || name} />
+    : <audio className="md-audio" src={url} controls title={alt || name} />;
 }
 function ChatImage({ alt, src }: { alt: string; src: string }) {
   const [url, setUrl] = useState<string | null | undefined>(undefined);
@@ -73,6 +125,8 @@ export function Markdown({ text }: { text: string }) {
       const code = body.join("\n");
       blocks.push(<div className="md-code" key={key()}><div className="md-code-head"><span>{fence[1] || "code"}</span><CopyButton text={code} label="Copy code" showLabel /></div><pre><code>{code}</code></pre></div>); continue;
     }
+    const media = mediaAt(line);
+    if (media) { blocks.push(<ChatMedia key={key()} {...media} />); i++; continue; }
     const img = imageAt(line);
     if (img) { blocks.push(<ChatImage key={key()} alt={img.alt} src={img.src} />); i++; continue; }
     if (/^\s*([-*_])\s*(\1\s*){2,}$/.test(line)) { blocks.push(<hr key={key()} />); i++; continue; }
@@ -106,7 +160,7 @@ export function Markdown({ text }: { text: string }) {
       blocks.push(<List key={key()}>{items.map((t, j) => <li key={j}>{inline(t, `l${n}-${j}`)}</li>)}</List>); continue;
     }
     const para: string[] = [];
-    while (i < lines.length && lines[i].trim() && !imageAt(lines[i]) && !/^\s*```/.test(lines[i]) && !/^#{1,4}\s/.test(lines[i]) && !bullet.test(lines[i]) && !numbered.test(lines[i]) && !/^\s*>/.test(lines[i]) && !(para.length && tableAt(lines, i))) para.push(lines[i++]);
+    while (i < lines.length && lines[i].trim() && !mediaAt(lines[i]) && !imageAt(lines[i]) && !/^\s*```/.test(lines[i]) && !/^#{1,4}\s/.test(lines[i]) && !bullet.test(lines[i]) && !numbered.test(lines[i]) && !/^\s*>/.test(lines[i]) && !(para.length && tableAt(lines, i))) para.push(lines[i++]);
     const p = para.join("\n");
     const list = inlineList(p.replace(/\n/g, " "));
     if (list) {

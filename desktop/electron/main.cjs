@@ -1,14 +1,20 @@
 // The app shell: one window with up to five project tabs. Each tab is its own renderer (WebContentsView) with its
 // own engine (engine.cjs: workspace, operation, agents), so a project's agents keep working while another tab is in
 // front. Global pieces live here: the window, tray, voice shortcut, Telegram bot, updater and .dispatch files.
-const { app, BaseWindow, WebContentsView, ipcMain, dialog, nativeImage, shell } = require('electron');
+const { app, BaseWindow, WebContentsView, ipcMain, dialog, nativeImage, shell, protocol } = require('electron');
 // Must run before any ipcMain.handle: it records the handlers so another computer can call them (remote mode).
 const remote = require('./remote.cjs')(ipcMain, dialog);
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
+const { Readable } = require('node:stream');
+const chatImage = require('./chat-image.cjs');
 const storage = require('./storage.cjs');
 const createEngine = require('./engine.cjs');
+
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'dispatch-media', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
+]);
 // Dispatch started from inside a Claude Code session (npm run dev in its terminal) inherits that session's markers.
 // An agent that sees them thinks it is a child session and stops saving its transcript: no live steps, no turn
 // state, no resume. Agents must start as sessions of their own.
@@ -364,6 +370,42 @@ app.on('open-file', (e, file) => { e.preventDefault(); if (file.toLowerCase().en
 pendingPack = packFromArgv(process.argv);
 
 app.whenReady().then(() => {
+  // Stream local chat video/audio over dispatch-media:// with byte-range support and strict root/type checks.
+  protocol.handle('dispatch-media', request => {
+    let filePath = '';
+    try {
+      const u = new URL(request.url);
+      if (u.hostname === 'local') filePath = u.searchParams.get('path') || '';
+    } catch {}
+    const roots = tabs.flatMap(t => { try { return t.engine?.chatMediaRoots?.() || []; } catch { return []; } });
+    const info = chatImage.mediaInfo(filePath, roots);
+    if (!info) return new Response('Not found', { status: 404 });
+    const rangeHeader = request.headers.get('range');
+    if (rangeHeader) {
+      const range = chatImage.parseRange(rangeHeader, info.size);
+      if (!range) return new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${info.size}` } });
+      const length = range.end - range.start + 1;
+      const stream = fs.createReadStream(info.path, { start: range.start, end: range.end });
+      return new Response(Readable.toWeb(stream), {
+        status: 206,
+        headers: {
+          'Content-Type': info.mime,
+          'Content-Length': String(length),
+          'Content-Range': `bytes ${range.start}-${range.end}/${info.size}`,
+          'Accept-Ranges': 'bytes',
+        },
+      });
+    }
+    const stream = fs.createReadStream(info.path);
+    return new Response(Readable.toWeb(stream), {
+      status: 200,
+      headers: {
+        'Content-Type': info.mime,
+        'Content-Length': String(info.size),
+        'Accept-Ranges': 'bytes',
+      },
+    });
+  });
   // Music scene visualizer: getDisplayMedia hands the page the system sound (loopback); the screen video track is dropped by the page.
   try {
     const { session, desktopCapturer } = require('electron');

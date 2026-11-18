@@ -75,6 +75,7 @@ const CATALOG = Object.freeze([
   { id: 'posthog', name: 'PostHog', group: 'data', desc: 'Product analytics, feature flags and session insights.', url: 'https://mcp.posthog.com/mcp', auth: 'oauth' },
   { id: 'spline', name: 'Spline', domain: 'spline.design', group: 'media', desc: '3D scenes, objects, materials and exports in Spline.', url: 'https://mcp.spline.design/mcp', auth: 'oauth' },
   { id: 'runway', name: 'Runway', domain: 'runwayml.com', group: 'media', desc: 'Generate and edit AI video and images in Runway.', url: 'https://mcp.runwayml.com/mcp', auth: 'oauth' },
+  { id: 'higgsfield', name: 'Higgsfield', domain: 'higgsfield.ai', group: 'media', desc: 'Generate images and videos with Higgsfield models.', url: 'https://mcp.higgsfield.ai/mcp', auth: 'oauth' },
   { id: 'pika', name: 'Pika', domain: 'pika.art', group: 'media', desc: 'Create characters, animations and video clips in Pika.', url: 'https://mcp.pika.art/mcp', auth: 'none' },
   { id: 'vimeo', name: 'Vimeo', group: 'media', desc: 'Videos, folders, transcripts and analytics in Vimeo.', url: 'https://mcp.vimeo.com/mcp', auth: 'oauth' },
   { id: 'mux', name: 'Mux', domain: 'mux.com', group: 'media', desc: 'Video assets, live streams and playback metrics in Mux.', url: 'https://mcp.mux.com/mcp', auth: 'oauth' },
