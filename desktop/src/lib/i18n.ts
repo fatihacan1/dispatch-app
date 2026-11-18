@@ -6,7 +6,7 @@ const KEY = "dispatch.lang";
 const TR: Record<string, string> = {
   // Navigation
   "Home": "Ana sayfa", "Chat": "Sohbet", "Operation": "Operasyon", "Overview": "Genel bakış", "Messages": "Mesajlar", "Tasks": "Görevler",
-  "Templates": "Şablonlar", "Agent templates": "Ajan şablonları", "Providers": "Sağlayıcılar", "Tools": "Araçlar", "Plugins": "Eklentiler",
+  "Templates": "Şablonlar", "Agent templates": "Ajan şablonları", "Providers": "Sağlayıcılar", "Extensions": "Uzantılar", "Tools": "Araçlar", "Plugins": "Eklentiler",
   "Brain": "Beyin", "Skills": "Yetenekler", "Memory": "Hafıza", "Boss memory": "Boss hafızası", "Share": "Paylaş", "Export and import": "Dışa ve içe aktar",
   "Servers": "Sunucular", "Settings": "Ayarlar", "Terminal": "Terminal", "Files": "Dosyalar", "Team": "Ekip", "Teams": "Ekipler",
   // Settings

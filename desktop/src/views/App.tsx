@@ -161,7 +161,7 @@ const NAV: [string, string, string, React.ComponentType<React.SVGProps<SVGSVGEle
   ["agent", "Chat", "Operation", ChatBubbleLeftRightIcon],
   ["overview", "Overview", "Overview", Squares2X2Icon],
   ["providers", "Providers", "Providers", CpuChipIcon],
-  ["tools", "Tools", "Tools", WrenchScrewdriverIcon],
+  ["tools", "Extensions", "Extensions", WrenchScrewdriverIcon],
   ["brain", "Brain", "Brain", AcademicCapIcon],
   ["share", "Share", "Export and import", ArrowsRightLeftIcon],
   ["servers", "Servers", "Servers", ServerStackIcon],

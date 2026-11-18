@@ -14,7 +14,7 @@ process.stdin.once('data', d => { console.log(String(d).trim() === 'y' ? 'SIGNED
   let app = await electron.launch({ args: [path.resolve('electron/main.cjs'), '--demo'], cwd: home, env });
   try {
     let page = await app.firstWindow();
-    await page.getByRole('button', { name: 'Tools' }).first().click();
+    await page.getByRole('button', { name: 'Extensions' }).first().click();
     await page.getByRole('button', { name: 'Add a tool' }).click();
     const form = page.locator('.custom-tool-form');
     await expect(page.locator('.local-form-collapse')).toHaveClass(/open/);
@@ -42,7 +42,7 @@ process.stdin.once('data', d => { console.log(String(d).trim() === 'y' ? 'SIGNED
     expect(prompt).toContain('image-api.log');
     expect(prompt).toContain('read /help first');
     // Edit keeps the id; Stop ends it.
-    await page.getByRole('button', { name: 'Tools' }).first().click();
+    await page.getByRole('button', { name: 'Extensions' }).first().click();
     await row.getByRole('button', { name: 'Stop' }).click();
     await expect(row.getByText('Stopped')).toBeVisible();
     await app.close();
@@ -50,7 +50,7 @@ process.stdin.once('data', d => { console.log(String(d).trim() === 'y' ? 'SIGNED
     app = await electron.launch({ args: [path.resolve('electron/main.cjs'), '--demo'], cwd: home, env });
     page = await app.firstWindow();
     await expect.poll(() => page.evaluate(() => window.army.customTools.list().then(l => l[0]?.running)), { timeout: 20000 }).toBe(true);
-    await page.getByRole('button', { name: 'Tools' }).first().click();
+    await page.getByRole('button', { name: 'Extensions' }).first().click();
     await page.locator('.custom-tool-row').getByRole('button', { name: 'Remove Image API' }).click();
     await page.getByRole('dialog').getByRole('button', { name: 'Remove' }).click();
     await expect(page.locator('.custom-tool-row')).toHaveCount(0);
