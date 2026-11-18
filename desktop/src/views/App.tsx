@@ -15,8 +15,8 @@ import { CopyButton } from "../components/CopyButton";
 import { MentionMenu, mentionItems, rankMentions, type MentionItem } from "../components/MentionMenu";
 import { Avatar } from "../components/Avatar";
 import {
-  ChatBubbleLeftRightIcon, ChevronDownIcon, Cog6ToothIcon, CpuChipIcon, ServerStackIcon, DocumentIcon, DocumentTextIcon, EnvelopeIcon,
-  CheckIcon, CodeBracketIcon, FolderIcon, LinkIcon, MicrophoneIcon, HomeIcon, MagnifyingGlassIcon, PaperAirplaneIcon, PaperClipIcon, PlusIcon, Squares2X2Icon, StopIcon, CubeIcon, WrenchScrewdriverIcon, PuzzlePieceIcon, TrashIcon, XMarkIcon, BookOpenIcon, ArrowsRightLeftIcon, CircleStackIcon, BeakerIcon, ViewColumnsIcon,
+  AcademicCapIcon, ChatBubbleLeftRightIcon, ChevronDownIcon, Cog6ToothIcon, CpuChipIcon, ServerStackIcon, DocumentIcon,
+  CheckIcon, CodeBracketIcon, FolderIcon, LinkIcon, MicrophoneIcon, HomeIcon, MagnifyingGlassIcon, PaperAirplaneIcon, PaperClipIcon, PlusIcon, Squares2X2Icon, StopIcon, CubeIcon, WrenchScrewdriverIcon, TrashIcon, XMarkIcon, ArrowsRightLeftIcon, BeakerIcon,
 } from "@heroicons/react/16/solid";
 import { ArrowDownIcon } from "@heroicons/react/20/solid";
 import { Skills } from "./Skills";
@@ -160,18 +160,26 @@ const NAV: [string, string, string, React.ComponentType<React.SVGProps<SVGSVGEle
   ["home", "Home", "Home", HomeIcon],
   ["agent", "Chat", "Operation", ChatBubbleLeftRightIcon],
   ["overview", "Overview", "Overview", Squares2X2Icon],
-  ["comms", "Messages", "Messages", EnvelopeIcon],
-  ["tasks", "Tasks", "Task board", ViewColumnsIcon],
-  ["templates", "Templates", "Agent templates", DocumentTextIcon],
   ["providers", "Providers", "Providers", CpuChipIcon],
   ["tools", "Tools", "Tools", WrenchScrewdriverIcon],
-  ["mcp", "MCP", "MCP apps", PuzzlePieceIcon],
-  ["skills", "Skills", "Skills", BookOpenIcon],
-  ["memory", "Memory", "Boss memory", CircleStackIcon],
+  ["brain", "Brain", "Brain", AcademicCapIcon],
   ["share", "Share", "Export and import", ArrowsRightLeftIcon],
   ["servers", "Servers", "Servers", ServerStackIcon],
   ["settings", "Settings", "Settings", Cog6ToothIcon],
 ];
+
+function PageSwitch<T extends string>({ label, value, options, onChange }: { label: string; value: T; options: readonly [T, string][]; onChange: (v: T) => void }) {
+  return (
+    <div className="page-switch">
+      <div className="tabs page-tabs" role="tablist" aria-label={label} data-active={value}>
+        {options.map(([id, text]) => (
+          <button key={id} type="button" role="tab" aria-selected={value === id} className="tab" onClick={() => onChange(id)}>{text}</button>
+        ))}
+        <span className="tab-indicator" aria-hidden="true" />
+      </div>
+    </div>
+  );
+}
 
 export function App() {
   const [operations, setOperations] = useState<any[]>([]);
@@ -208,6 +216,9 @@ export function App() {
   const [dismissAgent, setDismissAgent] = useState<{ name: string; working: boolean } | null>(null);
   const [selected, setSelected] = useState("boss");
   const [view, setView] = useState("agent");
+  const [overviewTab, setOverviewTab] = useState<"team" | "tasks" | "messages">("team");
+  const [toolsTab, setToolsTab] = useState<"tools" | "plugins">("tools");
+  const [brainTab, setBrainTab] = useState<"templates" | "skills" | "memory">("templates");
   const [providerFocus, setProviderFocus] = useState("");
   const [packFile, setPackFile] = useState<string | null>(null);
   // A .dispatch file opened from the OS (double-click, or dropped onto the app icon) goes to Share > Import.
@@ -571,7 +582,7 @@ export function App() {
   const [homeTeam, setHomeTeam] = useState("");
   useEffect(() => { const load = () => window.army.teams.list().then(setTeams).catch(() => {}); void load(); return window.army.on("teams-changed", load); }, [workspace]);
   const [tasks, setTasks] = useState<TaskCard[]>([]);
-  useEffect(() => { void window.army.tasks.list().then(setTasks).catch(() => {}); return window.army.on("tasks", (list: TaskCard[]) => setTasks(list)); }, [workspace, view === "tasks"]);
+  useEffect(() => { void window.army.tasks.list().then(setTasks).catch(() => {}); return window.army.on("tasks", (list: TaskCard[]) => setTasks(list)); }, [workspace, view === "overview" && overviewTab === "tasks"]);
   const tasksNeedLook = needsLook(tasks);
   async function start(teamFile?: string) {
     try {
@@ -707,6 +718,12 @@ export function App() {
   const team: AgentInfo[] = agents.map(a => { const [tone, status] = agentState(a); return { name: a, provider: agentProvider(a), model: agentTemplates[a]?.model || models[agentProvider(a)] || "default", enlistedBy: enlistedBy[a], tone, status }; });
   const go = (id: string) => {
     if (id === "home") { setView("home"); window.army.operations.list().then(setOperations); }
+    else if (id === "tasks") { setOverviewTab("tasks"); setView("overview"); }
+    else if (id === "comms" || id === "messages") { setOverviewTab("messages"); setView("overview"); }
+    else if (id === "mcp" || id === "plugins") { setToolsTab("plugins"); setView("tools"); }
+    else if (id === "templates") { setBrainTab("templates"); setView("brain"); }
+    else if (id === "skills") { setBrainTab("skills"); setView("brain"); }
+    else if (id === "memory") { setBrainTab("memory"); setView("brain"); }
     else setView(id);
   };
   useEffect(() => window.army.on("tray-nav", ({ view: v, workspace: w }: { view?: string; workspace?: string }) => { if (v) go(v); else if (w) void openWorkspace(w); }));
@@ -819,10 +836,11 @@ export function App() {
     const wait = waitForResponsive({ ready: (window as any).army.ready, onStatus: setBootStatus, timeoutMs: 20000 });
     void wait.promise.then(() => hideBoot());
   }, [bootReady, bootResuming, onAgentPage, ide, office, needsFolder]);
-  const showSidebar = agents.length > 0 && !showHome && ["agent", "overview", "comms"].includes(view);
+  const showSidebar = agents.length > 0 && !showHome && ["agent", "overview"].includes(view);
   const agentFeed = messages.filter(m => m.from !== "you" && m.to !== "you");
   const pairs = [...new Set(agentFeed.map(m => [m.from, m.to].sort().join(" ↔ ")))];
-  const searchItems = [...agents.map(a => ({ id: a, label: a, hint: "Agent" })), ...NAV.map(([id, , label]) => ({ id: "view:" + id, label, hint: "View" }))].filter(x => x.label.toLowerCase().includes(query.toLowerCase()));
+  const SUB_VIEWS: [string, string][] = [["tasks", "Tasks"], ["comms", "Messages"], ["plugins", "Plugins"], ["templates", "Templates"], ["skills", "Skills"], ["memory", "Memory"]];
+  const searchItems = [...agents.map(a => ({ id: a, label: a, hint: "Agent" })), ...NAV.map(([id, , label]) => ({ id: "view:" + id, label, hint: "View" })), ...SUB_VIEWS.map(([id, label]) => ({ id: "view:" + id, label, hint: "View" }))].filter(x => x.label.toLowerCase().includes(query.toLowerCase()));
   const pickSearch = (id: string) => { if (id.startsWith("view:")) go(id.slice(5)); else { setSelected(id); setView("agent"); } setSearch(false); setQuery(""); };
   const viewTitle = showHome ? "New operation" : NAV.find(n => n[0] === view)?.[2];
 
@@ -854,7 +872,7 @@ export function App() {
       <nav className="rail" aria-label="Views">
         {NAV.map(([id, short, label, Icon]) => {
           const active = id === "home" ? showHome : !showHome && view === id;
-          return <button type="button" key={id} className={"rail-item" + (active ? " active" : "")} aria-current={active ? "page" : undefined} aria-label={label} title={label} disabled={id === "agent" && agents.length === 0} onClick={() => go(id)}>{prefs.navIcons === "color" ? <img className="rail-color" src={`./nav-color/${id}.svg`} alt="" aria-hidden="true" /> : <Icon aria-hidden="true" />}<span>{short}</span>{id === "tasks" && tasksNeedLook > 0 && <span className="rail-count" aria-label={`${tasksNeedLook} waiting or stalled`}>{tasksNeedLook}</span>}</button>;
+          return <button type="button" key={id} className={"rail-item" + (active ? " active" : "")} aria-current={active ? "page" : undefined} aria-label={label} title={label} disabled={id === "agent" && agents.length === 0} onClick={() => go(id)}>{prefs.navIcons === "color" ? <img className="rail-color" src={`./nav-color/${id}.svg`} alt="" aria-hidden="true" /> : <Icon aria-hidden="true" />}<span>{short}</span>{id === "overview" && tasksNeedLook > 0 && <span className="rail-count" aria-label={`${tasksNeedLook} waiting or stalled`}>{tasksNeedLook}</span>}</button>;
         })}
         <RemoteRailButton />
         {(import.meta as any).env?.DEV &&<button type="button" className={"rail-item rail-dev" + (mock ? " active" : "")} aria-label={mock ? "Mock data is loaded (dev only)" : "Fill with mock data (dev only)"} title="Dev only: a mock workspace with agents, messages, memory, skills, schedules and outputs" onClick={async () => {
@@ -902,55 +920,67 @@ export function App() {
               </div>
             </div>
           ) : view === "agent" ? null : view === "overview" ? (
-            <div className="page overview">
-              {agents.length === 0 ? <div className="empty"><h2>No active agents</h2><p>Start an operation to see your team here.</p><Button className="secondary" onClick={() => go("home")}>New operation</Button></div> : (
-                <div className="tile-grid">
-                  {team.map(a => (
-                    <div className="tile" key={a.name}>
-                      <div className="tile-head">
-                        <AgentId agent={a} template={agentTemplates[a.name]} />
-                        <small>{a.model}</small>
-                        <StatusDot tone={a.tone} label={a.status} />
-                        <span className="grow" />
-                        <Button className="ghost" onClick={() => { setSelected(a.name); setView("agent"); setMode("chat"); }}>Message</Button>
-                        <Button className="ghost" onClick={() => openTerminal(a.name)}>Open</Button>
-                      </div>
-                      <Console key={`${a.name}:${epoch}`} name={a.name} mini />
+            <>
+              <PageSwitch label="Overview section" value={overviewTab} onChange={setOverviewTab} options={[["team", "Team"], ["tasks", "Tasks"], ["messages", "Messages"]]} />
+              {overviewTab === "team" ? (
+                <div className="page overview">
+                  {agents.length === 0 ? <div className="empty"><h2>No active agents</h2><p>Start an operation to see your team here.</p><Button className="secondary" onClick={() => go("home")}>New operation</Button></div> : (
+                    <div className="tile-grid">
+                      {team.map(a => (
+                        <div className="tile" key={a.name}>
+                          <div className="tile-head">
+                            <AgentId agent={a} template={agentTemplates[a.name]} />
+                            <small>{a.model}</small>
+                            <StatusDot tone={a.tone} label={a.status} />
+                            <span className="grow" />
+                            <Button className="ghost" onClick={() => { setSelected(a.name); setView("agent"); setMode("chat"); }}>Message</Button>
+                            <Button className="ghost" onClick={() => openTerminal(a.name)}>Open</Button>
+                          </div>
+                          <Console key={`${a.name}:${epoch}`} name={a.name} mini />
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  )}
+                </div>
+              ) : overviewTab === "tasks" ? (
+                <Tasks tasks={tasks} openAgent={name => { setSelected(name); setView("agent"); setMode("chat"); }} />
+              ) : (
+                <div className="page comms">
+                  <div className="threads" role="list">
+                    <h2 className="label">Threads</h2>
+                    <Button className={"list-row" + (thread === "all" ? " selected" : "")} onClick={() => setThread("all")}><span className="row-text"><b>All messages</b></span><span className="row-hint">{agentFeed.length}</span></Button>
+                    {pairs.map(pair => { const last = [...agentFeed].reverse().find(m => [m.from, m.to].sort().join(" ↔ ") === pair); return <Button key={pair} aria-label={pair.toUpperCase()} className={"list-row" + (thread === pair ? " selected" : "")} onClick={() => setThread(pair)}><span className="row-text"><b>{pair}</b><small>{last?.text.slice(0, 60)}</small></span></Button>; })}
+                  </div>
+                  <div className="conversation">
+                    {agentFeed.length ? agentFeed.filter(m => thread === "all" || [m.from, m.to].sort().join(" ↔ ") === thread).map((m, i) => (
+                      <div className="memo" key={m.id + i}>
+                        <div className="message-meta"><b className={`who c-${agentColor(m.from)}`}>{m.from}</b><span className="message-recipient">to {m.to}</span>{m.time && <time>{new Date(m.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>}</div>
+                        <p>{m.text}</p>
+                      </div>
+                    )) : <div className="empty"><h2>No messages yet</h2><p>When agents talk to each other, their threads show up here.</p></div>}
+                  </div>
                 </div>
               )}
-            </div>
-          ) : view === "comms" ? (
-            <div className="page comms">
-              <div className="threads" role="list">
-                <h2 className="label">Threads</h2>
-                <Button className={"list-row" + (thread === "all" ? " selected" : "")} onClick={() => setThread("all")}><span className="row-text"><b>All messages</b></span><span className="row-hint">{agentFeed.length}</span></Button>
-                {pairs.map(pair => { const last = [...agentFeed].reverse().find(m => [m.from, m.to].sort().join(" ↔ ") === pair); return <Button key={pair} aria-label={pair.toUpperCase()} className={"list-row" + (thread === pair ? " selected" : "")} onClick={() => setThread(pair)}><span className="row-text"><b>{pair}</b><small>{last?.text.slice(0, 60)}</small></span></Button>; })}
-              </div>
-              <div className="conversation">
-                {agentFeed.length ? agentFeed.filter(m => thread === "all" || [m.from, m.to].sort().join(" ↔ ") === thread).map((m, i) => (
-                  <div className="memo" key={m.id + i}>
-                    <div className="message-meta"><b className={`who c-${agentColor(m.from)}`}>{m.from}</b><span className="message-recipient">to {m.to}</span>{m.time && <time>{new Date(m.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>}</div>
-                    <p>{m.text}</p>
-                  </div>
-                )) : <div className="empty"><h2>No messages yet</h2><p>When agents talk to each other, their threads show up here.</p></div>}
-              </div>
-            </div>
+            </>
           ) : view === "providers" ? <Providers focus={providerFocus} />
-          : view === "tools" ? <Tools openMemory={() => setView("memory")} />
-          : view === "memory" ? <Memory />
-          : view === "tasks" ? <Tasks tasks={tasks} openAgent={name => { setSelected(name); setView("agent"); setMode("chat"); }} />
-          : view === "servers" ? <Servers focus={serverFocus} />
-          : view === "skills" ? <Skills />
-          : view === "mcp" ? <Connectors />
+          : view === "tools" ? (
+            <>
+              <PageSwitch label="Tools section" value={toolsTab} onChange={setToolsTab} options={[["tools", "Tools"], ["plugins", "Plugins"]]} />
+              {toolsTab === "tools" ? <Tools openMemory={() => go("memory")} /> : <Connectors />}
+            </>
+          ) : view === "servers" ? <Servers focus={serverFocus} />
           : view === "share" ? <Share workspace={workspace} openFile={packFile} clearFile={() => setPackFile(null)} openWorkspace={target => openWorkspace(target)} />
-          : view === "templates" ? (
-            <Templates activeBossFile={agentTemplates.boss?.file} hasBoss={agents.includes("boss")} onReloadBoss={async template => {
-              const chosen = await window.army.changeBoss(template);
-              setAgentTemplates(v => ({ ...v, boss: chosen })); setStopped(v => ({ ...v, boss: false }));
-              const list = await window.army.chats.list("boss"); setChatList(list); setActiveChat(list.find(c => c.active)?.id || null); setArchive(null); setSelected("boss"); setView("agent");
-            }} />
+          : view === "brain" ? (
+            <>
+              <PageSwitch label="Brain section" value={brainTab} onChange={setBrainTab} options={[["templates", "Templates"], ["skills", "Skills"], ["memory", "Memory"]]} />
+              {brainTab === "templates" ? (
+                <Templates activeBossFile={agentTemplates.boss?.file} hasBoss={agents.includes("boss")} onReloadBoss={async template => {
+                  const chosen = await window.army.changeBoss(template);
+                  setAgentTemplates(v => ({ ...v, boss: chosen })); setStopped(v => ({ ...v, boss: false }));
+                  const list = await window.army.chats.list("boss"); setChatList(list); setActiveChat(list.find(c => c.active)?.id || null); setArchive(null); setSelected("boss"); setView("agent");
+                }} />
+              ) : brainTab === "skills" ? <Skills /> : <Memory />}
+            </>
           ) : (
             <div className="page settings">
               <h1>Settings</h1>
@@ -971,7 +1001,7 @@ export function App() {
               </section>
               <RemoteSettings />
               <VoiceSettings openTools={() => setView("tools")} />
-              <MemorySettings open={() => setView("memory")} />
+              <MemorySettings open={() => go("memory")} />
               <TerminalSettings workspace={workspace} />
               <section className="settings-group">
                 <h2 className="label">Keyboard shortcuts</h2>

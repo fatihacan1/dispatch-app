@@ -30,7 +30,7 @@ test('configure local AI and use it for a boss', async () => {
   await page.getByRole('button', { name: 'Save provider' }).click();
   await expect(page.locator('.local-saved-row').filter({ hasText: 'local-qwen' })).toHaveCount(1);
   await expect(page.locator('.local-saved-row').filter({ hasText: 'Ornith' })).toHaveCount(1);
-  await page.getByRole('button', { name: 'Agent templates', exact: true }).first().click();
+  await page.getByRole('button', { name: 'Brain', exact: true }).click();
   await expect(page.getByLabel('Provider', { exact: true }).locator('option', { hasText: 'Ornith' })).toHaveCount(1);
   await page.getByLabel('Provider', { exact: true }).selectOption('local:local-qwen');
   await expect(page.getByLabel('Model', { exact: true })).toHaveValue('local-qwen');

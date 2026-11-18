@@ -7,7 +7,7 @@ test('independent tool choices persist per template', async () => {
  const app = await electron.launch({ args: [path.resolve('electron/main.cjs'), '--demo'], cwd: workspace, env: { ...process.env, HOME: workspace, DISPATCH_TEST_HOME: workspace, DISPATCH_HOME: workspace, VITE_DEV_SERVER_URL: '' } });
  try {
   const page = await app.firstWindow();
-  await page.getByRole('button', { name: 'Agent templates', exact: true }).first().click();
+  await page.getByRole('button', { name: 'Brain', exact: true }).click();
   await page.getByLabel('Name', { exact: true }).fill('searcher');
   await page.getByLabel('Enable DDGS').check();
   await page.getByRole('button', { name: 'Save', exact: true }).click();

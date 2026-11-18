@@ -10,7 +10,7 @@ process.on('exit', () => testFs.rmSync(workspace, { recursive: true, force: true
   const page = await app.firstWindow();
   await page.setViewportSize({ width: 1280, height: 800 }).catch(() => {});
   await page.waitForTimeout(1500);
-  await page.getByRole('button', { name: /Agent templates/ }).first().click();
+  await page.getByRole('button', { name: 'Brain', exact: true }).click();
   await page.getByRole('button', { name: '+ New template' }).click();
   const name = 'qa-reviewer-' + Date.now();
   await page.getByLabel('Name').fill(name);

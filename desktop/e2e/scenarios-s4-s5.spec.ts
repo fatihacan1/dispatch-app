@@ -11,7 +11,8 @@ test('demo agents coordinate, wait for a reply, and build the team', async () =>
   await page.getByRole('button', { name: 'Start operation' }).click();
   const send = async (text: string) => { await page.getByLabel('Message', { exact: true }).fill(text); await page.getByRole('button', { name: 'Send', exact: true }).click(); };
   await send('coder implement X');
-  await page.getByRole('button', { name: 'Messages', exact: true }).click();
+  await page.getByRole('button', { name: 'Overview', exact: true }).click();
+  await page.getByRole('tab', { name: 'Messages', exact: true }).click();
   await expect(page.getByText('Done: coder implement X', { exact: false }).first()).toBeVisible({ timeout: 15000 });
   await page.getByRole('button', { name: 'BOSS ↔ CODER' }).click();
   const memos = page.locator('.conversation .memo');
@@ -26,7 +27,7 @@ test('demo agents coordinate, wait for a reply, and build the team', async () =>
   await expect.poll(async () => page.evaluate(() => window.army.output('coder-1')), { timeout: 15000 }).toContain('spawn a coder for token refresh');
   await send('create template for specialist');
   await expect(page.getByRole('button', { name: /specialist-1/ }).first()).toBeVisible({ timeout: 15000 });
-  await page.getByRole('button', { name: 'Agent templates', exact: true }).click();
+  await page.getByRole('button', { name: 'Brain', exact: true }).click();
   await expect(page.getByText('demo-specialist', { exact: true }).first()).toBeVisible({ timeout: 15000 });
  } finally { await app.close(); fs.rmSync(workspace, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); }
 });

@@ -66,7 +66,7 @@ function CustomDialog({ onClose }: { onClose: () => void }) {
   </Dialog>;
 }
 
-/** MCP page: a catalogue of apps to connect with one click, and the ones already connected. */
+/** Plugins page: a catalogue of apps to connect with one click, and the ones already connected. */
 export function Connectors() {
   const { connections, pending } = useConnections();
   const [cat, setCat] = useState<{ groups: Group[]; items: Item[] } | null>(null);
@@ -105,8 +105,8 @@ export function Connectors() {
   };
 
   return <div className="page prov-page mcp-page">
-    <div className="view-heading"><h1>MCP</h1>
-      <div className="mem-seg" role="tablist" aria-label="MCP">
+    <div className="view-heading"><h1>Plugins</h1>
+      <div className="mem-seg" role="tablist" aria-label="Plugins">
         <button role="tab" aria-selected={tab === "browse"} onClick={() => setTab("browse")}>Browse</button>
         <button role="tab" aria-selected={tab === "connected"} onClick={() => setTab("connected")}>Connected{connections.length > 0 && <span>{connections.length}</span>}</button>
       </div>
@@ -151,7 +151,7 @@ export function Connectors() {
               : <button type="button" className="icon-button lg" title="Check the connection" aria-label={`Check ${c.name}`} onClick={() => void army().connectors.check(c.id)}><ArrowPathIcon /></button>}
             <Button className="ghost" onClick={() => void logout(c)}>Log out</Button>
           </div>)}</div>}
-        {connections.length > 0 && <p className="mcp-foot">Agents that are already running get changes the next time they start. Antigravity, Gemini and Qoder agents do not get MCP apps yet.</p>}
+        {connections.length > 0 && <p className="mcp-foot">Agents that are already running get changes the next time they start. Antigravity, Gemini and Qoder agents do not get Plugins yet.</p>}
       </>}
     </div>
     {tokenFor && <TokenDialog item={tokenFor} onClose={() => setTokenFor(null)} />}

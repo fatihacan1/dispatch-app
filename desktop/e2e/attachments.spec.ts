@@ -20,7 +20,7 @@ test('attachments reach the agent and template deletion uses an in-app dialog', 
   const dir = path.join(workspace, '.dispatch', 'operations', operations.find(x => x.isDirectory())!.name, 'attachments');
   expect(fs.readFileSync(path.join(dir, fs.readdirSync(dir).find(name => name.endsWith('note.txt'))!), 'utf8')).toBe('attachment contents');
   await page.evaluate(() => (window as any).army.templates.save({ name: 'delete-test', scope: 'project', provider: 'claude', model: 'default', body: 'test', description: '' }));
-  await page.getByRole('button', { name: 'Agent templates', exact: true }).first().click();
+  await page.getByRole('button', { name: 'Brain', exact: true }).click();
   await page.getByRole('button', { name: /delete-test/ }).click();
   await page.getByRole('button', { name: 'Delete', exact: true }).click();
   await expect(page.getByRole('dialog', { name: 'Delete template?' })).toBeVisible();
@@ -36,7 +36,7 @@ test('a project boss template can restart the boss in a new chat', async () => {
   const page = await app.firstWindow();
   await page.getByRole('button', { name: 'Start operation' }).click();
   const before = await page.evaluate(() => window.army.chats.list('boss'));
-  await page.getByRole('button', { name: 'Agent templates', exact: true }).first().click();
+  await page.getByRole('button', { name: 'Brain', exact: true }).click();
   await page.getByLabel('Name', { exact: true }).fill('Project lead');
   await page.getByLabel('Template type').selectOption('boss');
   await page.getByLabel('Role prompt').fill('Project-specific instructions');
@@ -57,7 +57,7 @@ test('template search, collapsed groups, and boss visibility persist', async () 
  try {
   const page = await app.firstWindow();
   await page.getByRole('button', { name: 'Start operation' }).click();
-  await page.getByRole('button', { name: 'Agent templates', exact: true }).first().click();
+  await page.getByRole('button', { name: 'Brain', exact: true }).click();
   const builtIn = page.getByRole('button', { name: /^Built-in/ });
   await expect(builtIn).toHaveAttribute('aria-expanded', 'false');
   await builtIn.click();
@@ -81,7 +81,7 @@ test('template search, collapsed groups, and boss visibility persist', async () 
   expect(prompt).not.toContain('coder: Implements assigned tasks');
   expect(prompt).toContain('reviewer:');
   await page.reload();
-  await page.getByRole('button', { name: 'Agent templates', exact: true }).first().click();
+  await page.getByRole('button', { name: 'Brain', exact: true }).click();
   await page.getByRole('button', { name: /boss.*Built-in/i }).first().click();
   await expect(page.getByRole('checkbox', { name: 'Show coder (Built-in) to boss' })).not.toBeChecked();
  } finally { await app.close(); fs.rmSync(workspace, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); }
@@ -109,7 +109,7 @@ test('boss provider plans and notes reach its instructions', async () => {
  try {
   const page = await app.firstWindow();
   await page.getByRole('button', { name: 'Start operation' }).click();
-  await page.getByRole('button', { name: 'Agent templates', exact: true }).first().click();
+  await page.getByRole('button', { name: 'Brain', exact: true }).click();
   await page.getByRole('button', { name: /boss.*Built-in/i }).first().click();
   await page.getByText('Providers available to boss').click();
   await page.getByLabel('OpenCode plan').selectOption('free');

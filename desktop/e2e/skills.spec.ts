@@ -24,7 +24,8 @@ test('skills: look up a source, install, view, turn off and remove', async () =>
   const app = await electron.launch({ args: [path.resolve('electron/main.cjs'), '--demo'], cwd: workspace, env: { ...process.env, HOME: home, DISPATCH_TEST_HOME: home, DISPATCH_HOME: home } });
   try {
     const page = await app.firstWindow();
-    await page.getByRole('button', { name: 'Skills' }).click();
+    await page.getByRole('button', { name: 'Brain', exact: true }).click();
+    await page.getByRole('tab', { name: 'Skills', exact: true }).click();
     await expect(page.getByText('No skills yet.')).toBeVisible();
     await page.getByLabel('GitHub link').fill(src);
     await page.getByRole('button', { name: 'Look up' }).click();

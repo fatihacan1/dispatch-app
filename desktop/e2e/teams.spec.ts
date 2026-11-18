@@ -10,7 +10,7 @@ test('a saved team starts its boss and members together', async () => {
   const app = await electron.launch({ args: [path.resolve('electron/main.cjs'), '--demo'], cwd: workspace, env: { ...process.env, HOME: workspace, DISPATCH_TEST_HOME: workspace, DISPATCH_HOME: workspace } });
   try {
     const page = await app.firstWindow();
-    await page.getByRole('button', { name: 'Templates' }).click();
+    await page.getByRole('button', { name: 'Brain', exact: true }).click();
     await page.getByRole('tab', { name: 'Teams' }).click();
     await page.getByRole('button', { name: 'New team' }).click();
     await page.getByLabel('Name').fill('Game studio');
