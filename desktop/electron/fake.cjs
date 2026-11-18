@@ -5,6 +5,10 @@ const run = (args, done = () => {}) => execFile(bin, args, { env: process.env },
 const rl = readline.createInterface({ input: process.stdin });
 const prompt = () => process.stdout.write('> ');
 let waiting = process.env.DISPATCH_DEMO_ATTENTION === '1' ? (name === 'boss' ? 'trust' : name === 'coder' ? 'approval' : 'signin') : '';
+// 'trust-late': the boss asks to trust the folder at once, the coder only 4 s later (a subagent that comes up afterwards).
+const trustLate = process.env.DISPATCH_DEMO_ATTENTION === 'trust-late' && name === 'coder';
+if (process.env.DISPATCH_DEMO_ATTENTION === 'trust-late' && name === 'boss') waiting = 'trust';
+if (trustLate) setTimeout(() => { waiting = 'trust'; console.log('Do you trust this folder? Yes, I trust this folder'); }, 4000);
 if (waiting === 'trust') console.log('Do you trust this folder? Yes, I trust this folder');
 else if (waiting === 'approval') console.log('Approve this command? Yes / No');
 else if (waiting === 'signin') console.log('Sign in to continue');

@@ -29,7 +29,7 @@ export function Tasks({ tasks, openAgent }: { tasks: TaskCard[]; openAgent: (nam
   return (
     <div className="page prov-page tasks-page">
       <div className="view-heading"><h1>Tasks</h1></div>
-      <p className="page-lead tasks-lead">Work the boss and team leads handed out. A card moves to Done when the agent reports back to its lead.</p>
+      <p className="page-lead tasks-lead">This board is how the boss keeps track of its agents; it is shown here so you can follow along. A card moves to Done when the agent reports back to its lead.</p>
       <div className="task-board">
         {COLUMNS.map(col => {
           let cards = tasks.filter(t => col.statuses.includes(t.status));

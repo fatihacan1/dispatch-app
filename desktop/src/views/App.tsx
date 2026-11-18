@@ -786,7 +786,17 @@ export function App() {
   const needs = Object.keys(attention).length;
   const trustWaiting = Object.entries(attention).filter(([, reason]) => reason === "Trust folder").map(([name]) => name);
   const trustKey = trustWaiting.join(",");
-  useEffect(() => { if (!trustKey) { setTrustManual([]); setTrustLater(false); } else setTrustManual(v => v.filter(n => trustWaiting.includes(n))); }, [trustKey]);
+  // "Not now" hides the dialog only for the agents waiting then. An agent that starts waiting later (a new subagent,
+  // a restarted one) shows it again: before, one "Not now" while any agent still waited hid it for the whole session
+  // and every later trust prompt was only visible in the team list.
+  const trustSeen = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const fresh = trustWaiting.some(n => !trustSeen.current.has(n));
+    trustSeen.current = new Set(trustWaiting);
+    if (!trustKey) { setTrustManual([]); setTrustLater(false); return; }
+    setTrustManual(v => v.filter(n => trustWaiting.includes(n)));
+    if (fresh) setTrustLater(false);
+  }, [trustKey]);
   const trustAll = async () => {
     setTrusting(true);
     try { const manual = await window.army.attention.trust(); setTrustManual(manual); }

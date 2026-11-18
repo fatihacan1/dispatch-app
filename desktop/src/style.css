@@ -1487,7 +1487,9 @@ html[data-theme="frosted"] #boot, html[data-theme="frosted"] .boot-overlay { bac
 /* Task board */
 .tasks-page > .view-heading { padding-left: 32px; padding-right: 32px; }
 .tasks-page > .page-lead { padding: 0 32px; margin: 0 0 12px; max-width: none; }
-.task-board { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(4, minmax(200px, 1fr)); gap: 12px; padding: 4px 32px 24px; overflow: auto; }
+/* The page fills the view and each column scrolls on its own: a long Done list no longer pushes the board down. */
+.tasks-page { display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; }
+.task-board { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(4, minmax(200px, 1fr)); grid-template-rows: minmax(0, 1fr); gap: 12px; padding: 4px 32px 24px; overflow-x: auto; overflow-y: hidden; }
 .task-col { display: flex; flex-direction: column; min-height: 0; border: var(--border); border-radius: var(--radius-lg); background: var(--surface); }
 .task-col-head { display: flex; align-items: center; gap: 8px; margin: 0; padding: 10px 12px 8px; font: inherit; }
 .task-col-count { margin-left: auto; color: var(--text-3); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
