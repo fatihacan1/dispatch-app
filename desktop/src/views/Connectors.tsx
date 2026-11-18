@@ -17,6 +17,7 @@ const AUTH_NOTE: Record<string, string> = { oauth: "Signs in with your browser",
 /** A brand mark in its own colour, or the initial on a neutral tile when there is no mark. */
 function Logo({ id, icon, name }: { id: string; icon?: string; name: string }) {
   const mark = MCP_ICONS[icon || id];
+  if (mark && "svg" in mark) return <span className="mcp-logo" aria-hidden="true" dangerouslySetInnerHTML={{ __html: mark.svg }} />;
   return <span className="mcp-logo" aria-hidden="true">
     {mark ? <svg viewBox="0 0 24 24" style={mark.color ? { color: mark.color } : undefined}><path d={mark.d} fill="currentColor" /></svg> : <b>{name.slice(0, 1).toUpperCase()}</b>}
   </span>;
