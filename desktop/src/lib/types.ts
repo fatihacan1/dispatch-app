@@ -13,7 +13,7 @@ export type AgentQuestion = {
   totalFields?: number;
   fields?: PluginField[];
 };
-export type CustomTool = { id: string; name: string; command: string; cwd: string; note: string; autostart: boolean; agents: boolean; stopped?: boolean; terminal: string; log: string; running: boolean; exitCode: number | null; startedAt: string | null };
+export type CustomTool = { id: string; name: string; command: string; cwd: string; note: string; page?: string; autostart: boolean; agents: boolean; stopped?: boolean; terminal: string; log: string; running: boolean; exitCode: number | null; startedAt: string | null };
 export type TaskCard = { id: string; agent: string; lead: string; title: string; text: string; startedAt: string; status: "working" | "waiting" | "stalled" | "done" | "stopped"; endedAt: string | null; reason?: string | null; waitReason?: string; stalledAt?: string };
 export type QuestionAnswer ={ picks: number[]; other?: string };
 export type Server = { id: string; name: string; host: string; port: number; user: string; key: string; note: string; icon: string; access: "off" | "ask" | "on"; vpnId?: string; hasPassword?: boolean; password?: string };

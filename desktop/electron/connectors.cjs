@@ -58,7 +58,7 @@ const CATALOG = Object.freeze([
   { id: 'playwright', name: 'Playwright', group: 'build', desc: 'Browse, click and test web pages in a real browser.', auth: 'local', command: 'npx', args: ['-y', '@playwright/mcp@latest'] },
   { id: 'canva', name: 'Canva', domain: 'canva.com', group: 'design', desc: 'Create, edit, resize and export Canva designs.', url: 'https://mcp.canva.com/mcp', auth: 'oauth' },
   { id: 'gamma', name: 'Gamma', domain: 'gamma.app', group: 'design', desc: 'Create and edit presentations, docs and webpages.', url: 'https://mcp.gamma.app/mcp', auth: 'oauth' },
-  { id: 'figma', name: 'Figma', group: 'design', desc: 'Designs from the Figma desktop app (turn on its MCP server in Dev Mode).', url: 'http://127.0.0.1:3845/mcp', auth: 'none' },
+  { id: 'figma', name: 'Figma', group: 'design', desc: 'Designs from the Figma desktop app (turn on its MCP server in Dev Mode).', url: 'http://127.0.0.1:3845/mcp', auth: 'none', hint: 'Figma has no browser sign-in here: open the Figma desktop app, open a design file, switch to Dev Mode and turn on "Enable desktop MCP server" in the Inspect panel (or Figma menu > Preferences), then try again.' },
   { id: 'framer', name: 'Framer', group: 'design', desc: 'Sites, CMS collections and pages in Framer.', url: 'https://mcp.framer.com/mcp', auth: 'oauth' },
   { id: 'miro', name: 'Miro', group: 'design', desc: 'Boards, sticky notes, diagrams and frames.', url: 'https://mcp.miro.com/', auth: 'oauth' },
   { id: 'webflow', name: 'Webflow', group: 'design', desc: 'Sites, CMS collections and pages.', url: 'https://mcp.webflow.com/mcp', auth: 'oauth' },
@@ -216,7 +216,7 @@ function create({ file, vault, open, notify = () => {} }) {
       const n = await call({ jsonrpc: '2.0', method: 'notifications/initialized' }, session); try { await n.body?.cancel(); } catch {}
       const tl = await readRpc(await call({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }, session), 2);
       return update(id, { status: 'connected', error: '', tools: tl?.result?.tools?.length ?? null, serverName: init?.result?.serverInfo?.name || '' });
-    } catch (e) { return update(id, { status: 'error', error: e.cause?.code === 'ECONNREFUSED' ? 'Not running' : String(e.message || e) }); }
+    } catch (e) { return update(id, { status: 'error', error: e.cause?.code === 'ECONNREFUSED' ? (entry(id)?.hint ? `Not running. ${entry(id).hint}` : 'Not running') : String(e.message || e) }); }
   }
 
   /** Browser sign-in: register Dispatch with the server, open the consent page, catch the code on loopback. */
@@ -273,6 +273,10 @@ function create({ file, vault, open, notify = () => {} }) {
         const found = await discover(c.url);
         c.auth = found.auth;
         if (found.auth === 'oauth') { Object.assign(info, found); secret = await signIn(info); c.resource = found.resource; }
+      } else if (c.auth === 'none' && /^https?:\/\/(127\.0\.0\.1|localhost)[:/]/i.test(c.url)) {
+        // A server on this computer (Figma desktop): say plainly when it is not running instead of saving a dead connection.
+        try { const r = await fetch(c.url, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' }, body: JSON.stringify(INIT), signal: timeout() }); try { await r.body?.cancel(); } catch {} }
+        catch (e) { throw new Error(`${c.name} is not running on this computer. ${c.hint || `Start it and try again (${c.url}).`}`); }
       }
       const d = read();
       d.connections[c.id] = { id: c.id, name: c.name, url: c.url || '', auth: c.auth, icon: c.icon || '', custom, resource: c.resource || '', command: c.command, args: c.args, secret: Object.keys(secret).length ? seal(secret) : '', status: 'connected', addedAt: Date.now() };

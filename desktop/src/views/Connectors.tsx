@@ -102,7 +102,8 @@ export function Connectors() {
   const action = (x: Item) => {
     const c = byId.get(x.id);
     if (pending.includes(x.id)) return <span className="mcp-wait">Finish in your browser<Button className="ghost" onClick={() => void army().connectors.cancel(x.id)}>Cancel</Button></span>;
-    if (c) return <button type="button" className="mcp-state" onClick={() => setTab("connected")} title="Connected. Manage it under Connected.">{c.status === "connected" ? <><CheckIcon aria-hidden="true" />Connected</> : "Reconnect"}</button>;
+    if (c?.status === "connected") return <button type="button" className="mcp-state" onClick={() => setTab("connected")} title="Connected. Manage it under Connected."><CheckIcon aria-hidden="true" />Connected</button>;
+    if (c) return <button type="button" className="mcp-state" onClick={() => void reconnect(c)} title={c.error || "Try the connection again"}>Reconnect</button>;
     return <button type="button" className="icon-button lg" aria-label={`Connect ${x.name}`} title={AUTH_NOTE[x.auth]} onClick={() => void add(x)}><PlusIcon /></button>;
   };
 
@@ -130,7 +131,7 @@ export function Connectors() {
             <div className="mcp-grid">
               {list.map(x => <div className="mcp-item" key={x.id}>
                 <Logo id={x.id} icon={x.icon} name={x.name} />
-                <span className="mcp-text"><b>{x.name}</b><small title={x.desc}>{error?.id === x.id ? <span className="mcp-error">{error.text}</span> : x.desc}</small></span>
+                <span className="mcp-text"><b>{x.name}</b><small title={error?.id === x.id ? error.text : x.desc}>{error?.id === x.id ? <span className="mcp-error">{error.text}</span> : x.desc}</small></span>
                 {action(x)}
               </div>)}
             </div>

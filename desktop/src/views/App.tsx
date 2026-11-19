@@ -16,8 +16,9 @@ import { MentionMenu, mentionItems, rankMentions, type MentionItem } from "../co
 import { Avatar } from "../components/Avatar";
 import {
   AcademicCapIcon, ChatBubbleLeftRightIcon, ChevronDownIcon, Cog6ToothIcon, CpuChipIcon, ServerStackIcon, DocumentIcon,
-  CheckIcon, CodeBracketIcon, FolderIcon, LinkIcon, MicrophoneIcon, HomeIcon, MagnifyingGlassIcon, PaperAirplaneIcon, PaperClipIcon, PlusIcon, Squares2X2Icon, StopIcon, CubeIcon, WrenchScrewdriverIcon, TrashIcon, XMarkIcon, ArrowsRightLeftIcon, BeakerIcon,
+  CheckIcon, CodeBracketIcon, FolderIcon, LinkIcon, MicrophoneIcon, HomeIcon, MagnifyingGlassIcon, PaperAirplaneIcon, PaperClipIcon, PlusIcon, Squares2X2Icon, StopIcon, CubeIcon, WrenchScrewdriverIcon, TrashIcon, XMarkIcon, ArrowsRightLeftIcon, BeakerIcon, GlobeAltIcon,
 } from "@heroicons/react/16/solid";
+import { ToolPage, useCustomTools } from "./CustomTools";
 import { ArrowDownIcon } from "@heroicons/react/20/solid";
 import { Skills } from "./Skills";
 import { Share } from "./Share";
@@ -216,6 +217,7 @@ export function App() {
   const [dismissAgent, setDismissAgent] = useState<{ name: string; working: boolean } | null>(null);
   const [selected, setSelected] = useState("boss");
   const [view, setView] = useState("agent");
+  const toolPages = useCustomTools().items.filter(t => t.page);
   const [overviewTab, setOverviewTab] = useState<"team" | "tasks" | "messages">("team");
   const [toolsTab, setToolsTab] = useState<"tools" | "plugins">("tools");
   const [brainTab, setBrainTab] = useState<"templates" | "skills" | "memory">("templates");
@@ -842,7 +844,7 @@ export function App() {
   const SUB_VIEWS: [string, string][] = [["tasks", "Tasks"], ["comms", "Messages"], ["plugins", "Plugins"], ["templates", "Templates"], ["skills", "Skills"], ["memory", "Memory"]];
   const searchItems = [...agents.map(a => ({ id: a, label: a, hint: "Agent" })), ...NAV.map(([id, , label]) => ({ id: "view:" + id, label, hint: "View" })), ...SUB_VIEWS.map(([id, label]) => ({ id: "view:" + id, label, hint: "View" }))].filter(x => x.label.toLowerCase().includes(query.toLowerCase()));
   const pickSearch = (id: string) => { if (id.startsWith("view:")) go(id.slice(5)); else { setSelected(id); setView("agent"); } setSearch(false); setQuery(""); };
-  const viewTitle = showHome ? "New operation" : NAV.find(n => n[0] === view)?.[2];
+  const viewTitle = showHome ? "New operation" : NAV.find(n => n[0] === view)?.[2] ?? toolPages.find(t => "tool:" + t.id === view)?.name;
 
   if (needsFolder) return (
     <div className="folder-gate">
@@ -872,7 +874,10 @@ export function App() {
       <nav className="rail" aria-label="Views">
         {NAV.map(([id, short, label, Icon]) => {
           const active = id === "home" ? showHome : !showHome && view === id;
-          return <button type="button" key={id} className={"rail-item" + (active ? " active" : "")} aria-current={active ? "page" : undefined} aria-label={label} title={label} disabled={id === "agent" && agents.length === 0} onClick={() => go(id)}>{prefs.navIcons === "color" ? <img className="rail-color" src={`./nav-color/${id}.svg`} alt="" aria-hidden="true" /> : <Icon aria-hidden="true" />}<span>{short}</span>{id === "overview" && tasksNeedLook > 0 && <span className="rail-count" aria-label={`${tasksNeedLook} waiting or stalled`}>{tasksNeedLook}</span>}</button>;
+          const item = <button type="button" key={id} className={"rail-item" + (active ? " active" : "")} aria-current={active ? "page" : undefined} aria-label={label} title={label} disabled={id === "agent" && agents.length === 0} onClick={() => go(id)}>{prefs.navIcons === "color" ? <img className="rail-color" src={`./nav-color/${id}.svg`} alt="" aria-hidden="true" /> : <Icon aria-hidden="true" />}<span>{short}</span>{id === "overview" && tasksNeedLook > 0 && <span className="rail-count" aria-label={`${tasksNeedLook} waiting or stalled`}>{tasksNeedLook}</span>}</button>;
+          if (id !== "servers" || !toolPages.length) return item;
+          // Custom tools with a page of their own (Extensions > Tools) get a tab right under Servers.
+          return <React.Fragment key={id}>{item}{toolPages.map(t => { const on = !showHome && view === "tool:" + t.id; return <button type="button" key={t.id} className={"rail-item" + (on ? " active" : "")} aria-current={on ? "page" : undefined} aria-label={t.name} title={t.name} onClick={() => go("tool:" + t.id)}><GlobeAltIcon aria-hidden="true" /><span>{t.name.length > 9 ? t.name.slice(0, 8) + "…" : t.name}</span></button>; })}</React.Fragment>;
         })}
         <RemoteRailButton />
         {(import.meta as any).env?.DEV &&<button type="button" className={"rail-item rail-dev" + (mock ? " active" : "")} aria-label={mock ? "Mock data is loaded (dev only)" : "Fill with mock data (dev only)"} title="Dev only: a mock workspace with agents, messages, memory, skills, schedules and outputs" onClick={async () => {
@@ -969,6 +974,7 @@ export function App() {
               {toolsTab === "tools" ? <Tools openMemory={() => go("memory")} /> : <Connectors />}
             </>
           ) : view === "servers" ? <Servers focus={serverFocus} />
+          : view.startsWith("tool:") && toolPages.some(t => "tool:" + t.id === view) ? <ToolPage tool={toolPages.find(t => "tool:" + t.id === view)!} />
           : view === "share" ? <Share workspace={workspace} openFile={packFile} clearFile={() => setPackFile(null)} openWorkspace={target => openWorkspace(target)} />
           : view === "brain" ? (
             <>

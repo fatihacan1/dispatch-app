@@ -4,8 +4,8 @@ import { Button, StatusDot } from "../components/common";
 import { Dialog } from "../components/Dialog";
 import type { CustomTool } from "../lib/types";
 
-type Draft = { id?: string; name: string; command: string; cwd: string; note: string; autostart: boolean; agents: boolean };
-const EMPTY: Draft = { name: "", command: "", cwd: "", note: "", autostart: false, agents: true };
+type Draft = { id?: string; name: string; command: string; cwd: string; note: string; page?: string; autostart: boolean; agents: boolean };
+const EMPTY: Draft = { name: "", command: "", cwd: "", note: "", page: "", autostart: false, agents: true };
 const clean = (e: unknown) => String(e).replace(/^Error:\s*(Error invoking remote method '[^']+':\s*)?(Error:\s*)?/, "");
 
 export function useCustomTools() {
@@ -44,6 +44,9 @@ export function CustomToolForm({ open, draft, setDraft, close, saved }: { open: 
           <label><span className="lbl">Folder <small>optional, where the command runs</small></span>
             <span className="input-with-button"><input aria-label="Folder" value={draft.cwd} onChange={e => set({ cwd: e.target.value })} placeholder="The command's own folder" spellCheck={false} />
               <button type="button" className="icon-button lg" aria-label="Choose folder" title="Choose folder" onClick={() => void pickFolder()}><FolderIcon /></button></span>
+          </label>
+          <label className="wide"><span className="lbl">Page <small>optional, a local web page of the tool; it gets its own tab in the rail</small></span>
+            <input aria-label="Page" value={draft.page || ""} onChange={e => set({ page: e.target.value })} placeholder="http://127.0.0.1:3220" spellCheck={false} />
           </label>
           <label className="wide">Note for the agents
             <textarea aria-label="Note for the agents" rows={4} value={draft.note} onChange={e => set({ note: e.target.value })}
@@ -98,3 +101,22 @@ export function CustomToolRows({ items, edit, openTerminal, onError }: { items: 
 
 export { EMPTY as EMPTY_TOOL };
 export type { Draft as ToolDraft };
+
+/** A tool's own web page, shown as a view of its own (rail tab under Servers). */
+export function ToolPage({ tool }: { tool: CustomTool }) {
+  const [up, setUp] = useState<boolean | null>(null);
+  const [n, setN] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    const probe = () => fetch(tool.page!, { mode: "no-cors", cache: "no-store" }).then(() => alive && setUp(true), () => alive && setUp(false));
+    void probe(); const t = setInterval(() => { if (!up) void probe(); }, 3000);
+    return () => { alive = false; clearInterval(t); };
+  }, [tool.page, up, n]);
+  if (up === null) return <div className="tool-page" />;
+  if (!up) return <div className="page"><div className="empty">
+    <h2>{tool.name} is not running</h2>
+    <p>Its page at {tool.page} does not answer.{tool.command ? " Start the tool and the page opens here." : ""}</p>
+    {tool.command && <Button className="primary" disabled={tool.running} onClick={() => { void window.army.customTools.start(tool.id).then(() => setN(x => x + 1)); }}>{tool.running ? "Starting…" : `Start ${tool.name}`}</Button>}
+  </div></div>;
+  return <iframe className="tool-page" title={tool.name} src={tool.page} key={n} />;
+}

@@ -206,6 +206,7 @@ main.main { grid-area: main; overflow: hidden; display: flex; flex-direction: co
 .view { flex: 1; min-height: 0; display: flex; flex-direction: column; animation: enter var(--dur) var(--ease-out); }
 @keyframes enter { from { opacity: 0; transform: translateY(4px); } }
 .page { flex: 1; min-height: 0; overflow: auto; padding: 28px 32px; }
+.tool-page { flex: 1; min-height: 0; width: 100%; border: 0; display: block; background: var(--bg); }
 .empty { margin: auto; max-width: 360px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 40px 0; }
 .empty h2 { font-size: var(--text-lg); }
 .empty p { color: var(--text-2); }

@@ -35,7 +35,10 @@ function create({ dir, spawn, platform = process.platform }) {
     const old = input.id ? items.find(t => t.id === input.id) : null;
     let id = old?.id || cleanId(name) || 'tool';
     if (!old) { const base = id; for (let i = 2; items.some(t => t.id === id); i++) id = `${base}-${i}`; }
-    const tool = { id, name, command, cwd, note, autostart: !!input.autostart && !!command, agents: input.agents !== false, ...(old?.stopped ? { stopped: true } : {}) };
+    // A local web page the tool serves (its dashboard). Shown as a tab of its own in the rail.
+    const page = String(input?.page || '').trim();
+    if (page && !/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/i.test(page)) throw new Error('The page must be a local address, like http://127.0.0.1:3220');
+    const tool = { id, name, command, cwd, note, ...(page ? { page } : {}), autostart: !!input.autostart && !!command, agents: input.agents !== false, ...(old?.stopped ? { stopped: true } : {}) };
     write(old ? items.map(t => t.id === id ? tool : t) : [...items, tool]);
     return tool;
   }

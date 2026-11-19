@@ -69,7 +69,7 @@ export function Tools({ openMemory }: { openMemory?: () => void }) {
       <div className="prov-list">
         <p className="page-lead">Local tools your agents can use. Turn a tool on for an agent in Agent templates, under Tools. Everything a tool generates or downloads shows up under Outputs in the side panel.</p>
         <CustomToolForm open={formOpen} draft={draft} setDraft={setDraft} close={() => setFormOpen(false)} saved={(t, started) => { setFormOpen(false); void custom.load(); if (started) setTask({ name: `ctool-${t.id}`, label: t.name, terminal: true }); }} />
-        <CustomToolRows items={custom.items} edit={t => openForm({ id: t.id, name: t.name, command: t.command, cwd: t.cwd, note: t.note, autostart: t.autostart, agents: t.agents })} openTerminal={t => setTask({ name: t.terminal, label: t.name, terminal: true })} onError={setError} />
+        <CustomToolRows items={custom.items} edit={t => openForm({ id: t.id, name: t.name, command: t.command, cwd: t.cwd, note: t.note, page: t.page || "", autostart: t.autostart, agents: t.agents })} openTerminal={t => setTask({ name: t.terminal, label: t.name, terminal: true })} onError={setError} />
         <ScheduleTool />
         <TelegramTool />
         <div className="prov-row">
