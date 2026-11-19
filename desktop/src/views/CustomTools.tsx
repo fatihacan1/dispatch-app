@@ -3,6 +3,7 @@ import { CommandLineIcon, FolderIcon, PencilSquareIcon, TrashIcon, WrenchScrewdr
 import { Button, StatusDot } from "../components/common";
 import { Dialog } from "../components/Dialog";
 import type { CustomTool } from "../lib/types";
+import { getLang } from "../lib/i18n";
 
 type Draft = { id?: string; name: string; command: string; cwd: string; note: string; page?: string; autostart: boolean; agents: boolean };
 const EMPTY: Draft = { name: "", command: "", cwd: "", note: "", page: "", autostart: false, agents: true };
@@ -118,5 +119,7 @@ export function ToolPage({ tool }: { tool: CustomTool }) {
     <p>Its page at {tool.page} does not answer.{tool.command ? " Start the tool and the page opens here." : ""}</p>
     {tool.command && <Button className="primary" disabled={tool.running} onClick={() => { void window.army.customTools.start(tool.id).then(() => setN(x => x + 1)); }}>{tool.running ? "Starting…" : `Start ${tool.name}`}</Button>}
   </div></div>;
-  return <iframe className="tool-page" title={tool.name} src={tool.page} key={n} />;
+  // The page gets Dispatch's interface language so it can follow it (?lang=en|tr).
+  const src = (() => { try { const u = new URL(tool.page!); u.searchParams.set("lang", getLang()); return u.toString(); } catch { return tool.page; } })();
+  return <iframe className="tool-page" title={tool.name} src={src} key={n} />;
 }
