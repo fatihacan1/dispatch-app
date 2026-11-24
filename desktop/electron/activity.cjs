@@ -98,6 +98,7 @@ function newCodexFile(cwd, since, accountDir) {
 // Each row of `steps` is a protobuf message. There is no published schema, so this reads it generically:
 // type 14 = user message (field 19.2), type 15 = model step (20.1 text, 20.3 thinking, 20.7.2/20.7.3 tool call).
 const agyDir = accountDir => path.join(accountDir || process.env.ANTIGRAVITY_APP_DATA_DIR || path.join(os.homedir(), '.gemini', 'antigravity-cli'), 'conversations');
+const agyFile = (session, accountDir) => path.join(agyDir(accountDir), `${session}.db`);
 function pbFields(buf, depth = 0) {
   // Returns { '20.1': ['...'], ... } for readable strings, keyed by field path. Throws on bytes that are not protobuf.
   const out = {}; let i = 0;
@@ -114,7 +115,8 @@ function pbFields(buf, depth = 0) {
   }
   return out;
 }
-function parseAgyStep(type, payload) {
+const AGY_ENDED = [6, 7, 9]; // a step that was cancelled (Esc) or failed
+function parseAgyStep(type, payload, status = 3) {
   const out = { steps: [] }; let f; try { f = pbFields(Buffer.from(payload)); } catch { return out; }
   // 14 = a user message (field 19.2 is not always there); 101 = the agent waits on a background command and goes on
   // by itself afterwards. Both mean a turn is running, also after a text-only step that looked final.
@@ -125,6 +127,8 @@ function parseAgyStep(type, payload) {
   if (type !== 15) return out;
   const thinking = f['20.3']?.[0], text = f['20.1']?.[0], tools = f['20.7.2'] || [];
   if (thinking) out.steps.push({ kind: 'thinking', text: clip(thinking) });
+  // Stopped in the middle (Esc, the Stop button): what it had written so far, and the turn is over.
+  if (AGY_ENDED.includes(status)) { if (text && text.trim()) out.steps.push({ kind: 'text', text: text.trim().slice(0, 4000) }); out.turn = false; out.interrupted = true; return out; }
   if (tools.length) {
     out.turn = true;
     if (text) out.steps.push({ kind: 'text', text: text.trim().slice(0, 4000) });
@@ -135,12 +139,18 @@ function parseAgyStep(type, payload) {
 // Several Antigravity agents started together in one folder each make a new conversation there: the folder alone
 // matched the first agent to the second one's conversation (one showed idle while the other worked). The first
 // message carries "You are <name>.", so a conversation goes to the agent it names; one without any name to any.
-function newAgyDb(cwd, since, name, accountDir) {
+function newAgyDb(cwd, since, name, accountDir, memo = {}) {
+  // Looked at every second until the agent's first message: an untouched folder (no new file) costs one stat, not
+  // one per conversation ever held.
+  let dirAt = 0; try { dirAt = fs.statSync(agyDir(accountDir)).mtimeMs; } catch { return null; }
+  if (memo.dirAt === dirAt && !memo.open) return null;
+  memo.dirAt = dirAt; memo.open = false;
   let names = []; try { names = fs.readdirSync(agyDir(accountDir)).filter(n => /^[\w-]+\.db$/.test(n)); } catch { return null; }
   for (const n of names) {
     const full = path.join(agyDir(accountDir), n); if (claimed.has(full)) continue;
     try {
       if (fs.statSync(full).birthtimeMs < since - 2000) continue;
+      memo.open = true; // young enough to become ours: look again next time
       const db = openAgy(full); const meta = db.prepare("select data from trajectory_metadata_blob where id = 'main'").get(); db.close();
       if (!meta || !agyMetaHasFolder(meta.data, cwd)) continue;
       if (name) {
@@ -179,28 +189,41 @@ function agyMatchesAgent(payload, name) {
 // also show while agy loads and signs in, so they only count once a turn really started: the transcript said so, or
 // a message went in after the last turn ended. Stopped with Esc nothing ends the turn in the transcript: back at the
 // prompt and quiet for 20 s means done. Long thinking writes nothing to the transcript, so a fresh spinner still counts.
+// screenState is what its screen says (screen.cjs): the footer names a running turn, so it wins over every guess.
 function antigravityWorking(a, now) {
   const asked = (a.deliveredAt || 0) > (a.turnEndAt || 0);
   if (!a.turn && !asked) return false;
+  if (a.screenState === 'loading') return false;
+  if (a.screenState === 'busy') return true;
+  if (a.screenState === 'idle' && now - (a.screenAt || 0) > 2500 && now - (a.deliveredAt || 0) > 5000) return false;
   if (now - (a.spinAt || 0) < 3000) return true;
   return !(a.atPrompt && now - Math.max(a.eventAt || 0, a.lastOutput || 0, a.deliveredAt || 0) > 20000);
 }
 function openAgy(file) { const { DatabaseSync } = require('node:sqlite'); return new DatabaseSync(file, { readOnly: true }); }
 function watchAgy({ cwd, session, name, accountDir, onEvent, onSession }) {
-  const since = Date.now(); let file = session ? path.join(agyDir(accountDir), `${session}.db`) : null, last = null, stopped = false, endedAt = -1;
+  const since = Date.now(); let file = session ? path.join(agyDir(accountDir), `${session}.db`) : null, last = null, stopped = false, endedAt = -1, sig = '', readAt = 0;
+  const memo = {}; if (file) claimed.add(file);
   const tick = () => {
     if (stopped) return;
-    if (!file) { const hit = newAgyDb(cwd, since, name, accountDir); if (!hit) return; file = hit.file; last = -1; onSession?.(hit.id); }
-    if (!fs.existsSync(file)) return;
+    if (!file) { const hit = newAgyDb(cwd, since, name, accountDir, memo); if (!hit) return; file = hit.file; last = -1; onSession?.(hit.id); }
+    // Opening the database for every agent every second adds up on the main thread: only when it was written to
+    // (or every 5 s, should a write not show in the file times).
+    let now = ''; try { const f = fs.statSync(file); now = `${f.mtimeMs}:${f.size}`; } catch { return; }
+    try { const w = fs.statSync(file + '-wal'); now += `:${w.mtimeMs}:${w.size}`; } catch {}
+    if (now === sig && Date.now() - readAt < 5000) return;
+    sig = now; readAt = Date.now();
     const db = openAgy(file);
     try {
       // Resumed conversation: only what happens from now on.
       if (last === null) { last = db.prepare('select coalesce(max(idx), -1) m from steps').get().m; return; }
       // Steps are written in order; stop at the first one still running so it is read once, when complete.
-      for (const r of db.prepare('select idx, step_type, status, step_payload from steps where idx > ? order by idx').all(last)) {
-        if (r.status !== 3 && r.step_type === 15) break;
+      // A step cancelled with Esc (status 6) never becomes 3: waiting for it stopped the reading for good, so the chat
+      // showed "Working" for ever and none of the later turns.
+      const rows = db.prepare('select idx, step_type, status, step_payload from steps where idx > ? order by idx').all(last);
+      for (const [i, r] of rows.entries()) {
+        if (r.step_type === 15 && r.status !== 3 && !AGY_ENDED.includes(r.status) && i === rows.length - 1) { sig = ''; break; }
         last = r.idx; if (!r.step_payload) continue;
-        const e = parseAgyStep(r.step_type, r.step_payload); if (e.steps.length || e.turn !== undefined) onEvent(e);
+        const e = parseAgyStep(r.step_type, r.step_payload, r.status); if (e.steps.length || e.turn !== undefined) onEvent(e);
       }
       // A turn that ends on a cancelled or failed command (Esc, a rejected command: status 6, 7, 9) writes no closing
       // text. The newest step being such a command, and nothing after it, means the agent stopped.
@@ -221,11 +244,11 @@ function watch({ provider, cwd, session, name, accountDir, onEvent, onSession })
   if (!['claude', 'codex'].includes(provider) || (provider === 'claude' && !session)) return () => {};
   const parse = provider === 'claude' ? parseClaude : parseCodex;
   const since = Date.now();
-  let file = null, pos = null, rest = '', stopped = false;
+  let file = null, pos = null, rest = '', stopped = false, searchedAt = 0;
   const tick = () => {
     if (stopped) return;
     if (!file && provider === 'claude') file = claudeFile(cwd, session, accountDir);
-    if (!file && session) file = codexFile(session, accountDir);
+    if (!file && session && Date.now() - searchedAt > 4000) { searchedAt = Date.now(); file = codexFile(session, accountDir); }
     if (!file && !session) { const hit = newCodexFile(cwd, since, accountDir); if (hit) { file = hit.file; pos = 0; session = hit.id; onSession?.(hit.id); } }
     if (!file) return;
     // A new session has no transcript until its first message: when the file shows up later, read it from the top,
@@ -264,4 +287,4 @@ function questionKeys(questions, answers) {
   });
 }
 
-module.exports = { watch, parseClaude, parseCodex, parseAgyStep, agyMatchesAgent, agyMetaHasFolder, antigravityWorking, claudeFile, questionKeys };
+module.exports = { watch, parseClaude, parseCodex, parseAgyStep, agyMatchesAgent, agyMetaHasFolder, agyFile, antigravityWorking, claudeFile, questionKeys };

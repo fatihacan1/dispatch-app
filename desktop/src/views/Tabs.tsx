@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { FolderIcon, PlusIcon, XMarkIcon, PaperAirplaneIcon } from "@heroicons/react/16/solid";
+import { ChatBubbleLeftIcon, FolderIcon, PlusIcon, XMarkIcon, PaperAirplaneIcon } from "@heroicons/react/16/solid";
 import { ask } from "../components/ask";
 
 type Tab = { id: number; name: string; path: string; active: boolean; running?: number; needs?: number; working?: number };
@@ -48,6 +48,7 @@ export function ProjectTabs({ recent, onError }: { recent: string[]; onError: (e
     try { await api().close(t.id); } catch (e) { onError(String(e)); }
   };
   const openFolder = async (folder?: string) => { setMenu(false); try { await api().open(folder); } catch (e) { onError(String(e)); } };
+  const openBlank = async () => { setMenu(false); try { await api().openBlank(); } catch (e) { onError(String(e).replace(/^Error: Error invoking remote method '[^']+': (Error: )?/, "")); } };
   const others = recent.filter(w => !open.some(t => t.path && t.path.toLowerCase() === w.toLowerCase())).slice(0, 8);
   return (
     <div className="ptabs" ref={wrap}>
@@ -69,8 +70,9 @@ export function ProjectTabs({ recent, onError }: { recent: string[]; onError: (e
           );
         })}
       </div>
-      <button type="button" className="ptab-add" aria-label="Open a project in a new tab" aria-expanded={menu} disabled={full} title={full ? `Up to ${state.max} projects can be open` : "Open a project in a new tab (Ctrl+Tab switches)"} onClick={() => setMenu(v => !v)}><PlusIcon aria-hidden="true" /></button>
+      <button type="button" className="ptab-add" aria-label="Open a project in a new tab" aria-expanded={menu} disabled={full} title={full ? `Up to ${state.max} projects can be open` : "New tab (Ctrl+Tab switches)"} onClick={() => setMenu(v => !v)}><PlusIcon aria-hidden="true" /></button>
       {menu && <div className="popover ptab-menu" role="menu">
+        <button type="button" className="button menu-item" role="menuitem" title="Starts right away in a folder of its own under Dispatch Chats in your home folder" onClick={() => void openBlank()}><ChatBubbleLeftIcon aria-hidden="true" />New tab without a folder</button>
         <button type="button" className="button menu-item" role="menuitem" onClick={() => void openFolder()}><FolderIcon aria-hidden="true" />Open folder…</button>
         {others.length > 0 && <div className="menu-sep" />}
         {others.map(w => <button type="button" key={w} className="button menu-item" role="menuitem" onClick={() => void openFolder(w)} title={w}><span className="menu-main">{w.split(/[\\/]/).pop()}</span><small>{w}</small></button>)}

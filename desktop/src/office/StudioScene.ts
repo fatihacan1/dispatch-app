@@ -5,6 +5,7 @@ import { agentColors, sceneColor } from "../theme/theme";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { clone as cloneSkinned } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { createFlyCamera } from "./FlyCamera";
+import { frameGate } from "./frameCap";
 import type { OfficeScene, SceneOptions } from "./OfficeScene";
 
 const BASE = "./scenes/studio/";
@@ -57,7 +58,7 @@ export function createOfficeScene(container: HTMLElement, options: SceneOptions 
   const scene = new THREE.Scene(); scene.background = new THREE.Color(bg);
   const camera = new THREE.PerspectiveCamera(38, container.clientWidth / Math.max(1, container.clientHeight), 0.1, 500);
   const renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); renderer.setSize(container.clientWidth, container.clientHeight);
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5)); renderer.setSize(container.clientWidth, container.clientHeight);
   renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   container.appendChild(renderer.domElement);
@@ -214,7 +215,7 @@ export function createOfficeScene(container: HTMLElement, options: SceneOptions 
     },
     setWorking(name, on) { const a = agents.get(name); if (a) lamps[a.slot].visible = on; },
     destroy() {
-      disposed = true; ro.disconnect(); fly.dispose(); renderer.dispose();
+      disposed = true; ro.disconnect(); fly.dispose(); renderer.dispose(); renderer.forceContextLoss();
       scene.traverse((o: any) => { o.geometry?.dispose?.(); const m = o.material; (Array.isArray(m) ? m : m ? [m] : []).forEach((x: any) => { x.map?.dispose?.(); x.dispose?.(); }); });
       renderer.domElement.remove();
     },
@@ -225,13 +226,13 @@ export function createOfficeScene(container: HTMLElement, options: SceneOptions 
     getFocus: i => { const list: { point: THREE.Vector3; radius: number }[] = []; if (boss) list.push({ point: boss.root.position.clone().setY(1.2), radius: 1.5 }); agents.forEach(a => list.push({ point: a.root.position.clone().setY(1.2), radius: 1.5 })); return list.length ? list[i % list.length] : undefined; },
   });
 
+  const gate = frameGate(container);
   const clock = new THREE.Clock(); const speed = 4.2;
   const all = () => [...(boss ? [boss] : []), ...agents.values()];
-  function frame() {
+  function frame(t = performance.now()) {
     if (disposed) return; requestAnimationFrame(frame);
-    // Hidden (another page, or the office folded away): no work at all until it is shown again.
-    if (!container.offsetParent) { clock.getDelta(); return; }
-    const dt = Math.min(clock.getDelta(), 0.05);
+    if (!gate(t)) return;
+    const dt = Math.min(clock.getDelta(), 0.1);
     fly.update(dt);
     for (const a of all()) {
       a.mixer?.update(dt);

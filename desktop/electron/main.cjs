@@ -97,8 +97,21 @@ function layout() {
   if (!win || win.isDestroyed()) return;
   const [width, height] = win.getContentSize();
   // A tab in the back keeps its agents running (they live here, in the main process); its page is throttled like a
-  // background browser tab, so its office scene and timers stop costing CPU and GPU.
-  for (const t of tabs) { t.view.setBounds({ x: 0, y: 0, width, height }); t.view.setVisible(t === active); try { t.view.webContents.setBackgroundThrottling(t !== active); } catch {} }
+  // background browser tab, so its office scene and timers stop costing CPU and GPU. While the window is dragged to a
+  // new size only the page in front is laid out; the hidden ones follow once it rests.
+  for (const t of tabs) {
+    const front = t === active;
+    if (front) t.view.setBounds({ x: 0, y: 0, width, height });
+    if (t.front !== front) { t.front = front; t.view.setVisible(front); try { t.view.webContents.setBackgroundThrottling(!front); } catch {} }
+  }
+  clearTimeout(layoutRest);
+  layoutRest = setTimeout(() => { if (!win || win.isDestroyed()) return; const [w, h] = win.getContentSize(); for (const t of tabs) if (t !== active) try { t.view.setBounds({ x: 0, y: 0, width: w, height: h }); } catch {} }, 350);
+}
+// While the window moves the page holds its animations and scenes still: on a busy desktop they made dragging stutter.
+let layoutRest = null, moveEnd = null, moving = false;
+function windowMoves() {
+  if (!moving) { moving = true; sendTo(active, 'win-moving', true); }
+  clearTimeout(moveEnd); moveEnd = setTimeout(() => { moving = false; broadcast('win-moving', false); }, 220);
 }
 function rendererUrl(view, hash) {
   if (process.env.VITE_DEV_SERVER_URL) return view.webContents.loadURL(process.env.VITE_DEV_SERVER_URL + (hash ? '#' + hash : ''));
@@ -166,6 +179,21 @@ async function openTab(folder, caller) {
   if (blank) closeTab(blank);
   return tab.id;
 }
+// A tab without a project: agents still need a folder to run in, so it gets one of its own, "Dispatch Chats/Chat 1"
+// in the user's home. One that was opened and never used is taken again.
+function chatFolder() {
+  const base = path.join(process.env.DISPATCH_TEST_HOME || os.homedir(), 'Dispatch Chats');
+  for (let n = 1; ; n++) {
+    const dir = path.join(base, `Chat ${n}`);
+    if (tabs.some(t => !t.engine.needsFolder() && same(t.engine.workspace(), dir))) continue;
+    if (fs.existsSync(dir)) {
+      let used = true; try { used = fs.readdirSync(dir).some(f => !['.dispatch', '.claude'].includes(f)) || fs.readdirSync(path.join(dir, '.dispatch', 'operations')).length > 0; } catch (e) { used = e.code !== 'ENOENT'; }
+      if (used) continue;
+    }
+    fs.mkdirSync(dir, { recursive: true }); return dir;
+  }
+}
+ipcMain.handle('tabs:open-blank', e => { const caller = tabFor(e); if (!caller?.engine.needsFolder() && tabs.length >= MAX_TABS) throw new Error(`Up to ${MAX_TABS} projects can be open. Close a tab first.`); return openTab(chatFolder(), caller); });
 ipcMain.handle('tabs:list', () => tabsState());
 ipcMain.handle('tabs:open', (e, folder) => openTab(folder ? String(folder) : '', tabFor(e)));
 ipcMain.handle('tabs:switch', (_e, id) => { activate(tabs.find(t => t.id === id)); return true; });
@@ -268,16 +296,18 @@ ipcMain.handle('update:install', () => updater.install());
 
 // ── Voice shortcut and its overlay (types into whatever app has focus, or into the tab in front) ──
 const whisper = require('./whisper.cjs');
-const VOICE_KEYS = ['Control+Alt+Space', 'Control+Shift+Space', 'Control+Alt+D', 'F9'];
+const voiceKeys = require('./voice-key.cjs');
 const readUi = () => { try { return JSON.parse(fs.readFileSync(path.join(globalDir(), 'ui.json'), 'utf8')); } catch { return {}; } };
-const voiceKey = () => VOICE_KEYS.includes(readUi().voiceShortcut) ? readUi().voiceShortcut : VOICE_KEYS[0];
-let overlay = null, overlayOn = false, voiceKeyOk = false;
+const voiceKey = () => voiceKeys.of(readUi());
+let overlay = null, overlayOn = false, overlayReady = false, overlayPending = false, voiceKeyOk = false, voiceCapture = false, voiceRetry = null;
 function overlayWindow() {
   if (overlay && !overlay.isDestroyed()) return overlay;
   const { BrowserWindow } = require('electron');
   overlay = new BrowserWindow({ width: 120, height: 36, show: false, frame: false, transparent: true, hasShadow: false, alwaysOnTop: true, focusable: true, skipTaskbar: true, resizable: false, movable: false, minimizable: false, maximizable: false, fullscreenable: false, backgroundColor: '#00000000', webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } });
+  overlayReady = false;
   void rendererUrl(overlay, 'overlay');
-  overlay.on('closed', () => { overlay = null; overlayOn = false; });
+  overlay.on('closed', () => { overlay = null; overlayOn = false; overlayReady = false; });
+  overlay.webContents.on('render-process-gone', () => { try { overlay?.destroy(); } catch {} });
   return overlay;
 }
 function showOverlay() {
@@ -288,24 +318,30 @@ function showOverlay() {
   o.setAlwaysOnTop(true, 'screen-saver', 1);
   // Inactive: the user keeps typing focus in whatever app they were in.
   o.showInactive(); o.moveTop(); overlayOn = true;
-  const start = () => o.webContents.send('overlay-start');
-  if (o.webContents.isLoading()) o.webContents.once('did-finish-load', start); else start();
+  // The page says when it listens. Sent on "page loaded", the first press came before that and was lost: an invisible
+  // recorder stayed open and every later press only told it to stop.
+  if (overlayReady) o.webContents.send('overlay-start'); else overlayPending = true;
 }
+ipcMain.on('overlay:ready', e => { if (!overlay || e.sender !== overlay.webContents) return; overlayReady = true; if (overlayPending) { overlayPending = false; e.sender.send('overlay-start'); } });
 // e2e only: press the shortcut (forceOverlay = as if another app had focus).
 if (process.env.DISPATCH_TEST_HOME) global.__dispatchVoiceKey = forceOverlay => onVoiceKey(forceOverlay);
 function onVoiceKey(forceOverlay = false) {
   if (!forceOverlay && win && !win.isDestroyed() && win.isVisible() && win.isFocused()) return sendTo(active, 'voice-toggle', null);
-  if (overlayOn && overlay && !overlay.isDestroyed()) return overlay.webContents.send('overlay-stop');
+  if (overlayOn && overlay && !overlay.isDestroyed() && overlay.isVisible() && overlayReady) return overlay.webContents.send('overlay-stop');
   showOverlay();
 }
 function registerVoiceKey() {
   const { globalShortcut } = require('electron');
-  globalShortcut.unregisterAll();
-  if (process.env.DISPATCH_TEST_HOME) { voiceKeyOk = true; return; }
-  try { voiceKeyOk = globalShortcut.register(voiceKey(), onVoiceKey); } catch { voiceKeyOk = false; }
+  clearTimeout(voiceRetry); globalShortcut.unregisterAll();
+  if (voiceCapture) return; // Settings is listening for the new key
+  if (process.env.DISPATCH_TEST_HOME && !process.env.DISPATCH_TEST_VOICE_KEY) { voiceKeyOk = true; return; }
+  try { voiceKeyOk = globalShortcut.register(voiceKey(), () => onVoiceKey()); } catch { voiceKeyOk = false; }
+  // Another app holds it right now: try again, it may let go.
+  if (!voiceKeyOk) voiceRetry = setTimeout(registerVoiceKey, 30000);
 }
 ipcMain.on('overlay:done', (_e, text) => { overlay?.hide(); overlayOn = false; if (text && String(text).trim()) sendTo(active, 'voice-result', String(text).trim()); });
 ipcMain.on('overlay:live', (_e, text) => sendTo(active, 'voice-live', String(text || '')));
+ipcMain.handle('voice:capture', (_e, on) => { voiceCapture = !!on; registerVoiceKey(); return true; });
 ipcMain.on('overlay:close', () => { overlay?.hide(); overlayOn = false; });
 
 // ── Tray ──
@@ -416,7 +452,7 @@ app.whenReady().then(() => {
   // DISPATCH_TEST_HIDDEN: e2e runs never show a window or take focus from what the user is doing.
   const hidden = !!process.env.DISPATCH_TEST_HIDDEN;
   win = new BaseWindow({ show: !hidden, focusable: !hidden, title: 'Dispatch', icon: iconPath(), width: 1280, height: 800, minWidth: 800, minHeight: 560, backgroundColor: '#0d0e10', titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden', ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 14, y: 16 } } : { titleBarOverlay: { color: '#131417', symbolColor: '#a3a6ad', height: 43 } }) });
-  win.on('resize', layout);
+  win.on('resize', layout); win.on('move', windowMoves);
   setWindowTheme(readUi().theme);
   win.on('enter-full-screen', () => broadcast('window-fullscreen', true));
   win.on('leave-full-screen', () => broadcast('window-fullscreen', false));
@@ -432,7 +468,7 @@ app.whenReady().then(() => {
   activate(tabs.find(t => same(t.engine.workspace(), saved.active)) || tabs[0]);
   const loadRest = () => { const next = tabs.find(t => !t.loaded); if (!next) return; loadTab(next); let went = false; const go = () => { if (!went) { went = true; setTimeout(loadRest, 800); } }; next.view.webContents.once('did-finish-load', go); setTimeout(go, 6000); };
   // Tray and the bot come after the first tab has loaded: the window is up sooner, and the tab is the first page.
-  let rest = false; const startRest = () => { if (rest) return; rest = true; createTray(); registerVoiceKey(); telegram.start(); if (!process.env.DISPATCH_TEST_HOME || process.env.DISPATCH_TEST_TOOLS) customTools.autostart(); setTimeout(loadRest, 1500); };
+  let rest = false; const startRest = () => { if (rest) return; rest = true; createTray(); registerVoiceKey(); for (const ev of ['resume', 'unlock-screen']) try { require('electron').powerMonitor.on(ev, () => setTimeout(registerVoiceKey, 1500)); } catch {} telegram.start(); if (!process.env.DISPATCH_TEST_HOME || process.env.DISPATCH_TEST_TOOLS) customTools.autostart(); setTimeout(loadRest, 1500); };
   active.view.webContents.once('did-finish-load', () => setTimeout(startRest, 600)); setTimeout(startRest, 8000);
 });
 // On quit every project's agents go down with everything they started.

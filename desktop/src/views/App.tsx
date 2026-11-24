@@ -43,18 +43,40 @@ import { Sidebar, type AgentInfo } from "./Sidebar";
 import { providers, labels } from "../lib/data";
 import type { AgentQuestion, Message } from "../lib/types";
 import { QuestionCard } from "../components/QuestionCard";
+import { ImageStrip, type StripImage } from "../components/ImageStrip";
 
 type Timed = Message & { time?: number };
-function AttachmentPreview({ file }: { file: File }) {
-  const [url, setUrl] = useState("");
-  useEffect(() => { if (!file.type.startsWith("image/")) return; const next = URL.createObjectURL(file); setUrl(next); return () => URL.revokeObjectURL(next); }, [file]);
-  return url ? <img src={url} alt="" /> : <DocumentIcon aria-hidden="true" />;
+const MAX_FILES = 20;
+/** Files waiting in the message box: images in one row, other files as chips. */
+function AttachmentList({ files, remove }: { files: File[]; remove: (file: File) => void }) {
+  const urls = useRef(new Map<File, string>());
+  const [, redraw] = useState(0);
+  useEffect(() => {
+    for (const [f, u] of urls.current) if (!files.includes(f)) { URL.revokeObjectURL(u); urls.current.delete(f); }
+    for (const f of files) if (f.type.startsWith("image/") && !urls.current.has(f)) urls.current.set(f, URL.createObjectURL(f));
+    redraw(v => v + 1);
+  }, [files]);
+  useEffect(() => () => { for (const u of urls.current.values()) URL.revokeObjectURL(u); urls.current.clear(); }, []);
+  const images = files.filter(f => f.type.startsWith("image/")), other = files.filter(f => !f.type.startsWith("image/"));
+  const strip: StripImage[] = images.filter(f => urls.current.has(f)).map(f => ({ key: urls.current.get(f)!, name: f.name, src: urls.current.get(f)! }));
+  return <div className="attachment-list">
+    {strip.length > 0 && <ImageStrip images={strip} width={76} height={76} grow={1.5} onRemove={key => { const f = images.find(x => urls.current.get(x) === key); if (f) remove(f); }} />}
+    {other.map((file, i) => <div className="attachment-chip" key={`${file.name}-${i}`}><DocumentIcon aria-hidden="true" /><span title={file.name}>{file.name}</span><button type="button" className="icon-button" aria-label={`Remove ${file.name}`} onClick={() => remove(file)}><XMarkIcon /></button></div>)}
+  </div>;
 }
-function SentAttachment({ path }: { path: string }) {
-  const [file, setFile] = useState<{ name: string; image?: string } | null>(null);
-  useEffect(() => { let active = true; if (window.army.attachmentPreview) window.army.attachmentPreview(path).then(value => { if (active) setFile(value); }).catch(() => {}); return () => { active = false; }; }, [path]);
-  if (!file) return <div className="sent-attachment sent-file">Attachment unavailable</div>;
-  return <div className={"sent-attachment " + (file.image ? "sent-image" : "sent-file")}>{file.image ? <img src={file.image} alt={file.name} /> : <DocumentIcon aria-hidden="true" />}<span>{file.name}</span></div>;
+function SentAttachments({ paths }: { paths: string[] }) {
+  const [files, setFiles] = useState<Record<string, { name: string; image?: string } | null>>({});
+  useEffect(() => {
+    let active = true;
+    if (window.army.attachmentPreview) for (const p of paths) void window.army.attachmentPreview(p).then(v => { if (active) setFiles(f => ({ ...f, [p]: v })); }).catch(() => {});
+    return () => { active = false; };
+  }, [paths.join("|")]);
+  const images: StripImage[] = paths.filter(p => files[p]?.image).map(p => ({ key: p, name: files[p]!.name, src: files[p]!.image!, large: () => window.army.attachmentPreview(p, true).then(v => v?.image || null) }));
+  const other = paths.filter(p => !files[p]?.image && p in files);
+  return <div className="sent-attachments">
+    {images.length > 0 && <div className="sent-image"><ImageStrip images={images} width={images.length === 1 ? 220 : 132} height={images.length === 1 ? 160 : 104} grow={images.length === 1 ? 1.04 : 1.28} /></div>}
+    {other.map(p => <div className="sent-attachment sent-file" key={p}><DocumentIcon aria-hidden="true" /><span>{files[p]?.name || p.split(/[\\/]/).pop()}</span></div>)}
+  </div>;
 }
 function MessageBody({ message }: { message: Message }) {
   const marker = "Attachments (open these files):\n";
@@ -63,7 +85,7 @@ function MessageBody({ message }: { message: Message }) {
   const lines = index >= 0 ? message.text.slice(index + marker.length).split("\n") : [];
   const valid = lines.length > 0 && lines.every(line => /^- (?:[A-Za-z]:[\\/]|\/)/.test(line));
   if (!valid) return <Markdown text={message.text} />;
-  return <>{before && <Markdown text={before} />}<div className="sent-attachments">{lines.map((line, index) => <SentAttachment path={line.slice(2)} key={`${line}-${index}`} />)}</div></>;
+  return <>{before && <Markdown text={before} />}<SentAttachments paths={[...new Set(lines.map(line => line.slice(2)))]} /></>;
 }
 // Traffic between agents (orders, reports) stays out of the way: one sentence until clicked. Talk with you is always open.
 const collapsible = (m: Message) => m.from !== "you" && m.to !== "you" && m.to !== "user" && m.text.length > 220;
@@ -95,12 +117,12 @@ function Elapsed({ since }: { since: number }) {
   return <span className="trail-time">{duration(Date.now() - since)}</span>;
 }
 /** What the agent is doing right now (thinking, tool calls, what it says between them); folds to one line when the turn ends. */
-function ActivityTrail({ steps, live, since, took, provider }: { steps: Step[]; live: boolean; since: number; took?: number; provider: string }) {
+function ActivityTrail({ steps, live, since, took, provider, starting }: { steps: Step[]; live: boolean; since: number; took?: number; provider: string; starting?: boolean }) {
   const [open, setOpen] = useState(false);
   if (!steps.length && !live) return null;
   const tools = steps.filter(s => s.kind === "tool").length;
   const last = steps.at(-1);
-  const verb = !last || last.kind === "thinking" ? "Thinking" : last.kind === "tool" ? "Working" : "Writing";
+  const verb = starting ? `Starting ${labels[provider] || provider}` : !last || last.kind === "thinking" ? "Thinking" : last.kind === "tool" ? "Working" : "Writing";
   const shown = open ? steps : live ? steps.slice(-4) : [];
   const offset = steps.length - shown.length;
   return <div className={"trail" + (live ? " is-live" : "")}>
@@ -310,8 +332,10 @@ export function App() {
     const incoming = Array.from(files);
     if (incoming.some(f => !window.army.pathFor(f) && f.size > 200 * 1024 * 1024)) { setError("Pasted or remote attachments must be 200 MB or smaller. Drop big files from a folder instead."); return; }
     setAttachments(previous => {
-      if (previous.length + incoming.length > 10) { setError("Attach up to 10 files at a time."); return previous; }
-      return [...previous, ...incoming];
+      // Too many: keep what fits, and say so.
+      const next = [...previous, ...incoming];
+      if (next.length > MAX_FILES) setError(`Up to ${MAX_FILES} files per message; ${next.length - MAX_FILES} left out.`);
+      return next.slice(0, MAX_FILES);
     });
   };
   useEffect(() => {
@@ -400,8 +424,12 @@ export function App() {
   const setError = (text: string) => setToast(text ? { text, tone: "error" } : null);
   const [sidebar, setSidebar] = useState(true);
   const [stageH, setStageH] = useState(380);
-  const startResize = (e: React.PointerEvent<HTMLDivElement>) => { const startY = e.clientY, start = stageH, box = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect(); const move = (ev: PointerEvent) => setStageH(Math.min(box.height - 220, Math.max(160, start + ev.clientY - startY))); const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); document.body.classList.remove("resizing"); }; document.body.classList.add("resizing"); window.addEventListener("pointermove", move); window.addEventListener("pointerup", up); };
-  const [office, setOffice] = useState(true);
+  const startResize = (e: React.PointerEvent<HTMLDivElement>) => { const startY = e.clientY, start = stageH, box = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect(); const move = (ev: PointerEvent) => { stageRef.current = Math.min(box.height - 220, Math.max(160, start + ev.clientY - startY)); setStageH(stageRef.current); }; const up = () => { if (stageRef.current) void window.army.ui?.set({ officeHeight: stageRef.current }).catch(() => {}); window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); document.body.classList.remove("resizing"); }; document.body.classList.add("resizing"); window.addEventListener("pointermove", move); window.addEventListener("pointerup", up); };
+  // Closed until the saved choice is read, so a scene the user had closed never flashes up at start.
+  const [office, setOfficeOn] = useState(false);
+  const officeByHand = useRef(false);
+  const setOffice = (next: boolean | ((v: boolean) => boolean)) => setOfficeOn(v => { const on = typeof next === "function" ? next(v) : next; officeByHand.current = on; void window.army.ui?.set({ officeOpen: on }).catch(() => {}); return on; });
+  const stageRef = useRef(0);
   const [bootReady, setBootReady] = useState({ main: false, info: false, ui: false, templates: false, office: false, files: false });
   const [bootResuming, setBootResuming] = useState(false);
   const [wsLoading, setWsLoading] = useState<string | null>(null);
@@ -430,9 +458,11 @@ export function App() {
   const [ideCompact, setIdeCompact] = useState(false);
   useEffect(() => {
     const uiApi = window.army.ui;
-    if (!uiApi) { setBootReady(b => ({ ...b, ui: true })); return; }
+    if (!uiApi) { setOfficeOn(true); setBootReady(b => ({ ...b, ui: true })); return; }
     void uiApi.get().then((u: any) => {
       setPrefs({ navIcons: u?.navIcons, ideEditorOnFile: !!u?.ideEditorOnFile, ideTreeToggle: !!u?.ideTreeToggle });
+      setOfficeOn(u?.officeOpen !== false);
+      if (u?.officeHeight) setStageH(u.officeHeight);
       if (u?.ideWidth) setIdeW(u.ideWidth);
       if (u?.ideTreeWidth) setTreeW(u.ideTreeWidth);
       if (u?.ideOpen) { setIdeMounted(true); setIde(true); }
@@ -583,6 +613,9 @@ export function App() {
   const [teams, setTeams] = useState<{ file: string; name: string; members: any[]; boss?: any }[]>([]);
   const [homeTeam, setHomeTeam] = useState("");
   useEffect(() => { const load = () => window.army.teams.list().then(setTeams).catch(() => {}); void load(); return window.army.on("teams-changed", load); }, [workspace]);
+  // Agents whose CLI is still coming up (Antigravity loads and signs in first).
+  const [starting, setStarting] = useState<Record<string, boolean>>({});
+  useEffect(() => window.army.on("starting", ({ name, on }: { name: string; on: boolean }) => setStarting(v => ({ ...v, [name]: on }))), []);
   const [tasks, setTasks] = useState<TaskCard[]>([]);
   useEffect(() => { void window.army.tasks.list().then(setTasks).catch(() => {}); return window.army.on("tasks", (list: TaskCard[]) => setTasks(list)); }, [workspace, view === "overview" && overviewTab === "tasks"]);
   const tasksNeedLook = needsLook(tasks);
@@ -673,7 +706,7 @@ export function App() {
     const restarts = tpl.provider !== "claude" && !stopped[name];
     try {
       if (restarts) {
-        const resumes = tpl.provider === "codex";
+        const resumes = await window.army.keepsChat(name).catch(() => false);
         const busy = await window.army.isWorking(name);
         const description = (busy ? "Agent is working; switching now interrupts the current task. " : "") + (resumes ? "The agent restarts and continues the conversation." : "This provider cannot resume, so the conversation starts fresh.");
         if (!(await ask.confirm(busy ? "Agent is working; switch now?" : "Switch model?", { description, action: "Switch" }))) return;
@@ -689,7 +722,7 @@ export function App() {
     try {
       if (tpl.provider !== "claude" && !stopped[name]) {
         const busy = await window.army.isWorking(name);
-        const description = (busy ? "Agent is working; switching now interrupts the current task. " : "") + (tpl.provider === "codex" ? "The agent restarts and continues the conversation." : "This provider cannot resume, so the conversation starts fresh.");
+        const description = (busy ? "Agent is working; switching now interrupts the current task. " : "") + ((await window.army.keepsChat(name).catch(() => false)) ? "The agent restarts and continues the conversation." : "This provider cannot resume, so the conversation starts fresh.");
         if (!(await ask.confirm(busy ? "Agent is working; switch now?" : "Change effort?", { description, action: "Change" }))) return;
       }
       const r = await window.army.setEffort(name, effort);
@@ -703,20 +736,28 @@ export function App() {
     try {
       if (!stopped[name]) {
         const busy = await window.army.isWorking(name);
-        const resumes = ["claude", "codex"].includes(tpl.provider);
+        const resumes = await window.army.keepsChat(name).catch(() => false);
+        const livePossible = ["claude", "antigravity"].includes(tpl.provider) && !!permission && permission !== "bypass";
+        if (!livePossible) {
         const description = (busy ? "Agent is working; switching now interrupts the current task. " : "") + (resumes ? "The agent restarts and continues the conversation." : "This provider cannot resume, so the conversation starts fresh.");
         if (!(await ask.confirm(busy ? "Agent is working; switch now?" : "Change permission mode?", { description, action: "Change" }))) return;
+        }
       }
       const r = await window.army.setPermission(name, permission);
       setAgentTemplates(t => ({ ...t, [name]: { ...tplOf(name), ...t[name], permission } }));
-      if (r.mode === "fresh") setError(`Permission mode changed for ${name}; it restarts with a fresh conversation.`);
+      const how = r.mode === "applied" ? "switched right away" : r.mode === "restarted" ? "it restarted in the same conversation" : r.mode === "fresh" ? `${labels[tpl.provider] || tpl.provider} cannot reopen this conversation, so it starts a new one` : "it applies when the agent starts";
+      setToast({ text: `Permission mode changed for ${name}: ${how}.`, tone: "working" });
     } catch (e) { setError(String(e)); }
   };
   const openTerminal = (name: string) => { setSelected(name); setView("agent"); setMode("terminal"); setAgentMenu(null); };
   const agentProvider = (a: string) => agentTemplates[a]?.provider || (demo && a === "coder" ? "codex" : demo && a === "scout" ? "antigravity" : provider);
   const agentColor = (name: string) => name === "you" ? "you" : String((agents.indexOf(name) >= 0 ? agents.indexOf(name) : Array.from(name.toLowerCase()).reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) >>> 0, 0)) % 6);
   const agentState = (a: string): [Tone, string] => attention[a] ? ["needs", attention[a]] : stopped[a] ? ["idle", "Stopped"] : working[a] ? ["working", "Working"] : ["idle", "Idle"];
-  const interrupt = () => { window.army.input(selected, "\x1b"); setWorking(v => ({ ...v, [selected]: false })); };
+  const interrupt = () => {
+    void window.army.interrupt(selected).catch(e => setError(clean(e)));
+    setWorking(v => ({ ...v, [selected]: false }));
+    setTrail(t => t[selected]?.live ? { ...t, [selected]: { ...t[selected], live: false, took: Date.now() - t[selected].since } } : t);
+  };
   const team: AgentInfo[] = agents.map(a => { const [tone, status] = agentState(a); return { name: a, provider: agentProvider(a), model: agentTemplates[a]?.model || models[agentProvider(a)] || "default", enlistedBy: enlistedBy[a], tone, status }; });
   const go = (id: string) => {
     if (id === "home") { setView("home"); window.army.operations.list().then(setOperations); }
@@ -728,6 +769,10 @@ export function App() {
     else if (id === "memory") { setBrainTab("memory"); setView("brain"); }
     else setView(id);
   };
+  useEffect(() => {
+    const open = (e: Event) => { const rel = (e as CustomEvent).detail; if (rel) openInIde(String(rel)); };
+    window.addEventListener("dispatch-open-file", open); return () => window.removeEventListener("dispatch-open-file", open);
+  });
   useEffect(() => window.army.on("tray-nav", ({ view: v, workspace: w }: { view?: string; workspace?: string }) => { if (v) go(v); else if (w) void openWorkspace(w); }));
   const current: Timed[] = archive ? archive.messages : messages.filter(m => (m.to === selected || m.from === selected) && (!activeChat || !m.chats?.[selected] || m.chats[selected] === activeChat));
   // Live steps sit under the conversation; once the turn is over they fold into one line above the agent's reply.
@@ -735,7 +780,7 @@ export function App() {
   // A message being delivered (submitting / in flight) counts as working too, also when an old finished trail is shown:
   // a message from Telegram or another agent starts a turn the chat never saw being sent.
   const live = !stopped[selected] && !attention[selected] && (tr ? tr.live || (agentProvider(selected) === "claude" && !!working[selected]) : !!working[selected]);
-  const trailNode = !archive && (tr || live) ? <ActivityTrail steps={tr?.steps || []} live={live} since={tr?.since || workSince[selected] || Date.now()} took={tr?.took} provider={agentProvider(selected)} /> : null;
+  const trailNode = !archive && (tr || live) ? <ActivityTrail steps={tr?.steps || []} live={live} since={tr?.since || workSince[selected] || Date.now()} took={tr?.took} provider={agentProvider(selected)} starting={!!starting[selected]} /> : null;
   const trailAboveLast = !!trailNode && !live && current.at(-1)?.from === selected;
   // Chat scroll: stays pinned to the bottom unless the user scrolled up. Only the last `shown` messages are rendered;
   // scrolling near the top loads the previous page and keeps the view where it was.
@@ -830,7 +875,7 @@ export function App() {
     const needFiles = onAgentPage && ide && !needsFolder;
     const needOffice = onAgentPage && office && !needsFolder;
     if (bootReady.ui && !needFiles && !bootReady.files) { setBootReady(b => ({ ...b, files: true })); return; }
-    if (bootReady.info && !needOffice && !bootReady.office) { setBootReady(b => ({ ...b, office: true })); return; }
+    if (bootReady.ui && bootReady.info && !needOffice && !bootReady.office) { setBootReady(b => ({ ...b, office: true })); return; }
     if (!bootReady.main || !bootReady.info) { setBootStatus(bootResuming ? "Resuming operation" : "Opening workspace"); return; }
     if (!bootReady.files || !bootReady.office || !bootReady.templates) { setBootStatus("Preparing workspace"); return; }
     if (bootSettling.current) return;
@@ -852,6 +897,7 @@ export function App() {
       <h1>Open a folder</h1>
       <p>Choose the project folder your agents will work in. You can switch folders later from the top bar.</p>
       <Button className="primary" onClick={async () => { try { const next = await window.army.workspace(); const info = await window.army.info(); if (!(info as any).needsFolder) { setWsLoading("Opening workspace"); try { setNeedsFolder(false); setWorkspace(next); setOperations(info.operations); setWorkspaces(info.workspaces); if (info.operations[0]) { setWsLoading("Resuming operation"); await resume(info.operations[0].id, true); } await waitForResponsive({ ready: (window as any).army.ready, onStatus: setWsLoading, timeoutMs: 20000 }).promise; } finally { setWsLoading(null); } } } catch (e) { setError(String(e)); } }}>Open folder</Button>
+      <Button className="ghost" onClick={() => void (window.army as any).tabs.openBlank().catch((e: unknown) => setError(clean(e)))}>Start without a folder</Button>
     </div>
   );
   return (
@@ -1023,7 +1069,7 @@ export function App() {
               terminal={<Terminals shells={shells} active={shellActive} setActive={setShellActive} onClose={() => setTermOpen(false)} height={termH} setHeight={setTermH} focusNonce={termFocus} />} /></Suspense>}</div>
             <div className="ide-resizer" role="separator" aria-orientation="vertical" aria-label="Resize files panel" tabIndex={ide ? 0 : -1} onPointerDown={startIdeResize} onKeyDown={e => { const d = e.key === "ArrowLeft" ? -32 : e.key === "ArrowRight" ? 32 : 0; if (!d) return; if (ideCompact) setTreeW(w => Math.min(520, Math.max(240, w + d))); else setIdeW(w => Math.max(420, w + d)); }} />
             <div className="chat">
-              {office && <><div className="stage" style={{ height: stageH }}><Suspense fallback={null}>{heavyOk && <Office agents={team.filter(a => a.name !== "boss").map(a => ({ name: a.name, role: a.model }))} messages={messages} working={working} onReady={() => setBootReady(b => b.office ? b : { ...b, office: true })} />}</Suspense></div>
+              {office && <><div className="stage" style={{ height: stageH }}><Suspense fallback={null}>{heavyOk && <Office agents={team.filter(a => a.name !== "boss").map(a => ({ name: a.name, role: a.model }))} messages={messages} working={working} active={onAgentPage} load={officeByHand.current} onReady={() => setBootReady(b => b.office ? b : { ...b, office: true })} />}</Suspense></div>
               <div className="splitter" role="separator" aria-orientation="horizontal" aria-label="Resize office" tabIndex={0} onPointerDown={startResize} onKeyDown={e => { if (e.key === "ArrowUp") setStageH(h => Math.max(160, h - 24)); if (e.key === "ArrowDown") setStageH(h => h + 24); }} /></>}
               <div className="chat-pane">
               <div className="chat-head">
@@ -1078,7 +1124,7 @@ export function App() {
                 {mode === "chat" && !atBottom && <button type="button" className="jump-bottom" aria-label="Scroll to the latest message" title="Latest message" onClick={() => toBottom(true)}><ArrowDownIcon aria-hidden="true" /></button>}
                 {draggingFiles && <div className="drop-hint">Drop files to attach</div>}
                 {mention && !archive && <MentionMenu items={mentionList} index={Math.min(mention.index, Math.max(0, mentionList.length - 1))} query={mention.query} loading={mentionAll.loading} pick={pickMention} hover={i => setMention(v => v && { ...v, index: i })} />}
-                {attachments.length > 0 && <div className="attachment-list">{attachments.map((file, i) => <div className="attachment-chip" key={`${file.name}-${i}`}><AttachmentPreview file={file} /><span title={file.name}>{file.name}</span><button type="button" className="icon-button" aria-label={`Remove ${file.name}`} onClick={() => setAttachments(v => v.filter((_, index) => index !== i))}><XMarkIcon /></button></div>)}</div>}
+                {attachments.length > 0 && <AttachmentList files={attachments} remove={file => setAttachments(v => v.filter(x => x !== file))} />}
                 {links.length > 0 && <div className="link-list">{links.map(u => <a key={u} className="link-chip" href={u} target="_blank" rel="noreferrer" title={u}><LinkIcon aria-hidden="true" /><span>{linkLabel(u)}</span></a>)}</div>}
                 <div className={"composer-input" + (links.length ? " has-links" : "")}>
                 {links.length > 0 && <div className="composer-mirror" ref={mirror} aria-hidden="true">{splitLinks(text).map((part, i) => part.link ? <span key={i} className="composer-link">{part.text}</span> : part.text)}{"\n"}</div>}
@@ -1108,7 +1154,7 @@ export function App() {
                     <span className="composer-working"><StatusDot tone="working" label={`${selected} is working`} /></span>
                     <Button className="danger stop" onClick={interrupt} aria-label="Stop current task" title="Stop the current task"><StopIcon aria-hidden="true" />Stop</Button>
                   </> : <span className="composer-hint">Enter to send · Shift Enter for new line</span>}
-                  <button type="button" className={"icon-button mic-button" + (voice === "on" ? " recording" : voice === "starting" ? " starting" : "")} disabled={!!archive || sending} onClick={() => void (voice === "off" ? startVoice() : stopVoice())} aria-pressed={voice !== "off"} aria-label={voice === "off" ? "Voice typing" : "Stop voice typing"} title={voice === "off" ? "Voice typing: speak, it types (Ctrl Alt Space)" : "Stop listening (Esc). Enter sends."}>
+                  <button type="button" className={"icon-button mic-button" + (voice === "on" ? " recording" : voice === "starting" ? " starting" : "")} disabled={!!archive || sending} onClick={() => void (voice === "off" ? startVoice() : stopVoice())} aria-pressed={voice !== "off"} aria-label={voice === "off" ? "Voice typing" : "Stop voice typing"} title={voice === "off" ? "Voice typing: speak, it types (shortcut in Settings, Voice)" : "Stop listening (Esc). Enter sends."}>
                     {voice === "on" ? <Visualizer analyser={voiceAnalyser} width={54} height={18} /> : <MicrophoneIcon />}
                   </button>
                   <Button className="primary send" onClick={() => void send()} disabled={!!archive || sending || (!text.trim() && !attachments.length && voice === "off")} aria-label="Send" title="Send (Enter)"><PaperAirplaneIcon aria-hidden="true" /></Button>

@@ -39,6 +39,8 @@ export function DictationOverlay() {
     catch (e) { const m = String(e); setMessage(/permission|denied|notallowed/i.test(m) ? "Mic permission" : /notfound|device/i.test(m) ? "Mic not found" : "Mic error"); setState("error"); later(2500, () => close()); }
   };
   const finish = async () => {
+    // Pressed while nothing records: never stay open as an empty window.
+    if (stateRef.current === "idle") { window.army.voice.overlayClose(); return; }
     if (stateRef.current !== "recording") return;
     setState("transcribing");
     await dictation.current?.stop();
@@ -54,6 +56,7 @@ export function DictationOverlay() {
     for (const el of [document.documentElement, document.body]) el.style.background = "transparent";
     const offStart = window.army.on("overlay-start", () => void start());
     const offStop = window.army.on("overlay-stop", () => void finish());
+    window.army.voice.overlayReady?.();
     const key = (e: KeyboardEvent) => { if (e.key === "Escape") cancel(); else if ((e.key === "Enter" || e.key === " ") && stateRef.current === "recording") void finish(); };
     window.addEventListener("keydown", key);
     return () => { offStart(); offStop(); window.removeEventListener("keydown", key); clearTimers(); dictation.current?.cancel(); };

@@ -19,6 +19,8 @@ import { startBootGuard } from "./theme/boot";
 const overlay = window.location.hash === "#overlay";
 if (overlay) document.documentElement.classList.add("overlay-window");
 startI18n();
+// Set while the window is dragged: animations and scenes hold still (style.css, office/frameCap.ts).
+if (!overlay) (window as any).army?.on?.("win-moving", (on: boolean) => document.documentElement.classList.toggle("win-moving", on));
 applyTheme(loadTheme());
 void syncThemeFromMain();
 createRoot(document.getElementById("root")!).render(overlay ? <DictationOverlay /> : <RemoteGate><App /></RemoteGate>);

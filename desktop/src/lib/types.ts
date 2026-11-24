@@ -4,7 +4,9 @@ export type PluginQuestionAnswer = { action: "accept" | "decline"; values?: Reco
 export type AgentQuestion = {
   id: string;
   at: string;
-  kind?: "plugin";
+  kind?: "plugin" | "menu";
+  /** A menu the agent's CLI shows in its terminal (approval, file access): its question and its own choices. */
+  question?: string; options?: string[];
   questions?: { question: string; header: string; multiSelect: boolean; options: { label: string; description: string }[] }[];
   server?: string;
   title?: string;
@@ -34,7 +36,7 @@ declare global {
         start(id: string): Promise<string>; stop(id: string): Promise<boolean>;
         chooseFile(): Promise<{ command: string; cwd: string; name: string } | null>; chooseFolder(): Promise<string | null>;
       };
-      questions: { list(): Promise<Record<string, AgentQuestion>>; answer(name: string, answers: QuestionAnswer[] | PluginQuestionAnswer): Promise<boolean> };
+      questions: { list(): Promise<Record<string, AgentQuestion>>; answer(name: string, answers: QuestionAnswer[] | PluginQuestionAnswer | { label: string }): Promise<boolean> };
       chats: { list(name: string): Promise<any[]>; switch(name: string, id?: string): Promise<any> };
       enlist(name: string, template: any, task: string): Promise<any>;
       agentAction(name: string, action: string): Promise<boolean>;
@@ -42,12 +44,14 @@ declare global {
       gitChanges(): Promise<{ path: string; add: number; del: number; status: string }[]>;
       shells: { choices(): Promise<{ id: string; label: string; path: string }[]>; list(): Promise<{ name: string; title: string; cwd: string; exited: boolean }[]>; open(cwd?: string): Promise<string>; close(name: string): Promise<boolean>; rename(name: string, title: string): Promise<boolean> };
       voice: {
-        status(): Promise<{ installed: boolean; running: boolean; flavor: string; exe: string; model: string; dir: string; lang: string; mic: string; shortcut: string; shortcuts: string[]; shortcutOk: boolean }>;
+        status(): Promise<{ installed: boolean; running: boolean; flavor: string; exe: string; model: string; dir: string; lang: string; mic: string; shortcut: string; shortcutOk: boolean }>;
         warm(): Promise<boolean>;
         transcribe(wav: ArrayBuffer): Promise<string>;
         overlayDone(text: string): void;
         overlayLive(text: string): void;
         overlayClose(): void;
+        overlayReady(): void;
+        capture(on: boolean): Promise<boolean>;
       };
       ui: { get(): Promise<Record<string, any>>; set(patch: Record<string, any>): Promise<Record<string, any>> };
       files: {
@@ -66,7 +70,9 @@ declare global {
         import(dir: string, items: { name: string; data: ArrayBuffer | null }[]): Promise<number>;
       };
       setEffort(name: string, effort: string): Promise<{ mode: "applied" | "queued" | "saved" | "restarted" | "fresh" }>;
-      setPermission(name: string, permission: string): Promise<{ mode: "saved" | "restarted" | "fresh" }>;
+      setPermission(name: string, permission: string): Promise<{ mode: "applied" | "saved" | "restarted" | "fresh" }>;
+      interrupt(name: string): Promise<boolean>;
+      keepsChat(name: string): Promise<boolean>;
       info(): Promise<{ workspace: string; demo: boolean; operations: any[]; workspaces: string[] }>;
       output(name: string): Promise<string>;
       workspace(target?: string): Promise<string>;
@@ -78,7 +84,7 @@ declare global {
       changeBoss(template: any, agent?: string): Promise<any>;
       isWorking(name: string): Promise<boolean>;
       templates: { list(): Promise<{ items: any[]; models: Record<string, string[]>; efforts?: Record<string, string[]>; permissions?: Record<string, string[]> }>; saveAgent(agent: string, name: string, scope: "project" | "global"): Promise<string> };
-      attachmentPreview(path: string): Promise<{ name: string; image?: string } | null>;
+      attachmentPreview(path: string, large?: boolean): Promise<{ name: string; image?: string } | null>;
       pathFor(file: File): string;
       saveAttachments(files: { name: string; data: ArrayBuffer }[]): Promise<string[]>;
       send(to: string, text: string): Promise<boolean>;

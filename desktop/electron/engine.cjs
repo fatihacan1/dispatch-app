@@ -11,6 +11,7 @@ const { restartRoster } = require('./roster.cjs');
 const gitLib = require('./git.cjs');
 const { parseMessage } = require('./bus.cjs');
 const { createDemoTerminal } = require('./demo-terminal.cjs');
+const screenLib = require('./screen.cjs');
 const { attentionFrom, shouldClearAttention, trustAnswer, nudgeAnswer, parsePluginQuestion, pluginQuestionKeys, BLOCKING, normalize, progressKey, approvalSummary } = require('./attention.cjs');
 const localAI = require('./local-ai.cjs');
 const mcp = require('./mcp.cjs');
@@ -65,7 +66,7 @@ function readChat(name, id) { try { return JSON.parse(fs.readFileSync(chatPath(n
 function writeChat(name, chat) { const file = chatPath(name, chat.id); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(chat, null, 2)); }
 function chats(name) { try { return fs.readdirSync(path.dirname(chatPath(name, '_'))).filter(f => f.endsWith('.json')).map(f => readChat(name, f.slice(0, -5))).filter(Boolean).sort((a,b) => b.created.localeCompare(a.created)); } catch { return []; } }
 function createChat(saved) { const chat = { id: crypto.randomUUID(), title: 'New chat', sessionId: demo || saved.provider === 'claude' ? crypto.randomUUID() : null, created: new Date().toISOString(), messages: [] }; writeChat(saved.name, chat); saved.chatId = chat.id; saved.sessionId = chat.sessionId; saveOperation(); return chat; }
-function recordMessage(msg) { const sender = processes.get(msg.from); if (sender && msg.to !== 'orchestrator') sender.owes = null; if (!operation) return msg; const refs = {}; for (const name of new Set([msg.from, msg.to])) { const saved = operation.agents.find(a => a.name === name); if (!saved?.chatId) continue; const chat = readChat(name, saved.chatId); if (!chat) continue; refs[name] = chat.id; if (!chat.messages.some(m => m.id === msg.id)) { chat.messages.push(msg); if (chat.title === 'New chat') chat.title = msg.text.slice(0, 80); writeChat(name, chat); } } return { ...msg, chats: refs }; }
+function recordMessage(msg) { noteSent(msg); const sender = processes.get(msg.from); if (sender && msg.to !== 'orchestrator') sender.owes = null; if (!operation) return msg; const refs = {}; for (const name of new Set([msg.from, msg.to])) { const saved = operation.agents.find(a => a.name === name); if (!saved?.chatId) continue; const chat = readChat(name, saved.chatId); if (!chat) continue; refs[name] = chat.id; if (!chat.messages.some(m => m.id === msg.id)) { chat.messages.push(msg); if (chat.title === 'New chat') chat.title = msg.text.slice(0, 80); writeChat(name, chat); } } return { ...msg, chats: refs }; }
 // A message Dispatch itself adds to the conversation (an agent's own reply, a notice). It goes into the log too,
 // so it is still there when the operation is resumed.
 function emitMessage({ from, to, text }) {
@@ -76,7 +77,7 @@ function emitMessage({ from, to, text }) {
 }
 // Agents about to start in the same batch (a team, a reset), so the first ones already know who else is on board.
 let rosterHint = [];
-function switchChat(name, id) { const saved = operation?.agents.find(a => a.name === name); if (!saved) throw new Error('Agent not found'); if (name !== 'boss' && id) throw new Error('Only Boss chats can be resumed'); const target = id ? readChat(name, id) : null; if (id && !target) throw new Error('Chat not found'); if (target && !demo && (!target.sessionId || !['claude','codex'].includes(saved.provider))) throw new Error(`Cannot resume this ${saved.provider} chat: provider session ID or resume support is unavailable.`); const old = processes.get(name); const queued = old ? [...(old.inFlight ? [old.inFlight] : []), ...old.queue] : []; if (old) { clearTimeout(old.timer); setAttention(name, old, null); processes.delete(name); old.terminal.kill(); } const chat = target || createChat(saved); if (name !== 'boss') { for (const previous of chats(name)) if (previous.id !== chat.id) fs.unlinkSync(chatPath(name, previous.id)); } saved.chatId = chat.id; saved.sessionId = chat.sessionId; saved.stopped = false; saveOperation(); const agent = startAgent(name, saved.template, saved.enlistedBy, saved, !!target); for (const item of queued) if (!agent.queue.some(x => x.file === item.file)) agent.queue.push(item); agent.queue = agent.queue.map(item => ({ ...item, previous: true })); return chat; }
+function switchChat(name, id) { const saved = operation?.agents.find(a => a.name === name); if (!saved) throw new Error('Agent not found'); if (name !== 'boss' && id) throw new Error('Only Boss chats can be resumed'); const target = id ? readChat(name, id) : null; if (id && !target) throw new Error('Chat not found'); if (target && !demo && (!target.sessionId || !['claude','codex','antigravity'].includes(saved.provider))) throw new Error(`Cannot resume this ${saved.provider} chat: provider session ID or resume support is unavailable.`); const old = processes.get(name); const queued = old ? [...(old.inFlight ? [old.inFlight] : []), ...old.queue] : []; if (old) { clearTimeout(old.timer); setAttention(name, old, null); processes.delete(name); old.terminal.kill(); } const chat = target || createChat(saved); if (name !== 'boss') { for (const previous of chats(name)) if (previous.id !== chat.id) fs.unlinkSync(chatPath(name, previous.id)); } saved.chatId = chat.id; saved.sessionId = chat.sessionId; saved.stopped = false; saveOperation(); const agent = startAgent(name, saved.template, saved.enlistedBy, saved, !!target); for (const item of queued) if (!agent.queue.some(x => x.file === item.file)) agent.queue.push(item); agent.queue = agent.queue.map(item => ({ ...item, previous: true })); return chat; }
 const processes = new Map();
 const pendingAsks = new Set();
 const trustFile = () => path.join(workspace, '.dispatch', 'trust.json');
@@ -84,6 +85,7 @@ function trusted() { try { return JSON.parse(fs.readFileSync(trustFile(), 'utf8'
 function setAttention(name, agent, reason) {
   if (agent.attention === reason) return; if (reason !== 'Trust folder') agent.trustInteracted = false; agent.attention = reason; agent.blocked = BLOCKING.includes(reason);
   if (agent.blocked) hold(agent);
+  if (agent.question?.kind === 'menu' && !['Approve command', 'Question'].includes(reason)) clearQuestion(name, agent);
   notify('attention', { name, reason });
   if (reason === 'Approve command') tgApprovalSoon(name, agent); else if (agent.tgApproval) tgApprovalGone(name, agent);
 }
@@ -95,7 +97,12 @@ function tgApprovalSoon(name, agent) {
   a.timer = setTimeout(async () => {
     if (agent.tgApproval !== a) return;
     if (processes.get(name) !== agent || agent.attention !== 'Approve command') { agent.tgApproval = null; return; }
-    a.summary = approvalSummary(agent.promptBuffer) || 'A command waits for approval.';
+    // Only a menu that really stands on the screen, and each one once: a false alarm that came and went sent the phone
+    // the same "needs your approval" over and over.
+    const sig = menuSig(agent.menu);
+    if (screenLib.menuKind(agent.menu) !== 'Approve command' || (agent.tgSig === sig && Date.now() - (agent.tgSigAt || 0) < 10 * 60e3)) { agent.tgApproval = null; return; }
+    agent.tgSig = sig; agent.tgSigAt = Date.now();
+    a.summary = (agent.menu?.question && [agent.menu.title, agent.menu.body, agent.menu.question].filter(Boolean).join('\n').slice(-400)) || approvalSummary(agent.promptBuffer) || 'A command waits for approval.';
     a.head = `[${path.basename(workspace)} · ${name}] needs your approval:`;
     try { a.messageId = await telegram.send(`${a.head}\n${a.summary}`, { buttons: [[{ text: 'Approve', data: `ap:${a.nonce}:y` }, { text: 'Deny', data: `ap:${a.nonce}:n` }]] }); } catch { agent.tgApproval = null; }
   }, 20e3);
@@ -124,7 +131,7 @@ function telegramButton(data) {
   const [name, agent] = entry, a = agent.tgApproval, yes = m[2] === 'y';
   if (agent.attention !== 'Approve command' || a.answered) { agent.tgApproval = null; return { toast: 'Already answered.', text: `${a.head}\n${a.summary}\n\nAlready answered.` }; }
   a.answered = true; clearTimeout(a.timer);
-  agent.promptBuffer = ''; agent.awaitingAnswer = true; typeKeys(agent, yes ? '\r' : '\x1b', 0);
+  menuAnswered(agent); typeKeys(agent, yes ? '\r' : '\x1b', 0);
   setTimeout(() => { if (agent.tgApproval === a) agent.tgApproval = null; }, 5000);
   emitMessage({ from: 'you', to: name, text: `[via Telegram] ${yes ? 'Approved' : 'Denied'}: ${a.summary.split('\n')[0]}` });
   // Declined, the CLI stops its turn and waits: the lead must know, or it waits for a report that never comes.
@@ -150,10 +157,27 @@ function hold(agent) {
 }
 function answerTrust(agent) {
   if (agent.attention !== 'Trust folder' || !trusted() || agent.trustInteracted) return;
-  const answer = trustAnswer(agent.template.provider, agent.promptBuffer || '');
+  const answer = trustKeys(agent);
   if (!answer) return false;
-  agent.promptBuffer = ''; agent.awaitingAnswer = true; typeKeys(agent, answer);
+  menuAnswered(agent); typeKeys(agent, answer);
   return true;
+}
+// Antigravity's trust question is read from its screen; its redraws split the words in the stream.
+function trustKeys(agent) {
+  if (agent.template.provider === 'antigravity' && screenLib.menuKind(agent.menu) === 'Trust folder') {
+    const yes = agent.menu.options.findIndex(o => /^(?:yes|trust)\b/i.test(o) && !/parent/i.test(o));
+    return yes < 0 ? null : screenLib.menuKeys(agent.menu, yes);
+  }
+  return trustAnswer(agent.template.provider, agent.promptBuffer || '');
+}
+// An answer is on its way: the menu still stands on the screen for a moment and must not be asked again.
+const menuSig = m => m ? [m.title, m.body, m.question, ...m.options].join('|') : '';
+function menuAnswered(agent) { agent.promptBuffer = ''; agent.awaitingAnswer = true; agent.answeredSig = menuSig(agent.menu); agent.answeredAt = Date.now(); }
+// A menu the CLI waits on, shown in the chat with its own choices (approvals, file access, tool calls).
+function showMenu(name, agent) {
+  const sig = menuSig(agent.menu);
+  if (agent.question && (agent.question.kind !== 'menu' || agent.question.sig === sig)) return;
+  showQuestion(name, agent, { id: `menu-${Date.now()}`, kind: 'menu', sig, title: agent.menu.title, message: agent.menu.body, question: agent.menu.question, options: agent.menu.options });
 }
 // Menu keys one at a time, after the menu has settled. Down and Enter in one write reached Claude's trust menu as
 // one input: Enter took the row that was selected before (No, exit) and the agent quit.
@@ -170,7 +194,8 @@ function showQuestion(name, agent, ask) {
   agent.question = { ...ask, ...(tgNonce ? { tgNonce } : {}), at: new Date().toISOString() };
   notify('question', { name, question: agent.question });
   // A conversation from the phone is going on with this agent: ask there too, the reply answers it.
-  if (telegram.connected() && tgOwner() === name && Date.now() - tgWaiting < 30 * 60e3) {
+  // (A menu goes there by itself, with Approve / Deny buttons: tgApprovalSoon.)
+  if (ask.kind !== 'menu' && telegram.connected() && tgOwner() === name && Date.now() - tgWaiting < 30 * 60e3) {
     if (ask.kind === 'plugin') {
       const fields = (ask.fields || []).slice(0, 8).map(f => `- ${f.label}${f.required ? ' *' : ''}${f.value !== '' && f.value !== false ? `: ${f.value}` : ''}`).join('\n');
       const body = [ask.title || `MCP server "${ask.server || 'plugin'}" requests your input`, ask.message, fields].filter(Boolean).join('\n');
@@ -193,6 +218,16 @@ async function answerQuestion(name, answers, via = '') {
   const agent = processes.get(name), q = agent?.question;
   if (!q) throw new Error(`${name} has no open question. It may have been answered in its terminal.`);
   if (agent.answering) throw new Error(`${name} is already taking an answer.`);
+  if (q.kind === 'menu') {
+    const label = answers?.label, menu = screenLib.parseMenu(agent.view.lines());
+    const to = menu ? menu.options.indexOf(label) : -1;
+    if (to < 0) { clearQuestion(name, agent); throw new Error(`${name} is no longer asking this. Look at its terminal.`); }
+    clearTimeout(agent.timer); agent.menu = menu; menuAnswered(agent);
+    typeKeys(agent, screenLib.menuKeys(menu, to), 0);
+    emitMessage({ from: 'you', to: name, text: `${via ? `[via ${via}] ` : ''}${label}` });
+    clearQuestion(name, agent);
+    return true;
+  }
   if (q.kind === 'plugin') {
     const resp = answers && !Array.isArray(answers) ? answers : { action: 'accept' };
     const keys = pluginQuestionKeys(q, resp);
@@ -363,17 +398,26 @@ function deliver(agent) {
   if (agent.submitting || agent.blocked || agent.answering || !agent.ready) return;
   clearTimeout(agent.timer);
   if (!agent.queue.length) return;
+  // The user is writing in its terminal right now: a message pasted in between would end up inside their text.
+  if (agent.typedAt && Date.now() - agent.typedAt < 6000) { agent.timer = setTimeout(() => deliver(agent), 1500); return; }
   if (agent.command === 'codex' && agent.codexStateKnown && !agent.atPrompt) return;
+  // Antigravity: only into an empty prompt box on its screen. A message pasted while it still loaded or signed in was
+  // lost or sat unsent until somebody opened its terminal.
+  if (agent.command === 'agy' && agent.view && !demo) {
+    const st = agent.screenState, wait = Date.now() - (agent.screenAt || agent.startedAt || 0);
+    const go = st === 'idle' || (st === 'typing' && wait > 8000) || (!agent.sawBox && Date.now() - agent.startedAt > 45000 && Date.now() - agent.lastOutput > 3000 && plainPrompt(agent));
+    if (!go) { agent.timer = setTimeout(() => deliver(agent), 400); return; }
+  }
   // Claude takes a message typed mid-turn and hands it to the model at its next step, so never wait for the turn
   // to end (its spinner keeps the output busy, which held every message until the turn finished).
   const midTurn = agent.command === 'claude';
-  const delay = agent.atPrompt || midTurn ? 0 : Math.max(0, 1500 - (Date.now() - agent.lastOutput));
+  const delay = agent.atPrompt || midTurn || agent.screenState === 'idle' ? 0 : Math.max(0, 1500 - (Date.now() - agent.lastOutput));
   agent.timer = setTimeout(() => {
     const item = agent.queue.shift(); if (!item) return; agent.inFlight = item;
     agent.atPrompt = false;
     // A note for this agent that must not start a turn of its own (e.g. it now answers Telegram) rides along with the next real message.
     const who = item.msg.to; const note = item.msg.from !== 'dispatch' && quietNotes.get(who); if (note) quietNotes.delete(who);
-    const setup = agent.setup ? `${agent.setup}\n\n` : ''; agent.setup = null;
+    const setup = agent.setup ? `${agent.setup}\n\n` : ''; item.setup = agent.setup; agent.setup = null;
     const text = `${setup}[Dispatch] message from ${item.msg.from} (id ${item.msg.id})${item.previous ? ' (from previous chat)' : ''}: ${item.msg.text}${note ? `
 
 (Dispatch note: ${note})` : ''}`;
@@ -391,12 +435,14 @@ function deliver(agent) {
       try { agent.terminal.write('\r'); } catch {}
       agent.submitting = false; agent.inFlight = null; agent.deliveredAt = Date.now();
       try { fs.unlinkSync(item.file); } catch {}
-      confirmSubmit(agent, pastedAt, wasIdle, 0);
+      if (agent.command === 'agy') confirmAgy(agent, item, pastedAt, 0); else confirmSubmit(agent, pastedAt, wasIdle, 0);
       if (agent.queue.length) deliver(agent);
     };
     agent.timer = setTimeout(submit, 350);
   }, delay);
 }
+// Fallback should agy's box ever look different: some prompt, and no first-run or menu screen that takes keys.
+function plainPrompt(agent) { const l = agent.view.lines(); return l.some(x => /^ *>/.test(x)) && !/navigate|toggle|confirm|\[(?:next|done)\]|terms of/i.test(l.join(" ")); }
 // Claude and Codex record every turn they start. If none started a few seconds after Enter, the text is still
 // sitting in the prompt: press Enter again (an empty prompt ignores it).
 function confirmSubmit(agent, pastedAt, wasIdle, tries) {
@@ -406,6 +452,18 @@ function confirmSubmit(agent, pastedAt, wasIdle, tries) {
     try { agent.terminal.write('\r'); } catch {}
     confirmSubmit(agent, pastedAt, wasIdle, tries + 1);
   }, 4000);
+}
+// Antigravity: its screen tells. Text still in the prompt box: press Enter again. Box empty and no turn ever started:
+// the paste was swallowed while it came up, so the message goes in once more.
+function confirmAgy(agent, item, pastedAt, tries) {
+  if (demo || tries >= 12) return;
+  setTimeout(() => {
+    if (![...processes.values()].includes(agent) || agent.blocked || agent.submitting) return;
+    if ((agent.turnAt || 0) >= pastedAt || (agent.busyAt || 0) >= pastedAt) return;
+    if (agent.screenState === 'typing') { try { agent.terminal.write('\r'); } catch {} }
+    else if (agent.screenState === 'idle' && tries >= 4 && !item.retried) { item.retried = true; agent.queue.unshift(item); if (item.setup) agent.setup = item.setup; return deliver(agent); }
+    confirmAgy(agent, item, pastedAt, tries + 1);
+  }, 2500);
 }
 // Tell a message's sender what went wrong. Never loops: dispatch/scheduler/orchestrator senders get nothing, failures are swallowed.
 const notified = new Set();
@@ -420,8 +478,13 @@ function feedback(msg, text) {
     else if (processes.has(msg.from)) void sendMessage(msg.from, text, 'dispatch').catch(() => {});
   } catch (error) { console.error(error); }
 }
+// The text goes through standard input: as an argument, one that starts with "-" was read as a flag, and a very long
+// one did not fit on a Windows command line.
 function sendMessage(to, text, from = 'you', replyTo = '') {
-  return new Promise((resolve, reject) => execFile(bin(), replyTo ? ['reply', '--from', from, '--to', to, '--reply-to', replyTo, text] : ['send', '--from', from, '--to', to, text], { cwd: workspace, env: { ...process.env, DISPATCH_HOME: path.join(workspace, '.dispatch'), MYARMY_HOME: path.join(workspace, '.dispatch') } }, (error, _stdout, stderr) => error ? reject(new Error(`dispatch send failed: ${stderr.trim() || error.message}`)) : resolve(true)));
+  return new Promise((resolve, reject) => {
+    const child = execFile(bin(), replyTo ? ['reply', '--from', from, '--to', to, '--reply-to', replyTo, '--stdin'] : ['send', '--from', from, '--to', to, '--stdin'], { cwd: workspace, env: { ...process.env, DISPATCH_HOME: path.join(workspace, '.dispatch'), MYARMY_HOME: path.join(workspace, '.dispatch') } }, (error, _stdout, stderr) => error ? reject(new Error(`dispatch send failed: ${stderr.trim() || error.message}`)) : resolve(true));
+    child.stdin.on('error', () => {}); child.stdin.end(String(text));
+  });
 }
 function agentAction(name, action) {
   const saved = operation?.agents.find(a => a.name === name);
@@ -493,7 +556,7 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
   // localhost (Unreal/Blender MCP), so its reports never arrived. Session-only settings; the user's file is untouched.
   if (provider === 'antigravity' && !demo) {
     const file = path.join(workspace, '.dispatch', 'antigravity-session.json');
-    try { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify({ enableTerminalSandbox: false })); args.push('--settings', file); } catch {}
+    try { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify({ enableTerminalSandbox: false, ...(process.env.DISPATCH_TEST_HOME && process.env.DISPATCH_TEST_AGY ? JSON.parse(process.env.DISPATCH_TEST_AGY) : {}) })); args.push('--settings', file); } catch {}
     const agyMcpDir = path.join(workspace, '.dispatch', 'antigravity-mcp', name);
     try {
       fs.rmSync(agyMcpDir, { recursive: true, force: true });
@@ -527,6 +590,8 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
   // The shared Codex daemon may run in another workspace with a different
   // environment. Each Dispatch agent needs its own bus and identity.
   if (provider === 'codex') args.push('--no-daemon');
+  if (provider === 'antigravity' && resumeSession && !demo && session && fs.existsSync(activity.agyFile(session, account?.dir))) args.push('--conversation', session);
+  else if (provider === 'antigravity') resumeSession = false;
   if (provider === 'codex' && resumeSession && saved?.sessionId) args.push('resume', saved.sessionId);
   if (localProvider) args.push('--model', `dispatch-local/${localConfig.model}`);
   else if (template.model && template.model !== 'default') args.push(provider === 'codex' ? '-m' : '--model', template.model);
@@ -553,14 +618,12 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
   const resolved = demo ? null : resolveCommand(command);
   const accountEnv = account ? accountsLib.envFor(provider, account) : {};
   const terminal = demo ? createDemoTerminal(name, workspace, bin()) : pty.spawn(resolved.file, [...resolved.args, ...args], { name: 'xterm-256color', cols: 100, rows: 30, cwd: workspace, env: { ...process.env, ...accountEnv, ...mcpConfig.env, ...geminiEnv, ...(memoryOn && provider === 'claude' && mem.settings().disableProviderMemory ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' } : {}), DISPATCH_INDEX_INFO: codeIndexInfo || '', DISPATCH_AGENT: name, MYARMY_AGENT: name, DISPATCH_HOME: path.join(workspace, '.dispatch'), MYARMY_HOME: path.join(workspace, '.dispatch'), PATH: `${path.dirname(bin())}${path.delimiter}${process.env.PATH}` } });
-  const agent = { terminal, queue: [], output: '', lastOutput: Date.now(), atPrompt: false, template, session, enlistedBy, command, args, prompt, tracksTurns: direct, accountId: account?.id || null, accountDir: account?.dir || null }; processes.set(name, agent);
+  const agent = { terminal, queue: [], output: '', lastOutput: Date.now(), atPrompt: false, template, session, enlistedBy, command, args, prompt, tracksTurns: direct, accountId: account?.id || null, accountDir: account?.dir || null, startedAt: Date.now(), view: screenLib.create(100, 30, demo) }; processes.set(name, agent);
+  // Antigravity loads and signs in first: the chat says "Starting", not "Working".
+  if (provider === 'antigravity' && !demo) { agent.starting = true; notify('starting', { name, on: true }); }
   // Transcript: live thinking, tool steps and interim text for the chat, the real turn state, and the reply itself.
-  // agy is started without --conversation, so it always opens a new conversation: following the saved one watched
-  // a file nothing writes to any more, and the chat stayed empty after every restart. Find the new one instead.
-  const watchSession = provider === 'antigravity' ? null : session;
-  if (!demo) agent.stopActivity = activity.watch({ provider, cwd: workspace, session: watchSession, name, accountDir: account?.dir, onSession: id => { if (saved && (!saved.sessionId || provider === 'antigravity')) { saved.sessionId = id; agent.session = id; saveOperation(); } }, onEvent: e => {
+  const onTurn = agent.onTurn = e => {
     if (processes.get(name) !== agent) return;
-    agent.eventAt = Date.now();
     // A turn the transcript never announced with a user line (a reply to a background task's notice): its first
     // assistant line starts it, or the agent looked idle while it worked.
     if (e.turn === undefined && e.steps.length && agent.turnKnown && !agent.turn) e = { ...e, turn: true };
@@ -598,6 +661,13 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
     }
     if (shouldClearAttention(agent.attention, { turn: e.turn, hasSteps: e.steps.length > 0 })) clearAttention(name, agent);
     notify('activity', { name, steps: e.steps, turn: e.turn, dropLastText });
+  };
+  // A new agy conversation has no id until its file appears; a resumed one (--conversation) goes on in its own file.
+  const watchSession = provider === 'antigravity' && !resumeSession ? null : session;
+  if (!demo) agent.stopActivity = activity.watch({ provider, cwd: workspace, session: watchSession, name, accountDir: account?.dir, onSession: id => { if (saved && (!saved.sessionId || provider === 'antigravity')) { saved.sessionId = id; agent.session = id; saveOperation(); const chat = saved.chatId && readChat(name, saved.chatId); if (chat) { chat.sessionId = id; writeChat(name, chat); } } }, onEvent: e => {
+    if (processes.get(name) !== agent) return;
+    agent.eventAt = Date.now();
+    if (provider === 'antigravity') agyEvent(agent, e); else onTurn(e);
   } });
   // Messages received while stopped remain on disk; the watcher only emits an
   // add event once, so collect them again when this agent starts.
@@ -612,13 +682,54 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
   fs.writeFileSync(path.join(workspace, '.dispatch', 'agents.json'), JSON.stringify([...processes.keys()]));
   // Busy TUIs (spinners) send dozens of chunks a second per agent. Trimming the 200 KB buffer on every chunk copied
   // it each time and froze the main process (window could not even be moved) with many agents: trim only past 300 KB.
-  terminal.onData(data => { agent.sawOutput = true; noteProgress(agent, data, name); if (provider === 'antigravity' && /[⠁-⣿]/.test(data)) agent.spinAt = Date.now(); agent.output += data; if (agent.output.length > 300000) agent.output = agent.output.slice(-200000);
+  terminal.onData(data => {
+    if (processes.get(name) !== agent) return; // the last words of a replaced terminal
+    agent.sawOutput = true; agent.lastOutput = Date.now();
+    if (provider === 'antigravity' && /[⠁-⣿]/.test(data)) agent.spinAt = Date.now();
+    agent.output += data; if (agent.output.length > 300000) agent.output = agent.output.slice(-200000);
+    agent.view.write(data);
+    // Reading the screen and the prompts in it costs a dozen regexes: ten times a second, not once per chunk.
+    agent.unread = (agent.unread || '') + data;
+    scanSoon(100);
+    terminalOut(name, data);
+  });
+  // An error thrown into xterm's write callback stops its queue for good: the screen would never be read again.
+  const scan = agent.scan = () => {
+    try { readScreen(); } catch (e) { console.error(`${name}: reading its screen failed`, e); }
+  };
+  // The timer is over before the screen is asked for: output that comes in meanwhile starts the next one. Cleared only
+  // when the screen was read, the last words of a turn fell in between and the agent looked busy for good.
+  const scanSoon = ms => { if (!agent.scanTimer) agent.scanTimer = setTimeout(() => { agent.scanTimer = null; if (processes.get(name) === agent) agent.view.write('', scan); }, ms); };
+  const readScreen = () => {
+    if (processes.get(name) !== agent) return;
+    const data = agent.unread || ''; agent.unread = '';
+    if (data) noteProgress(agent, data, name);
+    const lines = agent.view.lines(); agent.menu = screenLib.parseMenu(lines);
+    const menu = screenLib.menuKind(agent.menu), now = Date.now(), agy = provider === 'antigravity' && !demo;
+    if (agy) {
+      let st = screenLib.agyState(lines);
+      // Caught in the middle of a redraw, the prompt box is missing for an instant: only believed when it stays away.
+      if (st === 'loading' && agent.sawBox) { agent.boxGoneAt ||= now; if (now - agent.boxGoneAt < 900) { st = agent.screenState; scanSoon(300); } } else agent.boxGoneAt = 0;
+      if (st !== agent.screenState) { agent.screenState = st; agent.screenAt = now; }
+      if (st === 'busy') agent.busyAt = now;
+      if (!agent.sawBox && ['idle', 'busy', 'typing'].includes(st)) agent.sawBox = true;
+      if (agent.starting && (agent.sawBox || st === 'menu')) { agent.starting = false; notify('starting', { name, on: false }); }
+    }
     if (!(agent.attention === 'Plugin question' && !progressKey(data))) agent.promptBuffer = ((agent.promptBuffer || '') + data).slice(-5000);
     // A choice the CLI wants that has one safe answer (Codex: keep the model when the limit is near).
     const nudge = nudgeAnswer(provider, agent.promptBuffer);
     if (nudge && Date.now() - (agent.nudgedAt || 0) > 5000) { agent.nudgedAt = Date.now(); setTimeout(() => { if (processes.get(name) !== agent) return; agent.promptBuffer = ''; try { terminal.write(nudge); } catch {} }, 700); }
     if (!agent.hadTurn && (agent.turnKnown || isWorking(name))) agent.hadTurn = true;
-    const detected = attentionFrom(agent.promptBuffer, { provider, hadTurn: agent.hadTurn });
+    let detected = attentionFrom(agent.promptBuffer, { provider, hadTurn: agent.hadTurn });
+    // What stands on the screen is the truth: for Antigravity always (its redraws never spell a menu out in one piece),
+    // for the others when the stream missed it.
+    if (agy) { if (['Trust folder', 'Approve command', 'Question', 'Plugin question'].includes(detected)) detected = null; if (menu && (menu !== 'Question' || agent.turn)) detected = menu; }
+    else if (!detected && menu === 'Approve command') detected = menu;
+    // An agent that only writes or reads such a question (a task about this very code) has no chosen row on its screen.
+    else if (detected === 'Approve command' && !demo && !lines.some(l => /^[ │|]*[❯›>●] *[0-9][.)] /.test(l))) detected = null;
+    // Answered, and another menu is up already (or the same one came back): that one needs the user again.
+    if (agy && menu && agent.awaitingAnswer && (menuSig(agent.menu) !== agent.answeredSig || now - (agent.answeredAt || 0) > 4000) && !agent.answering) agent.awaitingAnswer = false;
+    if (agy && menu && agent.awaitingAnswer) scanSoon(1500);
     // Out of quota: the agent will not answer anyone. Say so to whoever gave it work, once, instead of letting them wait.
     if (detected === 'Limit reached' && !agent.limitTold) {
       agent.limitTold = true;
@@ -638,26 +749,41 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
     if (detected === 'Sign in' && !agent.signinTold) { agent.signinTold = true; tellSignIn(name, agent, provider, false); }
     // The prompt is gone from the screen (answered here, in the terminal, or by the CLI itself): the agent is free
     // again. Without this one "needs you" stuck for good and every later message waited in the queue.
-    if (!detected && (agent.awaitingAnswer || agent.attention || agent.held)) { agent.awaitingAnswer = false; agent.held = false; clearTimeout(agent.trustTimer); agent.trustTimer = null; if (agent.question?.kind === 'plugin') clearQuestion(name, agent); if (agent.attention) setAttention(name, agent, null); else agent.blocked = false; if (!agent.ready) setTimeout(agent.initialize, 1000); else if (agent.queue.length) deliver(agent); }
+    if (detected) agent.goneAt = 0;
+    // A menu half redrawn is not gone: look again before anything is pasted into it.
+    const flicker = agy && !detected && (agent.awaitingAnswer || agent.attention || agent.held) && now - (agent.goneAt ||= now) < 350;
+    if (flicker) scanSoon(400);
+    else if (!detected && (agent.awaitingAnswer || agent.attention || agent.held)) { agent.goneAt = 0; agent.awaitingAnswer = false; agent.held = false; clearTimeout(agent.trustTimer); agent.trustTimer = null; if (agent.question?.kind === 'plugin') clearQuestion(name, agent); if (agent.attention) setAttention(name, agent, null); else agent.blocked = false; if (!agent.ready) setTimeout(agent.initialize, 1000); else if (agent.queue.length) deliver(agent); }
     if (detected && !agent.awaitingAnswer) {
       // A project already trusted in Dispatch (this tab's folder, .dispatch/trust.json): the CLI's trust menu is
       // answered quietly. Showing the dialog first only made it flash up and vanish. It shows if no answer fits.
       if (detected === 'Trust folder' && !agent.attention && !agent.trustInteracted && trusted()) {
         hold(agent); agent.held = true;
-        const answer = trustAnswer(provider, agent.promptBuffer || '');
-        if (answer) { clearTimeout(agent.trustTimer); agent.trustTimer = null; agent.promptBuffer = ''; agent.awaitingAnswer = true; typeKeys(agent, answer, 700); }
+        const answer = trustKeys(agent);
+        if (answer) { clearTimeout(agent.trustTimer); agent.trustTimer = null; menuAnswered(agent); typeKeys(agent, answer, 700); }
         else if (!agent.trustTimer) agent.trustTimer = setTimeout(() => { agent.trustTimer = null; if (processes.get(name) === agent && agent.held && !agent.awaitingAnswer) setAttention(name, agent, 'Trust folder'); }, 3000);
       } else {
         setAttention(name, agent, detected);
         if (detected === 'Trust folder' && trusted()) answerTrust(agent);
+        if (agent.menu && menu && menu !== 'Trust folder' && (detected === 'Approve command' || (agy && detected === 'Question'))) showMenu(name, agent);
         if (detected === 'Plugin question' && agent.question?.kind !== 'plugin') {
           const parsed = parsePluginQuestion(agent.promptBuffer);
           showQuestion(name, agent, { id: `plugin-${Date.now()}`, kind: 'plugin', ...(parsed || { server: '', title: 'Plugin requests your input', message: '', fields: [], parseable: false, totalFields: 0 }) });
         }
       }
     }
-    agent.lastOutput = Date.now(); const codexState = [...data.matchAll(/\x1b\]7501;state=(idle|working|done):app=codex/g)].at(-1); if (codexState) { agent.codexStateKnown = true; agent.atPrompt = codexState[1] !== 'working'; if (codexState[1] === 'working') agent.turnAt = Date.now(); if (shouldClearAttention(agent.attention, { codexState: codexState[1] })) clearAttention(name, agent); } else if (provider !== 'codex') agent.atPrompt = /(?:^|[\r\n])\s*[>\u276f$]\s*$/.test(agent.output.slice(-4000).replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')); if (agent.queue.length && (provider !== 'codex' || agent.atPrompt)) deliver(agent); terminalOut(name, data); });
-  terminal.onExit(() => { agent.stopActivity?.(); clearQuestion(name, agent); if (processes.get(name) === agent) {
+    const codexState = [...data.matchAll(/\x1b\]7501;state=(idle|working|done):app=codex/g)].at(-1); if (codexState) { agent.codexStateKnown = true; agent.atPrompt = codexState[1] !== 'working'; if (codexState[1] === 'working') agent.turnAt = Date.now(); if (shouldClearAttention(agent.attention, { codexState: codexState[1] })) clearAttention(name, agent); } else if (provider !== 'codex') agent.atPrompt = /(?:^|[\r\n])\s*[>\u276f$]\s*$/.test(agent.output.slice(-4000).replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')); if (agent.queue.length && (provider !== 'codex' || agent.atPrompt)) deliver(agent);
+  };
+  terminal.onExit(() => {
+    agent.stopActivity?.(); clearQuestion(name, agent); clearTimeout(agent.scanTimer); agent.view.dispose();
+    if (agent.starting && (processes.get(name) || agent) === agent) notify('starting', { name, on: false });
+    agent.starting = false;
+    // A saved Antigravity conversation it cannot open any more: start without it instead of "exited unexpectedly".
+    if (processes.get(name) === agent && provider === 'antigravity' && resumeSession && !agent.sawBox && Date.now() - agent.startedAt < 20000 && saved && !/not logged into antigravity/i.test(agent.output)) {
+      processes.delete(name); clearTimeout(agent.timer); setAttention(name, agent, null); saved.sessionId = null; saveOperation();
+      try { startAgent(name, template, enlistedBy, saved, false); return; } catch (e) { console.error(e); }
+    }
+    if (processes.get(name) === agent) {
     processes.delete(name); clearTimeout(agent.timer); setAttention(name, agent, null); notify('exit', name);
     // Died on its own: mark it stopped (card shows it) and tell whoever enlisted it.
     const entry = operation?.agents.find(a => a.name === name);
@@ -678,13 +804,70 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
     if (!demo && provider !== 'claude') {
       // The role text rides along with the first real message. Sent alone it was a turn of its own: the agent
       // answered it and started working by itself on every start and resume, with nobody asking.
-      agent.setup = prompt.replace(/\n/g, ' '); agent.ready = true; if (agent.queue.length) deliver(agent);
+      // A resumed Antigravity conversation already has it, unless it changed since (squad, plugins, settings).
+      const hash = crypto.createHash('sha1').update(prompt).digest('hex').slice(0, 12);
+      agent.setup = provider === 'antigravity' && resumeSession && saved?.setupHash === hash ? null : prompt.replace(/\n/g, ' ');
+      if (saved && provider === 'antigravity' && saved.setupHash !== hash) { saved.setupHash = hash; saveOperation(); }
+      agent.ready = true; if (agent.queue.length) deliver(agent);
     } else { agent.ready = true; if (agent.queue.length) deliver(agent); }
   };
   agent.initialize = initialize;
   setTimeout(initialize, 2000);
   return agent;
 }
+// ── Turn ends ──
+// A text-only Antigravity step looks like the closing reply, but agy often goes on by itself (a background command
+// finished, a broken stream it retries): the chat said "Worked" while it worked. Its footer knows: the end is held
+// until the screen is idle, and if work goes on the held text was only something it said on the way.
+function agyEvent(agent, e) {
+  if (agent.heldEnd && (e.steps.length || e.turn !== undefined)) {
+    const held = agent.heldEnd; agent.heldEnd = null;
+    const newMessage = e.turn === true && !e.steps.length && (agent.deliveredAt || 0) > held.at;
+    if (newMessage) agent.onTurn(held.e);
+    else { const steps = [...held.e.steps, ...(held.e.final && !held.e.error ? [{ kind: 'text', text: held.e.final.slice(0, 4000) }] : [])]; if (steps.length) agent.onTurn({ steps }); }
+  }
+  if (e.turn === false && !e.interrupted) { agent.heldEnd = { e, at: Date.now() }; return; }
+  agent.onTurn(e);
+}
+// Called often: lets held ends through, and ends turns the transcript never closed (Esc, the Stop button, a lost line).
+function settle(name, agent) {
+  const now = Date.now(), provider = agent.template?.provider;
+  if (!agent.onTurn || agent.blocked || agent.question || agent.submitting || agent.answering) return;
+  if (provider === 'antigravity') {
+    const st = agent.screenState, calm = now - (agent.screenAt || 0);
+    if (agent.heldEnd) {
+      const age = now - agent.heldEnd.at;
+      if ((st === 'busy' && age < 30 * 60000) || (st === 'idle' ? calm < 500 && age < 5000 : age < 1500)) return;
+      const held = agent.heldEnd; agent.heldEnd = null; agent.onTurn(held.e);
+    } else if (agent.turn && st === 'idle' && calm > 3000 && now - (agent.eventAt || 0) > 3000 && now - (agent.deliveredAt || 0) > 6000) agent.onTurn({ steps: [], turn: false });
+    // Some terminals only come up once they are resized (what clicking its Terminal tab did).
+    if (agent.starting && !agent.sawBox && st !== 'menu' && now - agent.startedAt > 8000 * ((agent.nudges || 0) + 1) && (agent.nudges || 0) < 3) {
+      agent.nudges = (agent.nudges || 0) + 1; const { cols, rows } = agent.view.size();
+      try { agent.terminal.resize(cols + 1, rows); setTimeout(() => { try { agent.terminal.resize(cols, rows); } catch {} }, 150); } catch {}
+    }
+    // Still no prompt and nothing moves: a first-run screen (theme, terms) waits for the user. The chat only said "Starting".
+    if (agent.starting && !agent.sawBox && !agent.startTold && now - agent.startedAt > 25000 && now - (agent.lastOutput || 0) > 4000 && /navigate|toggle|confirm|\[(?:next|done)\]/i.test(agent.view.lines().join(' '))) { agent.startTold = true; emitMessage({ from: 'dispatch', to: 'you', text: `${name} (Antigravity) is at a start screen that needs you. Open its Terminal tab and finish it there; messages wait until then.` }); }
+    if (agent.starting && now - agent.startedAt > 60000) { agent.starting = false; notify('starting', { name, on: false }); }
+  }
+  // Claude redraws its spinner and timer all through a turn. A screen that stands still for 20 s with no tool running
+  // means the turn is over although its transcript never said so: the chat sat on "Thinking" for good.
+  if (provider === 'claude' && agent.turn && !(agent.toolsOpen > 0) && now - (agent.lastOutput || 0) > 20000 && now - (agent.eventAt || 0) > 20000) agent.onTurn({ steps: [], turn: false, final: agent.lastText || '' });
+}
+intervals.push(setInterval(() => { for (const [name, agent] of processes) try { settle(name, agent); } catch (e) { console.error(e); } }, 400));
+// The Stop button: Esc, and the turn counts as over once the CLI shows it (again, if it is still busy).
+function interruptAgent(name, tries = 0) {
+  const agent = processes.get(name); if (!agent?.terminal) return false;
+  try { agent.terminal.write('\x1b'); } catch { return false; }
+  setTimeout(() => {
+    if (processes.get(name) !== agent || !agent.onTurn) return;
+    if (agent.template?.provider === 'antigravity') {
+      if (agent.screenState === 'busy') { if (tries < 3) interruptAgent(name, tries + 1); return; }
+      agent.heldEnd = null; if (agent.turn) agent.onTurn({ steps: [], turn: false, interrupted: true });
+    } else if (agent.template?.provider === 'claude' && agent.turn && Date.now() - (agent.lastOutput || 0) > 700) agent.onTurn({ steps: [], turn: false, interrupted: true });
+  }, 1500);
+  return true;
+}
+ipcMain.handle('agent:interrupt', (_e, name) => interruptAgent(String(name)));
 // Watchdog: an agent that got a task, then went quiet (idle at its prompt, or no terminal output for minutes)
 // without sending a single message back. Its requester would wait forever, so tell the requester (or the user).
 // Real progress on screen (spinner redraws and elapsed timers do not count), for the stall watchdog below.
@@ -788,6 +971,7 @@ ipcMain.handle('operations:resume', async (_e, id) => {
   let log = null; try { log = await fs.promises.readFile(logPath()); } catch {}
   const messages = log ? (op.segments || []).flatMap(s => log.subarray(s.start, s.end ?? log.length).toString('utf8').split('\n').map(parseMessage).filter(Boolean)) : [];
   const byId = new Map(messages.map(m => [m.id, m]));
+  messages.forEach(noteSent);
   for (const a of op.agents) {
     if (a.name !== 'boss' && a.chatId) for (const m of messages) if (m.from === a.name || m.to === a.name) (m.chats ||= {})[a.name] = 'previous';
     const dir = path.join(operationsDir(), op.id, 'chats', a.name);
@@ -810,7 +994,7 @@ ipcMain.handle('operations:resume', async (_e, id) => {
     await new Promise(r => setImmediate(r));
   }
   saveOperation();
-  return { operation: op, messages, notes: [...failed, ...op.agents.filter(a => !a.stopped && a.provider !== 'claude' && !(a.provider === 'codex' && a.sessionId)).map(a => ({ name: a.name, text: `${a.name}: started a fresh ${a.provider} session; prior conversation is shown in chat.` }))] };
+  return { operation: op, messages, notes: [...failed, ...op.agents.filter(a => !a.stopped && a.provider !== 'claude' && !(a.provider === 'codex' && a.sessionId) && !processes.get(a.name)?.args?.includes('--conversation')).map(a => ({ name: a.name, text: `${a.name}: started a fresh ${a.provider} session; prior conversation is shown in chat.` }))] };
 });
 ipcMain.handle('chats:list', (_e, name) => chats(name).filter(c => name === 'boss' || c.id === operation?.agents.find(a => a.name === name)?.chatId).map(c => ({ ...c, active: c.id === operation?.agents.find(a => a.name === name)?.chatId })));
 ipcMain.handle('chats:switch', (_e, name, id) => switchChat(name, id));
@@ -847,10 +1031,10 @@ const readUi = () => { try { return JSON.parse(fs.readFileSync(uiFile(), 'utf8')
 ipcMain.handle('ui:get', () => ({ ...readUi(), material: host.material ? host.material() : false }));
 // ── Voice typing: local whisper.cpp, an in-chat mic and a global shortcut with a small overlay (FoneCue style) ──
 const whisper = require('./whisper.cjs');
-const VOICE_KEYS = ['Control+Alt+Space', 'Control+Shift+Space', 'Control+Alt+D', 'F9'];
+const voiceKeys = require('./voice-key.cjs');
 const voiceLang = () => readUi().voiceLang || 'tr';
-const voiceKey = () => VOICE_KEYS.includes(readUi().voiceShortcut) ? readUi().voiceShortcut : VOICE_KEYS[0];
-ipcMain.handle('voice:status', () => ({ ...whisper.status(), lang: voiceLang(), mic: readUi().voiceMic || '', shortcut: voiceKey(), shortcuts: VOICE_KEYS, shortcutOk: host.voiceKeyOk() }));
+const voiceKey = () => voiceKeys.of(readUi());
+ipcMain.handle('voice:status', () => ({ ...whisper.status(), lang: voiceLang(), mic: readUi().voiceMic || '', shortcut: voiceKey(), shortcutOk: host.voiceKeyOk() }));
 ipcMain.handle('voice:warm', () => whisper.ensure(voiceLang()).then(() => true));
 ipcMain.handle('voice:transcribe', (_e, wav) => whisper.transcribe(Buffer.from(wav), voiceLang()));
 ipcMain.handle('ui:set', (_e, patch) => {
@@ -858,11 +1042,14 @@ ipcMain.handle('ui:set', (_e, patch) => {
   if (patch && ['studio', 'pixel', 'office', 'music'].includes(patch.scene)) next.scene = patch.scene;
   if (patch && typeof patch.hintSeen === 'boolean') next.hintSeen = patch.hintSeen;
   if (patch && typeof patch.ideOpen === 'boolean') next.ideOpen = patch.ideOpen;
+  // The office / music scene above the chat: closed stays closed on the next start, and it keeps its height.
+  if (patch && typeof patch.officeOpen === 'boolean') next.officeOpen = patch.officeOpen;
+  if (patch && Number.isFinite(patch.officeHeight)) next.officeHeight = Math.max(160, Math.min(1600, Math.round(patch.officeHeight)));
   // Home > live usage switch. Off by default: nothing reads limits (or the Claude sign-in) until the user turns it on.
   if (patch && typeof patch.usageTracking === 'boolean') next.usageTracking = patch.usageTracking;
   if (patch && ['tr', 'en', 'auto'].includes(patch.voiceLang)) { if (next.voiceLang !== patch.voiceLang) whisper.stop(); next.voiceLang = patch.voiceLang; }
   if (patch && typeof patch.voiceMic === 'string' && patch.voiceMic.length <= 300) next.voiceMic = patch.voiceMic;
-  if (patch && VOICE_KEYS.includes(patch.voiceShortcut)) { next.voiceShortcut = patch.voiceShortcut; setImmediate(host.registerVoiceKey); }
+  if (patch && voiceKeys.valid(patch.voiceShortcut)) { next.voiceShortcut = patch.voiceShortcut; setImmediate(host.registerVoiceKey); }
   // Terminal (Settings > Terminal): which shell the side panel opens, and where.
   if (patch && typeof patch.terminalShell === 'string' && /^[\w-]{1,20}$/.test(patch.terminalShell)) next.terminalShell = patch.terminalShell;
   for (const k of ['terminalPath', 'terminalArgs', 'terminalCwd']) if (patch && typeof patch[k] === 'string' && patch[k].length <= 1000) next[k] = patch[k].trim();
@@ -1217,6 +1404,16 @@ const chatImageRoots = () => [path.join(workspace, '.dispatch'), tools.comfyConf
 ipcMain.handle('chat:image', (_e, file) => chatImage.imageData(file, chatImageRoots()));
 ipcMain.handle('chat:media', (_e, file) => { const info = chatImage.mediaInfo(file, chatImageRoots()); return info ? { kind: info.kind, url: `dispatch-media://local?path=${encodeURIComponent(info.path)}` } : null; });
 ipcMain.handle('chat:open-image', (_e, file) => { const full = chatImage.allowedImage(file, chatImageRoots()); if (!full) return false; void shell.openPath(full); return true; });
+// A file or folder an agent linked in the chat (file:///D:/x/y.md): inside the project the editor opens it, anything else is shown in its folder.
+ipcMain.handle('chat:open-path', (_e, target) => {
+  if (/^[\\/]{2}/.test(String(target || ''))) return { missing: true }; // no network shares
+  const full = path.resolve(workspace, String(target || ''));
+  let dir; try { dir = fs.statSync(full).isDirectory(); } catch { return { missing: true }; }
+  const rel = path.relative(workspace, full);
+  if (!dir && rel && !rel.startsWith('..') && !path.isAbsolute(rel)) return { rel: rel.replace(/\\/g, '/') };
+  if (dir) void shell.openPath(full); else shell.showItemInFolder(full);
+  return {};
+});
 // Music scene: what Windows is playing (Spotify app, YouTube / YouTube Music in a browser...), read only while the scene is open.
 const mediaLib = require('./media.cjs');
 let mediaStop = null;
@@ -1752,8 +1949,30 @@ ipcMain.handle('agent:set-effort', (_e, name, effort) => {
   saved.template = { ...saved.template, effort }; saveOperation();
   return applyLive(name, saved, `/effort ${effort || 'auto'}`);
 });
-// Permission mode is a launch flag for every provider; changing it restarts the agent (Claude and Codex resume).
-ipcMain.handle('agent:set-permission', (_e, name, permission) => {
+// Can a restart go on in the same conversation? Nothing said yet counts as yes: there is nothing to lose.
+function keepsChat(name, saved) {
+  const p = saved.template.provider, agent = processes.get(name);
+  if (demo || (agent && !agent.hadTurn && !agent.turn && !agent.deliveredAt && !agent.args?.includes('--conversation'))) return true;
+  if (p === 'claude' || p === 'codex') return !!saved.sessionId;
+  return p === 'antigravity' && !!saved.sessionId && fs.existsSync(activity.agyFile(saved.sessionId, agent?.accountDir));
+}
+ipcMain.handle('agent:keeps-chat', (_e, name) => { const saved = operation?.agents.find(a => a.name === name); return !!saved && keepsChat(name, saved); });
+// Claude and Antigravity change their mode live with Shift+Tab; the footer says which one is on.
+async function liveMode(agent, provider, permission) {
+  if (!['claude', 'antigravity'].includes(provider) || !permission || permission === 'bypass' || !agent.ready || agent.blocked || agent.submitting || agent.answering) return false;
+  if (provider === 'antigravity' && !['idle', 'busy'].includes(agent.screenState)) return false;
+  agent.answering = true;
+  try {
+    for (let i = 0; i < 6; i++) {
+      if (screenLib.shownMode(provider, agent.view.lines()) === permission) return true;
+      if (i === 5) break;
+      agent.terminal.write('\x1b[Z'); await sleep(500);
+    }
+    return false;
+  } catch { return false; } finally { agent.answering = false; if (agent.queue.length) deliver(agent); }
+}
+// Permission mode: switched live where the CLI can, otherwise the agent restarts in the same conversation.
+ipcMain.handle('agent:set-permission', async (_e, name, permission) => {
   const saved = operation?.agents.find(a => a.name === name);
   if (!saved) throw new Error('Agent not found');
   permission = String(permission || '');
@@ -1761,7 +1980,9 @@ ipcMain.handle('agent:set-permission', (_e, name, permission) => {
   saved.template = { ...saved.template, permission }; saveOperation();
   const agent = processes.get(name);
   if (!agent || saved.stopped) return { mode: 'saved' };
-  const fresh = !(['claude', 'codex'].includes(saved.template.provider) && saved.sessionId);
+  if (!demo && await liveMode(agent, saved.template.provider, permission)) return { mode: 'applied' };
+  if (processes.get(name) !== agent) return { mode: 'saved' };
+  const fresh = !keepsChat(name, saved);
   agentAction(name, 'restart');
   return { mode: fresh ? 'fresh' : 'restarted' };
 });
@@ -1776,33 +1997,46 @@ function applyLive(name, saved, slash) {
     return { mode: 'queued' };
   }
   if (!agent || saved.stopped) return { mode: 'saved' };
-  const fresh = !(['claude', 'codex'].includes(provider) && saved.sessionId);
+  const fresh = !keepsChat(name, saved);
   agentAction(name, 'restart');
   return { mode: fresh ? 'fresh' : 'restarted' };
 }
 ipcMain.handle('debug:agent', (_e, name) => { const a = processes.get(name); return a && { command: a.command, args: a.args, prompt: a.prompt }; });
-ipcMain.handle('attachments:preview', async (_e, target) => {
-  if (!operation || typeof target !== 'string') return null;
+// Files the user sent: copies kept with the operation, or files of this computer named in a message of theirs.
+// Nothing else can be previewed through this channel.
+const sentFiles = new Set();
+function noteSent(msg) {
+  if (msg?.from !== 'you') return;
+  const i = String(msg.text || '').lastIndexOf('Attachments (open these files):\n'); if (i < 0) return;
+  for (const line of msg.text.slice(i).split('\n').slice(1)) if (line.startsWith('- ')) sentFiles.add(path.resolve(line.slice(2).trim()).toLowerCase());
+}
+async function sentFile(target) {
+  if (!operation || typeof target !== 'string' || !path.isAbsolute(target)) return null;
+  const dir = await fs.promises.realpath(path.join(operationsDir(), operation.id, 'attachments')).catch(() => null);
+  const actual = await fs.promises.realpath(target);
+  if (dir && path.dirname(actual) === dir) { const n = path.basename(actual); return /^[a-f0-9-]{36}-/i.test(n) ? { actual, name: n.slice(37) } : null; }
+  return sentFiles.has(path.resolve(target).toLowerCase()) ? { actual, name: path.basename(actual) } : null;
+}
+const RAW_IMAGE = { '.webp': 'image/webp', '.gif': 'image/gif', '.bmp': 'image/bmp', '.ico': 'image/x-icon' };
+ipcMain.handle('attachments:preview', async (_e, target, large) => {
   try {
-    const dir = await fs.promises.realpath(path.join(operationsDir(), operation.id, 'attachments'));
-    const actual = await fs.promises.realpath(target);
-    if (path.dirname(actual) !== dir) return null;
-    const filename = path.basename(actual);
-    if (!/^[a-f0-9-]{36}-/i.test(filename)) return null;
-    const name = filename.slice(37);
+    const hit = await sentFile(target); if (!hit) return null;
+    const { actual, name } = hit, ext = path.extname(name).toLowerCase();
     if (!/\.(png|jpe?g|webp|gif|bmp|ico)$/i.test(name)) return { name };
     const info = await fs.promises.stat(actual);
-    if (!info.isFile() || info.size > 20 * 1024 * 1024) return { name };
+    if (!info.isFile() || info.size > 40 * 1024 * 1024) return { name };
     const image = nativeImage.createFromPath(actual);
-    if (image.isEmpty()) return { name };
+    // Types the system decoder does not know go to the page as they are.
+    if (image.isEmpty()) return RAW_IMAGE[ext] && info.size < 10 * 1024 * 1024 ? { name, image: `data:${RAW_IMAGE[ext]};base64,${(await fs.promises.readFile(actual)).toString('base64')}` } : { name };
     const size = image.getSize();
-    const scale = Math.min(1, 480 / Math.max(size.width, size.height));
-    return { name, image: image.resize({ width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)), quality: 'good' }).toDataURL() };
+    const scale = Math.min(1, (large ? 2200 : 480) / Math.max(size.width, size.height));
+    const shown = scale < 1 ? image.resize({ width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)), quality: 'good' }) : image;
+    return { name, image: /\.jpe?g$/i.test(name) ? `data:image/jpeg;base64,${shown.toJPEG(88).toString('base64')}` : shown.toDataURL() };
   } catch { return null; }
 });
 ipcMain.handle('attachments:save', async (_e, files) => {
   if (!operation) throw new Error('Start an operation before attaching files.');
-  if (!Array.isArray(files) || files.length > 10) throw new Error('Attach up to 10 files at a time.');
+  if (!Array.isArray(files) || files.length > 20) throw new Error('Attach up to 20 files at a time.');
   const dir = path.join(operationsDir(), operation.id, 'attachments');
   await fs.promises.mkdir(dir, { recursive: true });
   const saved = [];
@@ -1819,13 +2053,13 @@ ipcMain.handle('attachments:save', async (_e, files) => {
   } catch (error) { await Promise.all(saved.map(file => fs.promises.unlink(file).catch(() => {}))); throw error; }
 });
 // A message typed in the chat while the agent waits on a one-question menu is the answer to it (a number picks).
-ipcMain.handle('send', (_e, to, text) => { const q = processes.get(to)?.question; if (q && !q.kind && q.questions?.length === 1 && String(text || '').trim() && !/\n/.test(String(text).trim())) return answerQuestion(to, [replyAsAnswer(q.questions[0], text)]); return sendMessage(to, text); });
+ipcMain.handle('send', (_e, to, text) => { const q = processes.get(to)?.question; if (q?.kind === 'menu' && /^\d{1,2}$/.test(String(text).trim()) && q.options[Number(text) - 1]) return answerQuestion(to, { label: q.options[Number(text) - 1] }); if (q && !q.kind && q.questions?.length === 1 && String(text || '').trim() && !/\n/.test(String(text).trim())) return answerQuestion(to, [replyAsAnswer(q.questions[0], text)]); return sendMessage(to, text); });
 ipcMain.handle('questions:list', () => Object.fromEntries([...processes].filter(([, a]) => a.question).map(([name, a]) => [name, a.question])));
 ipcMain.handle('question:answer', (_e, name, answers) => answerQuestion(String(name), answers));
-ipcMain.on('input', (_e, name, data) => { if (host.customTools?.input(name, data)) return; const shell = shells.get(name); if (shell) { if (!shell.exited) shell.terminal.write(data); return; } const agent = processes.get(name); if (!agent) return; if (agent.attention === 'Trust folder') agent.trustInteracted = true; if (agent.blocked && /[\r\n]/.test(data)) { agent.promptBuffer = ''; agent.awaitingAnswer = true; } agent.terminal.write(data); });
+ipcMain.on('input', (_e, name, data) => { if (host.customTools?.input(name, data)) return; const shell = shells.get(name); if (shell) { if (!shell.exited) shell.terminal.write(data); return; } const agent = processes.get(name); if (!agent) return; agent.typedAt = data.endsWith(String.fromCharCode(13)) ? 0 : data.charCodeAt(0) >= 32 ? Date.now() : agent.typedAt; if (agent.attention === 'Trust folder') agent.trustInteracted = true; if (agent.blocked && /[\r\n]/.test(data)) { menuAnswered(agent); if (agent.question?.kind === 'menu') clearQuestion(name, agent); } agent.terminal.write(data); });
 ipcMain.handle('attention:list', () => ({ ...Object.fromEntries([...exited].map(name => [name, 'Exited'])), ...Object.fromEntries([...processes].filter(([, a]) => a.attention).map(([name, a]) => [name, a.attention])) }));
 ipcMain.handle('attention:trust', () => { fs.mkdirSync(path.dirname(trustFile()), { recursive: true }); fs.writeFileSync(trustFile(), JSON.stringify({ trusted: true }, null, 2)); const manual = []; for (const [name, agent] of processes) if (agent.attention === 'Trust folder' && !answerTrust(agent)) manual.push(name); return manual; });
-ipcMain.on('resize', (_e, name, cols, rows) => { if (host.customTools?.resize(name, cols, rows)) return; try { (processes.get(name) || shells.get(name))?.terminal.resize(cols, rows); } catch {} });
+ipcMain.on('resize', (_e, name, cols, rows) => { if (host.customTools?.resize(name, cols, rows)) return; try { (processes.get(name) || shells.get(name))?.terminal.resize(cols, rows); processes.get(name)?.view?.resize(cols, rows); } catch {} });
 // On quit every agent goes down with everything it started. A child left behind without its terminal (a git
 // fetch, a login helper) falls back to desktop prompts such as Git's credential helper window.
 function killTrees() {

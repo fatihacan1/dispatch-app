@@ -1,6 +1,7 @@
 // Music scene: a now-playing screen (cover, title, artist, progress, controls) for whatever Windows is playing,
 // with a visualizer fed by the system sound. Same contract as the other scenes; agents are not shown here.
 import type { OfficeScene, SceneOptions } from "./OfficeScene";
+import { frameGate } from "./frameCap";
 
 type Track = { none?: boolean; unsupported?: boolean; error?: string; app?: string; title?: string; artist?: string; album?: string; status?: string; position?: number; duration?: number; updated?: number; cover?: string; track?: boolean; canNext?: boolean; canPrev?: boolean };
 
@@ -95,29 +96,42 @@ export function createOfficeScene(container: HTMLElement, _options?: SceneOption
     } catch { /* idle bars */ }
   })();
 
+  const gate = frameGate(container, true);
   const BARS = 64; const levels = new Float32Array(BARS); const data = new Uint8Array(128);
+  let cleared = false, grad: CanvasGradient | null = null, gradH = 0, gradColor = "";
   const frame = (t: number) => {
     if (!alive) return;
     raf = requestAnimationFrame(frame);
+    if (!gate(t)) return;
     const w = canvas.clientWidth, h = canvas.clientHeight; if (!w || !h) return;
     const dpr = window.devicePixelRatio || 1;
-    if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) { canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); }
-    const g = canvas.getContext("2d")!; g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
+    const pw = Math.round(w * dpr), ph = Math.round(h * dpr);
+    if (canvas.width !== pw || canvas.height !== ph) { canvas.width = pw; canvas.height = ph; cleared = false; }
     const playing = track.status === "Playing";
+    if (!playing && cleared && levels.every(l => l < 0.035)) return;
+    const g = canvas.getContext("2d")!; g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
     if (analyser) analyser.getByteFrequencyData(data);
     for (let i = 0; i < BARS; i++) {
       let v: number;
       if (analyser) { const idx = Math.floor(Math.pow(i / BARS, 1.6) * 100) + 1; v = data[idx] / 255; }
-      else v = playing ? 0.18 + 0.14 * Math.sin(t / 420 + i * 0.45) * Math.sin(t / 900 + i * 0.13) + 0.1 * Math.sin(t / 260 + i) : 0.04;
-      levels[i] += (Math.max(0.02, v) - levels[i]) * 0.25;
+      else v = playing ? 0.18 + 0.14 * Math.sin(t / 420 + i * 0.45) * Math.sin(t / 900 + i * 0.13) + 0.1 * Math.sin(t / 260 + i) : 0.02;
+      levels[i] += (Math.max(0.02, v) - levels[i]) * 0.42;
     }
     const gap = 3, bw = Math.max(2, (w - gap * (BARS - 1)) / BARS), [r, gg, b] = color;
+    const colorKey = `${r},${gg},${b}`;
+    if (!grad || gradH !== h || gradColor !== colorKey) {
+      grad = g.createLinearGradient(0, h, 0, 0); grad.addColorStop(0, `rgba(${r},${gg},${b},0.9)`); grad.addColorStop(1, `rgba(${r},${gg},${b},0.25)`);
+      gradH = h; gradColor = colorKey;
+    }
+    g.fillStyle = grad;
+    let drew = false;
     for (let i = 0; i < BARS; i++) {
       if (levels[i] < 0.035) continue; // silent bands draw nothing (a row of stubs reads as a dashed line)
+      drew = true;
       const bh = levels[i] * h * 0.95, x = i * (bw + gap);
-      const grad = g.createLinearGradient(0, h, 0, h - bh); grad.addColorStop(0, `rgba(${r},${gg},${b},0.9)`); grad.addColorStop(1, `rgba(${r},${gg},${b},0.25)`);
-      g.fillStyle = grad; g.beginPath(); g.roundRect(x, h - bh, bw, bh, Math.min(3, bw / 2)); g.fill();
+      g.beginPath(); g.roundRect(x, h - bh, bw, bh, Math.min(3, bw / 2)); g.fill();
     }
+    cleared = !drew;
     if (track.duration) { const p = position(); fill.style.width = `${(p / track.duration) * 100}%`; at.textContent = clock(p); total.textContent = clock(track.duration); }
   };
   raf = requestAnimationFrame(frame);

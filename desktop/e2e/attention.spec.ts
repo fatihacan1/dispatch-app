@@ -12,20 +12,22 @@ test('simultaneous prompts open the right terminals and hold messages', async ()
   await expect(page.getByText('boss is waiting.')).toBeVisible();
   await page.getByRole('button', { name: 'Not now' }).click();
   await expect(page.getByRole('dialog', { name: 'Trust this folder?' })).toHaveCount(0);
-  await expect(page.getByText('3 agents need you')).toBeVisible();
-  await expect(page.getByText(/coder . approve command/)).toBeVisible();
-  await expect(page.getByText(/· sign in/).first()).toBeVisible();
-  await page.getByRole('button', { name: 'Providers', exact: true }).last().click();
-  await expect(page.getByRole('heading', { name: 'Providers' })).toBeVisible();
-  await page.getByRole('button', { name: 'Open coder terminal' }).click();
-  await page.getByRole('button', { name: 'Open coder terminal' }).click();
-  await expect(page.getByRole('tab',{name:'Terminal', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByText('3 need you', { exact: false }).first()).toBeVisible();
+  await expect(page.getByRole('button', { name: /^coder .*approve command/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /sign in$/ }).first()).toBeVisible();
+  // The menu in its terminal is a card in its chat, with the same choices.
+  await page.getByRole('button', { name: /^coder .*approve command/ }).click();
+  const card = page.locator('.question-card');
+  await expect(card.getByRole('button', { name: 'Yes' })).toBeVisible();
+  await expect(card.getByRole('button', { name: 'No' })).toBeVisible();
+  await page.screenshot({ path: 'test-results/menu-card.png' });
   await page.evaluate(() => window.army.send('coder', 'queued attention test'));
   await page.waitForTimeout(1000);
   expect(await page.evaluate(() => window.army.output('coder'))).not.toContain('queued attention test');
-  await page.evaluate(() => window.army.input('coder', '\r'));
-  await expect(page.getByText(/coder . approve command/)).toHaveCount(0);
-  await expect(page.getByText('2 agents need you')).toBeVisible();
+  await card.getByRole('button', { name: 'Yes' }).click();
+  await expect(page.getByRole('button', { name: /^coder .*approve command/ })).toHaveCount(0);
+  await expect(card).toHaveCount(0);
+  await expect(page.getByText('2 need you', { exact: false }).first()).toBeVisible();
   await expect.poll(() => page.evaluate(() => window.army.output('coder')), { timeout: 10000 }).toContain('queued attention test');
  } finally { await app.close(); fs.rmSync(workspace, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); }
 });

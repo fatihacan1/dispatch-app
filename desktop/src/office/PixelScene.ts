@@ -1,6 +1,7 @@
 ﻿// 2D pixel "Hall" scene on a canvas 2D renderer. Art: Kenney Roguelike Indoors + Roguelike Characters (CC0, see THIRD_PARTY_LICENSES.md).
 import type { OfficeScene, SceneOptions } from "./OfficeScene";
 import { agentColors, sceneColor } from "../theme/theme";
+import { frameGate } from "./frameCap";
 
 const TS = 16, STRIDE = 17;
 const W = 24, H = 18, WALL = 3;
@@ -188,12 +189,12 @@ export function createOfficeScene(container: HTMLElement, options: SceneOptions 
   addEventListener("keydown", onKey); addEventListener("keyup", onKeyUp);
 
   // ---- loop ----
+  const gate = frameGate(container);
   let last = performance.now(), time = 0;
   function frame(now: number) {
     if (disposed) return; requestAnimationFrame(frame);
-    // Hidden (another page, or the office folded away): no work at all until it is shown again.
-    if (!container.offsetParent) { last = now; return; }
-    const dt = Math.min((now - last) / 1000, 0.05); last = now; time += dt;
+    if (!gate(now)) return;
+    const dt = Math.min((now - last) / 1000, 0.1); last = now; time += dt;
     if (keys.size) { const s = (keys.has("shift") ? 3 : 1) * 160 / camT.z * dt; if (keys.has("a")) camT.x -= s; if (keys.has("d")) camT.x += s; if (keys.has("w")) camT.y -= s; if (keys.has("s")) camT.y += s; }
     const k = 1 - Math.exp(-dt * 14);
     cam.x += (camT.x - cam.x) * k; cam.y += (camT.y - cam.y) * k; cam.z += (camT.z - cam.z) * k;

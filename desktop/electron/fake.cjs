@@ -10,7 +10,7 @@ const trustLate = process.env.DISPATCH_DEMO_ATTENTION === 'trust-late' && name =
 if (process.env.DISPATCH_DEMO_ATTENTION === 'trust-late' && name === 'boss') waiting = 'trust';
 if (trustLate) setTimeout(() => { waiting = 'trust'; console.log('Do you trust this folder? Yes, I trust this folder'); }, 4000);
 if (waiting === 'trust') console.log('Do you trust this folder? Yes, I trust this folder');
-else if (waiting === 'approval') console.log('Approve this command? Yes / No');
+else if (waiting === 'approval') console.log(['Do you want to proceed?', String.fromCharCode(0x276f) + ' 1. Yes', '  2. No', 'Esc to cancel'].join(String.fromCharCode(10)));
 else if (waiting === 'signin') console.log('Sign in to continue');
 else { console.log(`DISPATCH / DEMO AGENT: ${name}\nWorkspace connected. Ready for orders.`); prompt(); }
 setInterval(() => { if (!waiting) { console.log('\nChecking workspace status'); prompt(); } }, 5000);

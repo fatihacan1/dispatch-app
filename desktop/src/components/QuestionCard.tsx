@@ -50,8 +50,35 @@ function PluginQuestionCard({ agent, question, openTerminal, onError }: { agent:
   );
 }
 
+/** A menu in the agent's terminal (run this command? read this file?) with the CLI's own choices: a click picks one. */
+function MenuCard({ agent, question, openTerminal, onError }: { agent: string; question: AgentQuestion; openTerminal: () => void; onError: (text: string) => void }) {
+  const [sent, setSent] = useState("");
+  useEffect(() => setSent(""), [question.id]);
+  const pick = async (label: string) => {
+    if (sent) return; setSent(label);
+    try { await window.army.questions.answer(agent, { label }); }
+    catch (e) { setSent(""); onError(String(e).replace(/^Error:\s*(Error invoking remote method '[^']+':\s*)?(Error:\s*)?/, "")); }
+  };
+  return (
+    <section className="question-card" aria-label={`${agent} waits for approval`}>
+      <p className="question-from"><b>{agent}</b> is waiting for you{question.title ? ` · ${question.title}` : ""}</p>
+      {question.message && <pre className="question-body">{question.message}</pre>}
+      <div className="question">
+        {question.question && <p className="question-ask">{question.question}</p>}
+        <div className="question-options">
+          {(question.options || []).map((label, i) => <button type="button" key={i} className={"question-option" + (sent === label ? " on" : "")} disabled={!!sent} onClick={() => void pick(label)}>
+            <span className="question-key" aria-hidden="true">{i + 1}</span><span className="question-label"><b>{label}</b></span>
+          </button>)}
+        </div>
+      </div>
+      <div className="question-foot"><Button className="ghost" onClick={openTerminal}>Answer in terminal</Button></div>
+    </section>
+  );
+}
+
 /** A question an agent asked with Claude's AskUserQuestion, answerable from the chat instead of its terminal. */
 export function QuestionCard({ agent, question, openTerminal, onError }: { agent: string; question: AgentQuestion; openTerminal: () => void; onError: (text: string) => void }) {
+  if (question.kind === "menu") return <MenuCard agent={agent} question={question} openTerminal={openTerminal} onError={onError} />;
   if (question.kind === "plugin") return <PluginQuestionCard agent={agent} question={question} openTerminal={openTerminal} onError={onError} />;
   const qs = question.questions || [];
   const [answers, setAnswers] = useState<QuestionAnswer[]>(() => qs.map(() => ({ picks: [] })));

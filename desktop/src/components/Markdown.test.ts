@@ -1,5 +1,25 @@
 import { describe, expect, it } from "vitest";
-import { imageAt, mediaAt } from "./Markdown";
+import { imageAt, localTarget, mediaAt, takeList } from "./Markdown";
+
+describe("chat Markdown lists and file links", () => {
+  it("keeps nested bullets under their number, and the numbers going", () => {
+    const l = takeList("1. **A**\n   - a1\n   - a2\n\n2. B\n   text\n3. C\n\nEnd".split("\n"), 0);
+    expect(l.ordered).toBe(true); expect(l.items.map(i => i.text)).toEqual(["**A**", "B", "C"]);
+    expect(l.items[0].body).toEqual(["- a1", "- a2"]); expect(l.items[1].body).toEqual(["text"]);
+  });
+  it("takes bullets that were not indented, when the next number follows", () => {
+    const l = takeList("1. A\n- a1\n- a2\n2. B\n- b1".split("\n"), 0);
+    expect(l.items.map(i => i.text)).toEqual(["A", "B"]); expect(l.items[0].body).toEqual(["- a1", "- a2"]); expect(l.items[1].body).toEqual(["- b1"]); expect(l.next).toBe(5);
+  });
+  it("ends at a paragraph", () => { const l = takeList(["- a", "- b", "", "text"], 0); expect(l.items.length).toBe(2); expect(l.next).toBe(2); });
+  it("reads link targets on this computer", () => {
+    expect(localTarget("file:///D:/Fatih/Kodlar/a%20b/ui.html")).toBe("D:/Fatih/Kodlar/a b/ui.html");
+    expect(localTarget("file:///D:/x/a.ts#L10-L20")).toBe("D:/x/a.ts");
+    expect(localTarget("D:\\x\\a.ts:12")).toBe("D:\\x\\a.ts");
+    expect(localTarget("src/a.ts")).toBe("src/a.ts");
+    for (const no of ["https://x.y/z", "mailto:a@b.c", "#part"]) expect(localTarget(no)).toBeNull();
+  });
+});
 
 describe("chat Markdown images", () => {
   it("reads local image paths, with spaces and angle brackets", () => {

@@ -39,7 +39,7 @@ const TR: Record<string, string> = {
   "Search icons…": "Simge ara…", "No icons found.": "Simge bulunamadı.", "Only for hosted servers": "Yalnızca uzak sunucular için",
   "Saved · leave empty to keep": "Kayıtlı · korumak için boş bırak", "Local": "Yerel", "Remote": "Uzak", "Key": "Anahtar",
   // Tabs
-  "Open folder…": "Klasör aç…", "New tab": "Yeni sekme", "Close tab": "Sekmeyi kapat", "Open a project in a new tab": "Projeyi yeni sekmede aç",
+  "Open folder…": "Klasör aç…", "New tab without a folder": "Klasörsüz yeni sekme", "Start without a folder": "Klasör seçmeden başla", "Click to load the scene": "Sahneyi yüklemek için tıkla", "Press a key": "Bir tuşa bas", "New tab": "Yeni sekme", "Close tab": "Sekmeyi kapat", "Open a project in a new tab": "Projeyi yeni sekmede aç",
   "Open a folder": "Bir klasör aç", "Open folder": "Klasör aç", "Recent workspaces": "Son çalışma alanları", "Projects": "Projeler",
   // Templates
   "Name": "Ad", "Description": "Açıklama", "Provider": "Sağlayıcı", "Model": "Model", "Effort": "Efor", "Role": "Rol",

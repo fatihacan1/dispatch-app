@@ -4,6 +4,7 @@
 // @ts-nocheck
 import * as THREE from 'three';
 import { createFlyCamera } from './FlyCamera.js';
+import { frameGate } from './frameCap';
 
 export function createOfficeScene(container, callbacks = {}) {
   const { onTimeUpdate, onStatusUpdate, onMeetingChange } = callbacks;
@@ -39,7 +40,7 @@ scene.fog=new THREE.FogExp2(callbacks.background||0x000C1E,0.005);
 const camera=new THREE.PerspectiveCamera(30,container.clientWidth/container.clientHeight,0.1,500);
 const renderer=new THREE.WebGLRenderer({antialias:true});
 renderer.setSize(container.clientWidth,container.clientHeight);
-renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));
 renderer.shadowMap.enabled=true;
 renderer.shadowMap.type=THREE.PCFSoftShadowMap;
 renderer.toneMapping=THREE.ACESFilmicToneMapping;
@@ -1372,12 +1373,12 @@ let keyTimer=0;
 let stepTimer=0;
 let lastMeetingState=false;
 const clock=new THREE.Clock();
-function animate(){
+const gate=frameGate(container);
+function animate(t=performance.now()){
   if(disposed)return;
   requestAnimationFrame(animate);
-  // Hidden (another page): no work at all until it is shown again.
-  if(!container.offsetParent){clock.getDelta();return;}
-  const delta=Math.min(clock.getDelta(),.05);
+  if(!gate(t))return;
+  const delta=Math.min(clock.getDelta(),0.1);
   const elapsed=clock.getElapsedTime();
   frame++;
   fly.update(delta);
@@ -1472,7 +1473,7 @@ const onResize=()=>{if(!container.clientWidth||!container.clientHeight)return;ca
     isCyberpunk: () => cyberpunkMode,
     destroy: () => {
       disposed = true; resizeObserver.disconnect(); fly.dispose();
-      renderer.dispose();
+      renderer.dispose(); renderer.forceContextLoss(); // the GPU memory goes now, not at some later clean-up
       container.removeChild(renderer.domElement);
     }
   };
