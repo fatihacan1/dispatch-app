@@ -1,6 +1,12 @@
 export type Message = { id: string; from: string; to: string; text: string; chats?: Record<string, string> };
 export type PluginField = { label: string; description: string; kind: "text" | "number" | "boolean" | "enum"; required: boolean; hasValue: boolean; value: string | boolean };
 export type PluginQuestionAnswer = { action: "accept" | "decline"; values?: Record<number, string | boolean> };
+/** How full an agent's conversation is, as its CLI reports it. Tokens; window null = not reported. */
+export type AgentContext = {
+  used: number; cached: number; fresh: number; output: number; window: number | null; percent: number | null; at: number; guessed?: boolean;
+  model?: string; modelName?: string; effort?: string; cacheHit?: number | null; cacheUntil?: string | null; cost?: number; durationMs?: number; apiMs?: number; linesAdded?: number; linesRemoved?: number;
+  session?: { input: number; output: number; cached?: number }; limits?: { label: string; usedPercent: number; resetsAt: string | null }[];
+};
 export type AgentQuestion = {
   id: string;
   at: string;
@@ -72,6 +78,7 @@ declare global {
       setEffort(name: string, effort: string): Promise<{ mode: "applied" | "queued" | "saved" | "restarted" | "fresh" }>;
       setPermission(name: string, permission: string): Promise<{ mode: "applied" | "saved" | "restarted" | "fresh" }>;
       interrupt(name: string): Promise<boolean>;
+      context: { list(): Promise<Record<string, AgentContext>>; compact(name: string): Promise<boolean> };
       keepsChat(name: string): Promise<boolean>;
       info(): Promise<{ workspace: string; demo: boolean; operations: any[]; workspaces: string[] }>;
       output(name: string): Promise<string>;

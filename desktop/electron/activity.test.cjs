@@ -106,3 +106,26 @@ test('agy: a conversation in a folder with a space and Turkish letters is found 
   try { for (let i = 0; i < 30 && !session; i++) await new Promise(r => setTimeout(r, 100)); } finally { stop(); fs.rmSync(root, { recursive: true, force: true }); }
   assert.equal(session, 'c1');
 });
+
+test('opencode: steps once, tool calls go on, a stop is the reply, an abort is not', () => {
+  const { parseOpencode } = require('./activity.cjs'), seen = new Set();
+  const parts = [{ id: 'a', data: { type: 'reasoning', text: 'Let me look', time: { start: 1, end: 2 } } }, { id: 'b', data: { type: 'tool', tool: 'bash', state: { status: 'running', input: { command: 'git status' } } } }];
+  const one = parseOpencode({ role: 'assistant', time: { created: 1 } }, parts, seen);
+  assert.deepStrictEqual(one.steps.map(s => s.kind), ['thinking', 'tool']); assert.strictEqual(one.turn, true);
+  assert.strictEqual(parseOpencode({ time: { created: 1, completed: 2 }, finish: 'tool-calls' }, parts, seen).steps.length, 0);
+  const end = parseOpencode({ time: { created: 1, completed: 2 }, finish: 'stop', tokens: { input: 100, output: 5, cache: { read: 900, write: 0 } } }, [{ id: 'c', data: { type: 'text', text: 'Done.' } }], seen);
+  assert.strictEqual(end.final, 'Done.'); assert.strictEqual(end.turn, false); assert.strictEqual(end.usage.used, 1000); assert.strictEqual(end.usage.cached, 900);
+  const stop = parseOpencode({ time: { completed: 2 }, error: { name: 'MessageAbortedError' } }, [{ id: 'd', data: { type: 'text', text: 'half' } }], seen);
+  assert.strictEqual(stop.interrupted, true); assert.strictEqual(stop.final, undefined);
+  assert.match(parseOpencode({ time: { completed: 2 }, error: { name: 'APIError', data: { message: 'no balance' } } }, [], seen).final, /no balance/);
+});
+test('context usage from claude and codex lines, and numbers out of protobuf', () => {
+  const { parseClaude, parseCodex, pbNumber } = require('./activity.cjs');
+  const u = parseClaude({ type: 'assistant', message: { model: 'claude-x', content: [], usage: { input_tokens: 2, cache_creation_input_tokens: 1000, cache_read_input_tokens: 9000, output_tokens: 50 } } }).usage;
+  assert.deepStrictEqual([u.used, u.cached, u.fresh, u.output], [10002, 9000, 1002, 50]);
+  assert.strictEqual(parseClaude({ type: 'assistant', isSidechain: true, message: { content: [], usage: { input_tokens: 5 } } }).usage, undefined);
+  const c = parseCodex({ type: 'event_msg', payload: { type: 'token_count', info: { last_token_usage: { input_tokens: 500, cached_input_tokens: 400, output_tokens: 9 }, total_token_usage: { input_tokens: 700, output_tokens: 20 }, model_context_window: 272000 } } }).usage;
+  assert.deepStrictEqual([c.used, c.cached, c.window, c.session.output], [500, 400, 272000, 20]);
+  // 1 { 4 { 2: 300 } }
+  assert.strictEqual(pbNumber(Buffer.from([0x0a, 5, 0x22, 3, 0x10, 0xac, 0x02]), [1, 4, 2]), 300);
+});

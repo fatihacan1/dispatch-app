@@ -53,7 +53,7 @@ test('voice typing streams spoken words into the chat input', async () => {
   await expect.poll(() => page.evaluate(() => window.army.voice.status().then(s => s.mic))).not.toBe('');
   await expect(mic).not.toHaveValue('');
   await page.getByRole('button', { name: 'Test', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Stop microphone test' }).locator('canvas')).toBeVisible();
+  await expect(page.locator('.mic-level canvas')).toBeVisible();
   await page.screenshot({ path: path.join('test-results', 'voice-settings.png') });
   await page.getByRole('button', { name: 'Stop microphone test' }).click();
  } finally { await app.close(); fs.rmSync(workspace, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); }

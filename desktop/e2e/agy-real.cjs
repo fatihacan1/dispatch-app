@@ -65,6 +65,7 @@ const log = (ok, text) => { console.log(`${ok ? 'PASS' : 'FAIL'} ${text}`); if (
     const c = replies().length;
     await page.evaluate(() => window.army.send('boss', 'What were the two code words (NATO letters) I asked you to reply with? Answer with both.'));
     log(!!(await until(async () => replies().slice(c).some(m => /ALPHA/i.test(m.text) && /BRAVO/i.test(m.text)), 90000)), 'remembers the conversation after the restart');
+    const ctx = await until(() => page.evaluate(() => window.army.context.list()).then(c => c.boss), 8000); log(!!ctx?.window && ctx.used > 0, `context: ${JSON.stringify(ctx)}`);
     await page.screenshot({ path: path.join(shots, 'agy-chat.png') });
   } catch (e) { log(false, e.stack); }
   finally {

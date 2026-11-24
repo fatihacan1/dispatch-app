@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "../components/common";
 import { openMic } from "./dictation";
-import { Visualizer } from "./Visualizer";
+import { MicLevel } from "./MicLevel";
 
 const LANGS: [string, string][] = [["tr", "Turkish"], ["en", "English"], ["auto", "Detect automatically"]];
 type Mic = { id: string; label: string };
@@ -78,9 +78,15 @@ export function VoiceSettings({ openTools }: { openTools: () => void }) {
           {mics.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
         </select>
         {!named && <Button className="ghost" onClick={() => void allow()}>Show names</Button>}
-        {test ? <button type="button" className="button secondary voice-test on" aria-label="Stop microphone test" onClick={() => test.stop()}><Visualizer analyser={test.analyser} width={60} height={18} /></button>
-          : <Button className="secondary voice-test" onClick={() => void startTest(current)}>Test</Button>}
+        <Button
+          className={"secondary voice-test" + (test ? " on" : "")}
+          aria-label={test ? "Stop microphone test" : undefined}
+          onClick={() => (test ? test.stop() : void startTest(current))}
+        >
+          {test ? "Stop test" : "Test"}
+        </Button>
       </div></div>
+    {test && <MicLevel analyser={test.analyser} />}
     <div className="setting-row"><div><b>Spoken language</b><p>Fixing the language is faster and more accurate than detecting it.</p></div>
       <select aria-label="Spoken language" style={{ width: 200 }} value={s?.lang || "tr"} onChange={e => void set({ voiceLang: e.target.value })}>{LANGS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></div>
     <div className="setting-row"><div><b>Shortcut</b><p>{badKey ? "That key cannot be a shortcut. Try another one." : listening ? "Press the key or combination you want. Esc cancels." : s && !s.shortcutOk ? `Another app already uses ${pretty(s.shortcut)}. Pick a different key.` : plain ? "Works everywhere, also when Dispatch is not in front. In other apps this key no longer types its own character." : "Works everywhere. In Dispatch it turns the chat mic on and off; from any other app it opens a small recorder, press it again and the text lands in the chat box."}</p></div>

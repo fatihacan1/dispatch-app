@@ -41,8 +41,9 @@ import { RemoteRailButton, RemoteSettings } from "./Remote";
 import { Servers, RailServers, ServerApprovals } from "./Servers";import { Markdown, firstSentence } from "../components/Markdown";
 import { Sidebar, type AgentInfo } from "./Sidebar";
 import { providers, labels } from "../lib/data";
-import type { AgentQuestion, Message } from "../lib/types";
+import type { AgentContext, AgentQuestion, Message } from "../lib/types";
 import { QuestionCard } from "../components/QuestionCard";
+import { ContextRing } from "../components/ContextRing";
 import { ImageStrip, type StripImage } from "../components/ImageStrip";
 
 type Timed = Message & { time?: number };
@@ -613,6 +614,8 @@ export function App() {
   const [teams, setTeams] = useState<{ file: string; name: string; members: any[]; boss?: any }[]>([]);
   const [homeTeam, setHomeTeam] = useState("");
   useEffect(() => { const load = () => window.army.teams.list().then(setTeams).catch(() => {}); void load(); return window.army.on("teams-changed", load); }, [workspace]);
+  const [contexts, setContexts] = useState<Record<string, AgentContext>>({});
+  useEffect(() => { if (!window.army.context) return; void window.army.context.list().then(setContexts).catch(() => {}); return window.army.on("context", ({ name, context }: { name: string; context: AgentContext }) => setContexts(v => ({ ...v, [name]: context }))); }, [workspace, epoch]);
   // Agents whose CLI is still coming up (Antigravity loads and signs in first).
   const [starting, setStarting] = useState<Record<string, boolean>>({});
   useEffect(() => window.army.on("starting", ({ name, on }: { name: string; on: boolean }) => setStarting(v => ({ ...v, [name]: on }))), []);
@@ -659,7 +662,7 @@ export function App() {
         await window.army.send(outgoing.to, outgoing.text);
         if (spoken === undefined) { setText(""); setAttachments([]); }
         // Show the agent as thinking straight away; its transcript takes over within a second or two.
-        if (!demo && !stopped[outgoing.to] && ["claude", "codex", "antigravity"].includes(agentProvider(outgoing.to))) setTrail(t => t[outgoing.to]?.live ? t : { ...t, [outgoing.to]: { steps: [], live: true, since: Date.now() } });
+        if (!demo && !stopped[outgoing.to] && (["claude", "codex", "antigravity", "opencode", "local"].includes(agentProvider(outgoing.to)) || agentProvider(outgoing.to).startsWith("local:"))) setTrail(t => t[outgoing.to]?.live ? t : { ...t, [outgoing.to]: { steps: [], live: true, since: Date.now() } });
       }
       catch (e) { setMessages(v => v.filter(m => m.id !== outgoing.id)); throw e; }
     } catch (e) { setError(String(e)); }
@@ -684,7 +687,7 @@ export function App() {
   // Opening a workspace continues its latest operation; Home is only for starting a new one.
   const resume = async (id: string, force = false) => {
     if (!force && agents.length && !(await ask.confirm("Resume this operation?", { description: "Current agents will stop.", action: "Resume", danger: true }))) return;
-    try { const result = await window.army.operations.resume(id); const saved = result.operation.agents; setAgents(saved.map((a: any) => a.name)); setStopped(Object.fromEntries(saved.map((a: any) => [a.name, !!a.stopped]))); setAgentTemplates(Object.fromEntries(saved.map((a: any) => [a.name, a.template]))); setEnlistedBy(Object.fromEntries(saved.filter((a: any) => a.enlistedBy).map((a: any) => [a.name, a.enlistedBy]))); setMessages([...result.messages, ...result.notes.map((note: any, i: number) => ({ id: `resume-note-${i}`, from: "dispatch", to: note.name, text: note.text }))]); setSelected(saved[0]?.name || "boss"); setView("agent"); } catch (e) { setError(String(e)); }
+    try { const result = await window.army.operations.resume(id); if (result.starting?.length) setStarting(Object.fromEntries(result.starting.map((n: string) => [n, true]))); const saved = result.operation.agents; setAgents(saved.map((a: any) => a.name)); setStopped(Object.fromEntries(saved.map((a: any) => [a.name, !!a.stopped]))); setAgentTemplates(Object.fromEntries(saved.map((a: any) => [a.name, a.template]))); setEnlistedBy(Object.fromEntries(saved.filter((a: any) => a.enlistedBy).map((a: any) => [a.name, a.enlistedBy]))); setMessages([...result.messages, ...result.notes.map((note: any, i: number) => ({ id: `resume-note-${i}`, from: "dispatch", to: note.name, text: note.text }))]); setSelected(saved[0]?.name || "boss"); setView("agent"); } catch (e) { setError(String(e)); }
   };
   const act = async (name: string, action: string) => {
     if (action === "dismiss") { try { setDismissAgent({ name, working: await window.army.isWorking(name) }); setAgentMenu(null); } catch (e) { setError(String(e)); } return; }
@@ -1086,6 +1089,7 @@ export function App() {
                   <span className="tab-indicator" aria-hidden="true" />
                 </div>
                 <span className="grow" />
+                {!demo && <ContextRing name={selected} context={contexts[selected]} model={tplOf(selected).model || "default"} canCompact={["claude", "codex"].includes(tplOf(selected).provider)} busy={!!working[selected]} onError={setError} />}
                 <Button className="ghost new-chat" aria-label="New chat" onClick={() => void newChat()} title="Clear the whole team's conversation and start over with the same agents (Ctrl N)"><PlusIcon aria-hidden="true" />New chat</Button>
                 <button type="button" className={"icon-button" + (office ? " on" : "")} onClick={() => setOffice(!office)} aria-pressed={office} aria-label={office ? "Hide office" : "Show office"} title="Office view (Ctrl J)"><CubeIcon /></button>
                 <button type="button" className="icon-button" onClick={() => setSidebar(!sidebar)} aria-expanded={sidebar} aria-controls="agent-activity" aria-label={sidebar ? "Hide side panel" : "Show side panel"} title="Side panel (Ctrl B)"><PanelIcon open={sidebar} /></button>

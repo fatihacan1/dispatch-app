@@ -44,6 +44,8 @@ function parseClaude(o) {
     return out;
   }
   if (o.type !== 'assistant' || !Array.isArray(c)) return out;
+  const u = o.message.usage;
+  if (u && o.message.model !== '<synthetic>' && Number.isFinite(u.input_tokens)) { const cached = u.cache_read_input_tokens || 0, fresh = u.input_tokens + (u.cache_creation_input_tokens || 0); if (cached + fresh) out.usage = { used: cached + fresh, cached, fresh, output: u.output_tokens || 0, model: o.message.model || '' }; }
   const done = o.message.stop_reason === 'end_turn' || o.message.stop_reason === 'stop_sequence';
   for (const b of c) {
     if (b.type === 'thinking') out.steps.push({ kind: 'thinking', text: clip(b.thinking) });
@@ -59,6 +61,10 @@ function parseCodex(o) {
   const out = { steps: [] }; const p = o.payload || {};
   if (o.type === 'event_msg' && p.type === 'task_started') out.turn = true;
   if (o.type === 'event_msg' && (p.type === 'task_complete' || p.type === 'turn_aborted')) { out.turn = false; out.final = String(p.last_agent_message || '').trim(); }
+  if (o.type === 'event_msg' && p.type === 'token_count' && p.info?.last_token_usage) {
+    const l = p.info.last_token_usage, t = p.info.total_token_usage || {}, cached = l.cached_input_tokens || 0;
+    out.usage = { used: l.input_tokens || 0, cached, fresh: Math.max(0, (l.input_tokens || 0) - cached), output: l.output_tokens || 0, window: p.info.model_context_window || null, session: { input: t.input_tokens || 0, cached: t.cached_input_tokens || 0, output: t.output_tokens || 0 } };
+  }
   if (o.type === 'event_msg' && p.type === 'agent_reasoning') out.steps.push({ kind: 'thinking', text: clip(p.text) });
   if (o.type === 'event_msg' && p.type === 'agent_message' && String(p.message || '').trim()) out.steps.push({ kind: 'text', text: String(p.message).trim().slice(0, 4000) });
   if (o.type === 'response_item' && p.type === 'reasoning' && !(p.summary || []).length) out.steps.push({ kind: 'thinking', text: '' });
@@ -199,9 +205,31 @@ function antigravityWorking(a, now) {
   if (now - (a.spinAt || 0) < 3000) return true;
   return !(a.atPrompt && now - Math.max(a.eventAt || 0, a.lastOutput || 0, a.deliveredAt || 0) > 20000);
 }
+// The number at a field path of a protobuf message (first match), or undefined.
+function pbNumber(buf, path) {
+  let i = 0; const varint = () => { let r = 0, s = 0, b; do { if (i >= buf.length) throw 0; b = buf[i++]; r += (b & 0x7f) * 2 ** s; s += 7; } while (b & 0x80); return r; };
+  try {
+    while (i < buf.length) {
+      const key = varint(), f = Math.floor(key / 8), w = key % 8;
+      if (w === 0) { const v = varint(); if (f === path[0] && path.length === 1) return v; }
+      else if (w === 1) i += 8; else if (w === 5) i += 4;
+      else if (w === 2) { const len = varint(), sub = buf.subarray(i, i + len); i += len; if (f === path[0] && path.length > 1) { const v = pbNumber(sub, path.slice(1)); if (v !== undefined) return v; } }
+      else return undefined;
+    }
+  } catch {}
+  return undefined;
+}
+// agy keeps what each model call used in gen_metadata: 1.4 = { 2 new input, 5 cached, 3 output }, 1.9.10 = { 1 in context, 4 window }.
+function agyUsage(db) {
+  let row; try { row = db.prepare('select data from gen_metadata order by idx desc limit 1').get(); } catch { return null; }
+  if (!row?.data) return null;
+  const b = Buffer.from(row.data), n = (...p) => pbNumber(b, p) || 0;
+  const fresh = n(1, 4, 2), cached = n(1, 4, 5), used = n(1, 9, 10, 1) || fresh + cached;
+  return used ? { used, cached: Math.min(cached, used), fresh, output: n(1, 4, 3), window: n(1, 9, 10, 4) || null } : null;
+}
 function openAgy(file) { const { DatabaseSync } = require('node:sqlite'); return new DatabaseSync(file, { readOnly: true }); }
-function watchAgy({ cwd, session, name, accountDir, onEvent, onSession }) {
-  const since = Date.now(); let file = session ? path.join(agyDir(accountDir), `${session}.db`) : null, last = null, stopped = false, endedAt = -1, sig = '', readAt = 0;
+function watchAgy({ cwd, session, name, accountDir, onEvent, onSession, onUsage }) {
+  const since = Date.now(); let file = session ? path.join(agyDir(accountDir), `${session}.db`) : null, last = null, stopped = false, endedAt = -1, sig = '', readAt = 0, lastUsage = '';
   const memo = {}; if (file) claimed.add(file);
   const tick = () => {
     if (stopped) return;
@@ -214,6 +242,7 @@ function watchAgy({ cwd, session, name, accountDir, onEvent, onSession }) {
     sig = now; readAt = Date.now();
     const db = openAgy(file);
     try {
+      if (onUsage) { const u = agyUsage(db), s = u && JSON.stringify(u); if (s && s !== lastUsage) { lastUsage = s; onUsage(u); } }
       // Resumed conversation: only what happens from now on.
       if (last === null) { last = db.prepare('select coalesce(max(idx), -1) m from steps').get().m; return; }
       // Steps are written in order; stop at the first one still running so it is read once, when complete.
@@ -238,9 +267,88 @@ function watchAgy({ cwd, session, name, accountDir, onEvent, onSession }) {
   return () => { stopped = true; clearInterval(timer); if (file) claimed.delete(file); };
 }
 
+// ── OpenCode (also every custom / local AI): one SQLite database for all sessions, ~/.local/share/opencode/opencode.db.
+const opencodeDb = () => path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'), 'opencode', 'opencode.db');
+const samePath = p => String(p || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+function opencodeHas(session) { let db; try { db = openAgy(opencodeDb()); return !!db.prepare('select 1 from session where id = ?').get(session); } catch { return false; } finally { try { db?.close(); } catch {} } }
+// One assistant message with its parts → steps not seen yet, and how the turn stands.
+function parseOpencode(data, parts, seen) {
+  const out = { steps: [] }, done = !!data.time?.completed, err = data.error;
+  const texts = [];
+  for (const { id, data: p } of parts) {
+    const add = (key, step) => { if (!seen.has(key)) { seen.add(key); out.steps.push(step); } };
+    if (p.type === 'reasoning' && String(p.text || '').trim() && (p.time?.end || done)) add(id, { kind: 'thinking', text: clip(p.text) });
+    else if (p.type === 'tool' && p.state?.input && Object.keys(p.state.input).length) add(id, { kind: 'tool', text: toolLabel(p.tool, p.state.input) });
+    else if (p.type === 'text' && !p.synthetic && String(p.text || '').trim()) { texts.push(String(p.text).trim()); if (done && data.finish === 'tool-calls') add(id, { kind: 'text', text: String(p.text).trim().slice(0, 4000) }); }
+  }
+  if (!done) out.turn = true;
+  else if (err) {
+    out.turn = false;
+    if (/abort/i.test(err.name || '')) { out.interrupted = true; for (const t of texts) out.steps.push({ kind: 'text', text: t.slice(0, 4000) }); }
+    else { out.error = true; out.final = `OpenCode error: ${String(err.data?.message || err.name || 'the turn failed').trim().slice(0, 1000)}`; }
+  }
+  else if (data.finish === 'tool-calls') out.turn = true;
+  else { out.turn = false; out.final = texts.join('\n\n'); }
+  const t = data.tokens;
+  if (t && (t.total || t.input || t.cache?.read)) out.usage = { used: (t.input || 0) + (t.cache?.read || 0) + (t.cache?.write || 0), cached: t.cache?.read || 0, fresh: (t.input || 0) + (t.cache?.write || 0), output: t.output || 0, model: data.modelID || '', cost: data.cost || 0 };
+  return out;
+}
+function watchOpencode({ cwd, session, name, onEvent, onSession, onUsage }) {
+  const since = Date.now(), file = opencodeDb(), states = new Map(); let id = session || null, from = session ? null : 0, stopped = false, sig = '', readAt = 0;
+  if (id) claimed.add('opencode:' + id);
+  const tick = () => {
+    if (stopped) return;
+    let now = ''; try { const f = fs.statSync(file); now = `${f.mtimeMs}:${f.size}`; } catch { return; }
+    try { const w = fs.statSync(file + '-wal'); now += `:${w.mtimeMs}:${w.size}`; } catch {}
+    if (now === sig && Date.now() - readAt < 5000) return;
+    sig = now; readAt = Date.now();
+    const db = openAgy(file);
+    try {
+      if (!id) {
+        for (const s of db.prepare('select id, directory from session where time_created >= ? and parent_id is null order by time_created').all(since - 2000)) {
+          if (claimed.has('opencode:' + s.id) || samePath(s.directory) !== samePath(path.resolve(cwd))) continue;
+          // Several agents in one folder: the first message names its agent ("You are x. You report to").
+          const first = db.prepare("select p.data from part p join message m on m.id = p.message_id where p.session_id = ? and json_extract(m.data, '$.role') = 'user' order by p.time_created limit 1").get(s.id);
+          if (!first) continue;
+          if (name && !agyMatchesAgent(Buffer.from(first.data), name)) continue;
+          id = s.id; claimed.add('opencode:' + id); onSession?.(id); break;
+        }
+        if (!id) return;
+      }
+      if (from === null) { const m = db.prepare('select max(time_created) t from message where session_id = ?').get(id); from = (m?.t || 0) + 1; }
+      const last = db.prepare("select data from message where session_id = ? and json_extract(data, '$.role') = 'assistant' order by time_created desc limit 12").all(id);
+      for (const r of last) { const u = parseOpencode(JSON.parse(r.data), [], new Set()).usage; if (u) { onUsage?.(u); break; } }
+      for (const m of db.prepare('select id, time_updated, data from message where session_id = ? and time_created >= ? order by time_created').all(id, from)) {
+        let d; try { d = JSON.parse(m.data); } catch { continue; }
+        const st = states.get(m.id) || { seen: new Set(), end: false, user: false }; states.set(m.id, st);
+        if (d.role === 'user') { if (!st.user) { st.user = true; onEvent({ steps: [], turn: true }); } continue; }
+        if (st.end) continue;
+        const parts = db.prepare('select id, data from part where message_id = ? order by time_created, id').all(m.id).map(p => { try { return { id: p.id, data: JSON.parse(p.data) }; } catch { return null; } }).filter(Boolean);
+        const e = parseOpencode(d, parts, st.seen);
+        if (d.time?.completed) st.end = true;
+        if (e.steps.length || st.end) onEvent(e);
+      }
+    } finally { db.close(); }
+  };
+  const timer = setInterval(() => { try { tick(); } catch {} }, 900);
+  try { tick(); } catch {}
+  return () => { stopped = true; clearInterval(timer); if (id) claimed.delete('opencode:' + id); };
+}
+
+// What the newest lines of a transcript say about the context, for an agent that just resumed.
+function lastUsage(provider, file) {
+  try {
+    const size = fs.statSync(file).size, len = Math.min(size, 400000), buf = Buffer.alloc(len), fd = fs.openSync(file, 'r'); fs.readSync(fd, buf, 0, len, size - len); fs.closeSync(fd);
+    const lines = buf.toString('utf8').split('\n').reverse();
+    for (const l of lines) { if (!/"usage"|token_count/.test(l)) continue; try { const u = (provider === 'claude' ? parseClaude : parseCodex)(JSON.parse(l)).usage; if (u) return u; } catch {} }
+  } catch {}
+  return null;
+}
+
 /** Follow one agent's transcript. onEvent({ steps, turn }) fires for new lines only; onSession(id) when a new Codex session is found. Returns stop(). */
-function watch({ provider, cwd, session, name, accountDir, onEvent, onSession }) {
-  if (provider === 'antigravity') return watchAgy({ cwd, session, name, accountDir, onEvent, onSession });
+function watch({ provider, cwd, session, name, accountDir, onEvent, onSession, onUsage }) {
+  if (provider === 'antigravity') return watchAgy({ cwd, session, name, accountDir, onEvent, onSession, onUsage });
+  if (provider === 'opencode' || provider === 'local' || provider.startsWith('local:')) return watchOpencode({ cwd, session, name, onEvent, onSession, onUsage });
   if (!['claude', 'codex'].includes(provider) || (provider === 'claude' && !session)) return () => {};
   const parse = provider === 'claude' ? parseClaude : parseCodex;
   const since = Date.now();
@@ -254,12 +362,12 @@ function watch({ provider, cwd, session, name, accountDir, onEvent, onSession })
     // A new session has no transcript until its first message: when the file shows up later, read it from the top,
     // or the first turn (and its reply) would be skipped.
     let size; try { size = fs.statSync(file).size; } catch { if (pos === null && provider === 'claude') pos = 0; if (provider === 'codex') file = null; return; }
-    if (pos === null) { pos = size; return; } // resumed session: start at the end, only new activity
+    if (pos === null) { pos = size; const u = onUsage && lastUsage(provider, file); if (u) onUsage(u); return; } // resumed session: start at the end, only new activity
     if (size < pos) pos = 0;
     if (size === pos) return;
     const fd = fs.openSync(file, 'r'); const buf = Buffer.alloc(size - pos); fs.readSync(fd, buf, 0, buf.length, pos); fs.closeSync(fd); pos = size;
     const lines = (rest + buf.toString('utf8')).split('\n'); rest = lines.pop();
-    for (const line of lines) { if (!line.trim()) continue; let o; try { o = JSON.parse(line); } catch { continue; } const e = parse(o); if (e.steps.length || e.turn !== undefined || e.answered) onEvent(e); }
+    for (const line of lines) { if (!line.trim()) continue; let o; try { o = JSON.parse(line); } catch { continue; } const e = parse(o); if (e.usage) onUsage?.(e.usage); if (e.steps.length || e.turn !== undefined || e.answered) onEvent(e); }
     // Claude's tool_use turns end with stop_reason tool_use; only a plain user prompt or end_turn moves the turn state.
   };
   const timer = setInterval(() => { try { tick(); } catch {} }, 700);
@@ -287,4 +395,4 @@ function questionKeys(questions, answers) {
   });
 }
 
-module.exports = { watch, parseClaude, parseCodex, parseAgyStep, agyMatchesAgent, agyMetaHasFolder, agyFile, antigravityWorking, claudeFile, questionKeys };
+module.exports = { watch, parseOpencode, opencodeHas, opencodeDb, pbNumber, parseClaude, parseCodex, parseAgyStep, agyMatchesAgent, agyMetaHasFolder, agyFile, antigravityWorking, claudeFile, questionKeys };

@@ -96,6 +96,8 @@ const CATALOG = Object.freeze([
   { id: 'buffer', name: 'Buffer', group: 'business', desc: 'Schedule posts and manage social channels in Buffer.', url: 'https://mcp.buffer.com/mcp', auth: 'oauth' },
   { id: 'hootsuite', name: 'Hootsuite', group: 'business', desc: 'Social posts, streams and engagement in Hootsuite.', url: 'https://mcp.hootsuite.com/mcp', auth: 'oauth' },
   { id: 'klaviyo', name: 'Klaviyo', domain: 'klaviyo.com', group: 'business', desc: 'Campaigns, flows, profiles and segments in Klaviyo.', url: 'https://mcp.klaviyo.com/mcp', auth: 'oauth' },
+  { id: 'kit', name: 'Kit', domain: 'kit.com', group: 'business', desc: 'Subscribers, tags, sequences and broadcasts in Kit (ConvertKit).', url: 'https://app.kit.com/mcp', auth: 'oauth' },
+  { id: 'producthunt', name: 'Product Hunt', domain: 'producthunt.com', group: 'business', desc: 'Discover launches, prepare your own launch and read its results.', url: 'https://mcp.producthunt.com/mcp', auth: 'oauth' },
   { id: 'mailchimp', name: 'Mailchimp', group: 'business', desc: 'Audiences, campaigns and templates in Mailchimp.', url: 'https://mcp.mailchimp.com/mcp', auth: 'oauth' },
   { id: 'alpaca', name: 'Alpaca', domain: 'alpaca.markets', group: 'business', desc: 'Stock and crypto market data and assets.', url: 'https://mcp.alpaca.markets/mcp', auth: 'none' },
   { id: 'coingecko', name: 'CoinGecko', domain: 'coingecko.com', group: 'business', desc: 'Crypto prices, market caps, coins and trends.', url: 'https://mcp.api.coingecko.com/mcp', auth: 'none' },
@@ -128,11 +130,13 @@ async function readRpc(r, id) {
 }
 
 /** Where to sign in: the protected resource metadata (MCP 2025-06) or, for older servers, the server's own origin. */
-async function discover(url) {
+async function discover(url, wantAuth = false) {
   let r;
   try { r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' }, body: JSON.stringify(INIT), signal: timeout() }); }
   catch (e) { throw new Error(`Could not reach ${new URL(url).host}: ${e.cause?.code || e.message}`); }
-  if (r.status !== 401 && r.status !== 403) { try { await r.body?.cancel(); } catch {} if (r.ok) return { auth: 'none' }; throw new Error(`${new URL(url).host} answered ${r.status}. Check the address.`); }
+  // Some servers (Product Hunt) greet anyone and ask for the sign-in only when a tool is used.
+  if (r.status !== 401 && r.status !== 403 && !(wantAuth && r.ok)) { try { await r.body?.cancel(); } catch {} if (r.ok) return { auth: 'none' }; throw new Error(`${new URL(url).host} answered ${r.status}. Check the address.`); }
+  if (r.ok) try { await r.body?.cancel(); } catch {}
   const www = r.headers.get('www-authenticate') || '';
   const u = new URL(url);
   const m = /resource_metadata="([^"]+)"/.exec(www);
@@ -270,7 +274,7 @@ function create({ file, vault, open, notify = () => {} }) {
       let secret = {};
       if (c.auth === 'token') { const tk = String(input?.token || '').trim(); if (!tk) throw new Error('Paste a token.'); secret = { access_token: tk }; }
       else if (c.auth === 'oauth' || c.auth === 'auto') {
-        const found = await discover(c.url);
+        const found = await discover(c.url, c.auth === 'oauth');
         c.auth = found.auth;
         if (found.auth === 'oauth') { Object.assign(info, found); secret = await signIn(info); c.resource = found.resource; }
       } else if (c.auth === 'none' && /^https?:\/\/(127\.0\.0\.1|localhost)[:/]/i.test(c.url)) {

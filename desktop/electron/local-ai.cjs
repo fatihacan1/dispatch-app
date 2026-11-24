@@ -58,10 +58,21 @@ async function check(config) {
     return { ok: true, models: ids, matches: ids.includes(value.model) };
   } catch (e) { return { ok: false, error: String(e.message || e) }; }
 }
+// A model server on this computer before a message goes to it: 'up', 'loading' (llama.cpp answers 503 meanwhile) or 'down'.
+async function ready(model) {
+  const item = read(model); if (!item || !isLocal(item.baseURL)) return { state: 'up' };
+  const at = { url: item.baseURL, name: item.name };
+  try {
+    const h = await fetch(new URL('/health', item.baseURL), { signal: AbortSignal.timeout(3000) }).catch(e => { throw e; });
+    if (h.status === 503) return { state: 'loading', ...at };
+  } catch { return { state: 'down', ...at }; }
+  return { state: 'up', ...at };
+}
 // OpenCode config for one provider. The key goes in the agent's own environment only (OPENCODE_CONFIG_CONTENT).
+const contextOf = model => { const v = read(model); return v ? v.context || (isLocal(v.baseURL) ? 16384 : 131072) : null; };
 function envConfig(value, key = apiKey(value.model)) {
   const local = isLocal(value.baseURL);
   const limit = { context: value.context || (local ? 16384 : 131072), output: value.output || (local ? 4096 : 16384) };
   return JSON.stringify({ provider: { 'dispatch-local': { npm: '@ai-sdk/openai-compatible', name: value.name || 'Dispatch Custom AI', options: { baseURL: value.baseURL, ...(key ? { apiKey: key } : {}) }, models: { [value.model]: { name: value.model, limit } } } } });
 }
-module.exports = { read, list, save, remove, check, envConfig, apiKey, setVault, isLocal };
+module.exports = { ready, contextOf, read, list, save, remove, check, envConfig, apiKey, setVault, isLocal };

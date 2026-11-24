@@ -1,0 +1,36 @@
+/* Context ring in the chat header and its panel. The colour follows how full the window is. */
+.ctx-ring { --ctx: var(--status-idle); flex: none; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px 0 6px; border: var(--border); border-radius: var(--radius); background: transparent; color: var(--text-2); font: 500 var(--text-sm) var(--font-ui); font-variant-numeric: tabular-nums; cursor: pointer; transition: background-color var(--dur-fast) var(--ease-out); }
+.ctx-ring:hover, .ctx-ring[aria-expanded="true"] { background: var(--hover); color: var(--text); }
+.ctx-ring:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.ctx-ring svg { width: 18px; height: 18px; }
+.ctx-ring circle { fill: none; stroke: var(--line-strong); stroke-width: 3; }
+.ctx-ring .ctx-fill { stroke: var(--ctx); stroke-linecap: butt; transition: stroke-dashoffset 500ms var(--ease-out), stroke 300ms; }
+.ctx-ring.low, .ctx-bar.low, .ctx-big .low { --ctx: var(--status-working); }
+.ctx-ring.mid, .ctx-bar.mid, .ctx-big .mid { --ctx: var(--status-waiting); }
+.ctx-ring.high, .ctx-bar.high, .ctx-big .high { --ctx: var(--status-error); }
+.ctx-panel { position: fixed; z-index: 120; width: 320px; max-height: calc(100vh - 80px); overflow: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; border: var(--border-strong); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-pop); color: var(--text); font-size: var(--text-sm); animation: pop var(--dur) var(--ease-out); }
+.ctx-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.ctx-head b { font-weight: 600; font-size: var(--text-md); }
+.ctx-head small, .ctx-panel small { color: var(--text-3); font-size: var(--text-xs); }
+.ctx-big { margin: 0; display: flex; align-items: baseline; gap: 5px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.ctx-big b { font-size: 20px; font-weight: 600; color: var(--text); letter-spacing: -0.01em; }
+.ctx-big span { margin-left: auto; font-weight: 600; font-size: var(--text-md); color: var(--ctx); }
+.ctx-bar { --ctx: var(--status-idle); display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--line-strong); }
+.ctx-bar.thin { height: 5px; border-radius: 3px; }
+.ctx-bar i { display: block; height: 100%; transition: width 400ms var(--ease-out); }
+.ctx-bar .fresh { background: var(--ctx); }
+.ctx-bar .cached { background: color-mix(in srgb, var(--ctx) 55%, var(--surface)); }
+.ctx-list { margin: 0; display: flex; flex-direction: column; gap: 5px; }
+.ctx-list div { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ctx-list dt { display: inline-flex; align-items: center; gap: 7px; color: var(--text-2); }
+.ctx-list dd { margin: 0; color: var(--text); font-variant-numeric: tabular-nums; }
+.ctx-list .key { width: 8px; height: 8px; border-radius: 2px; background: var(--line-strong); }
+.ctx-list .key.fresh { background: var(--status-working); }
+.ctx-list .key.cached { background: color-mix(in srgb, var(--status-working) 55%, var(--surface)); }
+.ctx-limits { display: flex; flex-direction: column; gap: 8px; padding-top: 10px; border-top: var(--border); }
+.ctx-limits > div { display: flex; flex-direction: column; gap: 4px; }
+.ctx-limit-head { display: flex; justify-content: space-between; color: var(--text-2); }
+.ctx-limit-head b { color: var(--text); font-weight: 500; }
+.ctx-note { margin: 0; color: var(--text-3); font-size: var(--text-xs); line-height: 1.5; }
+.ctx-foot { display: flex; justify-content: flex-end; }
+@media (prefers-reduced-motion: reduce) { .ctx-ring .ctx-fill, .ctx-bar i { transition: none; } .ctx-panel { animation: none; } }

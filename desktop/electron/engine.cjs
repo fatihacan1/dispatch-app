@@ -77,7 +77,7 @@ function emitMessage({ from, to, text }) {
 }
 // Agents about to start in the same batch (a team, a reset), so the first ones already know who else is on board.
 let rosterHint = [];
-function switchChat(name, id) { const saved = operation?.agents.find(a => a.name === name); if (!saved) throw new Error('Agent not found'); if (name !== 'boss' && id) throw new Error('Only Boss chats can be resumed'); const target = id ? readChat(name, id) : null; if (id && !target) throw new Error('Chat not found'); if (target && !demo && (!target.sessionId || !['claude','codex','antigravity'].includes(saved.provider))) throw new Error(`Cannot resume this ${saved.provider} chat: provider session ID or resume support is unavailable.`); const old = processes.get(name); const queued = old ? [...(old.inFlight ? [old.inFlight] : []), ...old.queue] : []; if (old) { clearTimeout(old.timer); setAttention(name, old, null); processes.delete(name); old.terminal.kill(); } const chat = target || createChat(saved); if (name !== 'boss') { for (const previous of chats(name)) if (previous.id !== chat.id) fs.unlinkSync(chatPath(name, previous.id)); } saved.chatId = chat.id; saved.sessionId = chat.sessionId; saved.stopped = false; saveOperation(); const agent = startAgent(name, saved.template, saved.enlistedBy, saved, !!target); for (const item of queued) if (!agent.queue.some(x => x.file === item.file)) agent.queue.push(item); agent.queue = agent.queue.map(item => ({ ...item, previous: true })); return chat; }
+function switchChat(name, id) { const saved = operation?.agents.find(a => a.name === name); if (!saved) throw new Error('Agent not found'); if (name !== 'boss' && id) throw new Error('Only Boss chats can be resumed'); const target = id ? readChat(name, id) : null; if (id && !target) throw new Error('Chat not found'); if (target && !demo && (!target.sessionId || !(['claude','codex','antigravity','opencode','local'].includes(saved.provider) || String(saved.provider).startsWith('local:')))) throw new Error(`Cannot resume this ${saved.provider} chat: provider session ID or resume support is unavailable.`); const old = processes.get(name); const queued = old ? [...(old.inFlight ? [old.inFlight] : []), ...old.queue] : []; if (old) { clearTimeout(old.timer); setAttention(name, old, null); processes.delete(name); old.terminal.kill(); } const chat = target || createChat(saved); if (name !== 'boss') { for (const previous of chats(name)) if (previous.id !== chat.id) fs.unlinkSync(chatPath(name, previous.id)); } saved.chatId = chat.id; saved.sessionId = chat.sessionId; saved.stopped = false; saveOperation(); const agent = startAgent(name, saved.template, saved.enlistedBy, saved, !!target); for (const item of queued) if (!agent.queue.some(x => x.file === item.file)) agent.queue.push(item); agent.queue = agent.queue.map(item => ({ ...item, previous: true })); return chat; }
 const processes = new Map();
 const pendingAsks = new Set();
 const trustFile = () => path.join(workspace, '.dispatch', 'trust.json');
@@ -401,6 +401,16 @@ function deliver(agent) {
   // The user is writing in its terminal right now: a message pasted in between would end up inside their text.
   if (agent.typedAt && Date.now() - agent.typedAt < 6000) { agent.timer = setTimeout(() => deliver(agent), 1500); return; }
   if (agent.command === 'codex' && agent.codexStateKnown && !agent.atPrompt) return;
+  // A model server on this computer that is not running: the message waits for it instead of failing in OpenCode.
+  if (agent.localModel !== undefined && !demo && Date.now() - (agent.serverUpAt || 0) > 5000) {
+    if (!agent.serverCheck) agent.serverCheck = localAI.ready(agent.localModel).catch(() => ({ state: 'up' })).then(r => {
+      agent.serverCheck = null; const name = [...processes].find(([, a]) => a === agent)?.[0]; if (!name) return;
+      if (r.state === 'up') { agent.serverUpAt = Date.now(); if (agent.serverTold) { agent.serverTold = ''; emitMessage({ from: 'dispatch', to: 'you', text: `${r.name || 'The model'} is running. Your message is on its way to ${name}.` }); } deliver(agent); return; }
+      if (agent.serverTold !== r.state) { agent.serverTold = r.state; notify('activity', { name, steps: [], turn: false }); /* nobody is thinking yet */ emitMessage({ from: 'dispatch', to: 'you', text: r.state === 'loading' ? `${r.name} is still loading (${r.url}). Your message goes to ${name} as soon as it is ready.` : `${r.name} is not running at ${r.url}. Start it; your message waits and goes to ${name} by itself.` }); }
+      agent.timer = setTimeout(() => deliver(agent), 2500);
+    });
+    return;
+  }
   // Antigravity: only into an empty prompt box on its screen. A message pasted while it still loaded or signed in was
   // lost or sat unsent until somebody opened its terminal.
   if (agent.command === 'agy' && agent.view && !demo) {
@@ -517,6 +527,44 @@ function agentAction(name, action) {
   notify('agent-action', { name, action });
   return true;
 }
+// ── Context: how full each agent's conversation is ──
+const statusPath = name => path.join(workspace, '.dispatch', 'status', `${name}.json`);
+function ownStatusLine(accountDir) {
+  return [path.join(accountDir || process.env.CLAUDE_CONFIG_DIR || path.join(userHome(), '.claude'), 'settings.json'), path.join(workspace, '.claude', 'settings.json'), path.join(workspace, '.claude', 'settings.local.json')]
+    .some(f => { try { return !!JSON.parse(fs.readFileSync(f, 'utf8')).statusLine; } catch { return false; } });
+}
+function setContext(name, agent, u, source) {
+  if (processes.get(name) !== agent || !u) return;
+  const p = agent.template?.provider || '', local = p === 'local' || p.startsWith('local:');
+  const prev = agent.context || {};
+  // Claude's status line knows more than its transcript: the transcript only moves the numbers between two of its updates.
+  const next = source === 'status' ? { ...u } : { ...prev, ...u, window: u.window || (prev.model && u.model && prev.model !== u.model ? null : prev.window) || (local ? localAI.contextOf(p.startsWith('local:') ? decodeURIComponent(p.slice(6)) : agent.template.model) : null) };
+  // Without a reported window: 200k, or 1M once more than that is in use.
+  if (!next.window && p === 'claude') { next.window = next.used > 200000 ? 1000000 : 200000; next.guessed = true; } else if (source === 'status') next.guessed = false;
+  next.percent = next.window ? Math.min(100, Math.round(next.used / next.window * 1000) / 10) : null; next.at = Date.now();
+  const same = JSON.stringify({ ...next, at: 0 }) === JSON.stringify({ ...prev, at: 0 });
+  agent.context = next; if (!same) notify('context', { name, context: next });
+}
+function readStatus(name, agent) {
+  const file = statusPath(name); let at; try { at = fs.statSync(file).mtimeMs; } catch { return; }
+  if (agent.statusAt === at) return; agent.statusAt = at;
+  let s; try { s = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return; }
+  const w = s.context_window || {}, c = w.current_usage; if (!w.context_window_size) return;
+  const cached = c?.cache_read_input_tokens || 0, fresh = (c?.input_tokens || 0) + (c?.cache_creation_input_tokens || 0);
+  const limit = (label, l) => l && Number.isFinite(l.used_percentage) ? [{ label, usedPercent: Math.round(l.used_percentage), resetsAt: l.resets_at ? new Date(l.resets_at > 1e12 ? l.resets_at : l.resets_at * 1000).toISOString() : null }] : [];
+  setContext(name, agent, { used: cached + fresh, cached, fresh, output: c?.output_tokens || 0, window: w.context_window_size, model: s.model?.id || '', modelName: s.model?.display_name || '', effort: s.effort?.level || '', cacheHit: Number.isFinite(s.prompt_cache?.hit_ratio) ? Math.round(s.prompt_cache.hit_ratio * 100) : null, cacheUntil: s.prompt_cache?.warm && s.prompt_cache.expires_at ? new Date(s.prompt_cache.expires_at * 1000).toISOString() : null, cost: s.cost?.total_cost_usd || 0, durationMs: s.cost?.total_duration_ms || 0, apiMs: s.cost?.total_api_duration_ms || 0, linesAdded: s.cost?.total_lines_added || 0, linesRemoved: s.cost?.total_lines_removed || 0, limits: [...limit('5-hour limit', s.rate_limits?.five_hour), ...limit('Weekly limit', s.rate_limits?.seven_day)] }, 'status');
+}
+intervals.push(setInterval(() => { for (const [name, agent] of processes) if (agent.template?.provider === 'claude' && agent.onTurn) try { readStatus(name, agent); } catch {} }, 1500));
+ipcMain.handle('context:list', () => Object.fromEntries([...processes].filter(([, a]) => a.context).map(([n, a]) => [n, a.context])));
+// Shorten the conversation with the CLI's own /compact, when it is at its prompt.
+ipcMain.handle('context:compact', (_e, name) => {
+  const agent = processes.get(name), p = agent?.template?.provider;
+  if (!agent || !['claude', 'codex'].includes(p)) throw new Error('This provider cannot compact its conversation from here.');
+  if (isWorking(name) || agent.blocked || !agent.ready) throw new Error(`${name} is busy. Compact when it is idle.`);
+  agent.terminal.write('/compact'); setTimeout(() => { try { agent.terminal.write('\r'); } catch {} }, 400);
+  return true;
+});
+
 function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
   if (!operation) newOperation();
   if (!/^[a-zA-Z0-9_-]+$/.test(name) || processes.has(name)) throw new Error('Invalid or duplicate agent name');
@@ -535,7 +583,8 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
   const providerSettings = bossProviders();
   const providerInfo = [...providersLib.PROVIDERS.map(p => ({ id: p.id, name: p.name })), { id: 'local', name: 'Local AI' }].filter(p => providerEnabled(p.id)).map(p => { const settings = providerSettings[p.id] || {}; return `${p.name} (${p.id})${settings.plan && settings.plan !== 'unknown' ? ' · ' + settings.plan : ''}${settings.note ? ' · ' + settings.note : ''}`; }).join('\n');
   // Claude and Codex keep a transcript Dispatch can read, so their own replies go to the chat as written.
-  const direct = !demo && ['claude', 'codex', 'antigravity'].includes(provider);
+  const openCode = provider === 'opencode' || localProvider;
+  const direct = !demo && (['claude', 'codex', 'antigravity'].includes(provider) || openCode);
   const catalogue = bossVisibleTemplates().map(t => `${t.name}: ${t.description} (${t.provider}, ${t.model || 'default'}; Dispatch tools: ${mcp.selected(t).join(', ') || 'none'})`).join('\n');
   const allWorkflows = workflowsLib.list(workspace);
   const prompt = `${template.body || ''}${workflowsLib.promptFor(template, allWorkflows)}\nCode index (saves tokens): this workspace has a symbol index. Reading whole files and running broad searches costs many tokens, so look things up in the index first: to find a function, class, type or component, run dispatch index search <name>; it returns file paths and line numbers. Then read only those lines (offset/limit), not the whole file. If the command fails, finds nothing, or you need text that is not a symbol name, fall back to your usual way (grep, glob, reading files). The index may lag edits made in the last seconds, so check the lines you open.\nYou are ${name}. You report to ${name === 'boss' ? 'you (the user)' : enlistedBy && enlistedBy !== 'user' ? enlistedBy : 'boss'}. Squad: ${[...new Set([...operation.agents.map(a => a.name), ...rosterHint, name])].map(n => `${n} (${operation.agents.find(a => a.name === n)?.stopped ? 'stopped' : processes.has(n) || n === name ? 'running' : 'starting'})`).join(', ')}. ${direct
@@ -592,6 +641,8 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
   if (provider === 'codex') args.push('--no-daemon');
   if (provider === 'antigravity' && resumeSession && !demo && session && fs.existsSync(activity.agyFile(session, account?.dir))) args.push('--conversation', session);
   else if (provider === 'antigravity') resumeSession = false;
+  if (openCode && direct && resumeSession && session && activity.opencodeHas(session)) args.push('--session', session);
+  else if (openCode) resumeSession = false;
   if (provider === 'codex' && resumeSession && saved?.sessionId) args.push('resume', saved.sessionId);
   if (localProvider) args.push('--model', `dispatch-local/${localConfig.model}`);
   else if (template.model && template.model !== 'default') args.push(provider === 'codex' ? '-m' : '--model', template.model);
@@ -614,11 +665,18 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
   }
   // Dispatch skills are Claude Code plugins: the boss always gets them, other Claude agents only if the user chose so.
   if (provider === 'claude' && !demo) { const sk = skillStore(); if (name === 'boss' || sk.settings().claudeAgents) for (const dir of sk.pluginDirs()) args.push('--plugin-dir', dir); }
+    // Claude reports its context window, limits and cost to a status line command. Only when the user has no status line of
+  // their own: theirs stays, and the context is read from the transcript instead. By its bare name (its folder is on the
+  // agent's PATH): Claude runs it in Git Bash or in PowerShell, and a quoted path is no command in PowerShell.
+  if (provider === 'claude' && !demo && !ownStatusLine(account?.dir)) {
+    const statusFile = path.join(workspace, '.dispatch', 'claude-statusline.json');
+    try { fs.mkdirSync(path.dirname(statusFile), { recursive: true }); fs.writeFileSync(statusFile, JSON.stringify({ statusLine: { type: 'command', command: 'dispatch statusline', padding: 0 } })); fs.rmSync(statusPath(name), { force: true }); args.push('--settings', statusFile); } catch {}
+  }
   if (provider === 'claude') args.push('--append-system-prompt', prompt, resumeSession ? '--resume' : '--session-id', session);
   const resolved = demo ? null : resolveCommand(command);
   const accountEnv = account ? accountsLib.envFor(provider, account) : {};
   const terminal = demo ? createDemoTerminal(name, workspace, bin()) : pty.spawn(resolved.file, [...resolved.args, ...args], { name: 'xterm-256color', cols: 100, rows: 30, cwd: workspace, env: { ...process.env, ...accountEnv, ...mcpConfig.env, ...geminiEnv, ...(memoryOn && provider === 'claude' && mem.settings().disableProviderMemory ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' } : {}), DISPATCH_INDEX_INFO: codeIndexInfo || '', DISPATCH_AGENT: name, MYARMY_AGENT: name, DISPATCH_HOME: path.join(workspace, '.dispatch'), MYARMY_HOME: path.join(workspace, '.dispatch'), PATH: `${path.dirname(bin())}${path.delimiter}${process.env.PATH}` } });
-  const agent = { terminal, queue: [], output: '', lastOutput: Date.now(), atPrompt: false, template, session, enlistedBy, command, args, prompt, tracksTurns: direct, accountId: account?.id || null, accountDir: account?.dir || null, startedAt: Date.now(), view: screenLib.create(100, 30, demo) }; processes.set(name, agent);
+  const agent = { terminal, queue: [], output: '', lastOutput: Date.now(), atPrompt: false, template, session, enlistedBy, command, args, prompt, tracksTurns: direct, accountId: account?.id || null, accountDir: account?.dir || null, startedAt: Date.now(), view: screenLib.create(100, 30, demo), ...(localProvider ? { localModel: localConfig.model } : {}) }; processes.set(name, agent);
   // Antigravity loads and signs in first: the chat says "Starting", not "Working".
   if (provider === 'antigravity' && !demo) { agent.starting = true; notify('starting', { name, on: true }); }
   // Transcript: live thinking, tool steps and interim text for the chat, the real turn state, and the reply itself.
@@ -663,8 +721,8 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
     notify('activity', { name, steps: e.steps, turn: e.turn, dropLastText });
   };
   // A new agy conversation has no id until its file appears; a resumed one (--conversation) goes on in its own file.
-  const watchSession = provider === 'antigravity' && !resumeSession ? null : session;
-  if (!demo) agent.stopActivity = activity.watch({ provider, cwd: workspace, session: watchSession, name, accountDir: account?.dir, onSession: id => { if (saved && (!saved.sessionId || provider === 'antigravity')) { saved.sessionId = id; agent.session = id; saveOperation(); const chat = saved.chatId && readChat(name, saved.chatId); if (chat) { chat.sessionId = id; writeChat(name, chat); } } }, onEvent: e => {
+  const watchSession = (provider === 'antigravity' || openCode) && !resumeSession ? null : session;
+  if (!demo) agent.stopActivity = activity.watch({ provider, cwd: workspace, session: watchSession, name, accountDir: account?.dir, onUsage: u => setContext(name, agent, u, 'transcript'), onSession: id => { if (saved && (!saved.sessionId || provider === 'antigravity' || openCode)) { saved.sessionId = id; agent.session = id; saveOperation(); const chat = saved.chatId && readChat(name, saved.chatId); if (chat) { chat.sessionId = id; writeChat(name, chat); } } }, onEvent: e => {
     if (processes.get(name) !== agent) return;
     agent.eventAt = Date.now();
     if (provider === 'antigravity') agyEvent(agent, e); else onTurn(e);
@@ -806,8 +864,8 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
       // answered it and started working by itself on every start and resume, with nobody asking.
       // A resumed Antigravity conversation already has it, unless it changed since (squad, plugins, settings).
       const hash = crypto.createHash('sha1').update(prompt).digest('hex').slice(0, 12);
-      agent.setup = provider === 'antigravity' && resumeSession && saved?.setupHash === hash ? null : prompt.replace(/\n/g, ' ');
-      if (saved && provider === 'antigravity' && saved.setupHash !== hash) { saved.setupHash = hash; saveOperation(); }
+      agent.setup = (provider === 'antigravity' || openCode) && resumeSession && saved?.setupHash === hash ? null : prompt.replace(/\n/g, ' ');
+      if (saved && (provider === 'antigravity' || openCode) && saved.setupHash !== hash) { saved.setupHash = hash; saveOperation(); }
       agent.ready = true; if (agent.queue.length) deliver(agent);
     } else { agent.ready = true; if (agent.queue.length) deliver(agent); }
   };
@@ -858,12 +916,15 @@ intervals.push(setInterval(() => { for (const [name, agent] of processes) try { 
 function interruptAgent(name, tries = 0) {
   const agent = processes.get(name); if (!agent?.terminal) return false;
   try { agent.terminal.write('\x1b'); } catch { return false; }
+  // OpenCode stops on the second Esc.
+  if (agent.command === 'opencode') setTimeout(() => { try { agent.terminal.write('\x1b'); } catch {} }, 350);
   setTimeout(() => {
     if (processes.get(name) !== agent || !agent.onTurn) return;
     if (agent.template?.provider === 'antigravity') {
       if (agent.screenState === 'busy') { if (tries < 3) interruptAgent(name, tries + 1); return; }
       agent.heldEnd = null; if (agent.turn) agent.onTurn({ steps: [], turn: false, interrupted: true });
-    } else if (agent.template?.provider === 'claude' && agent.turn && Date.now() - (agent.lastOutput || 0) > 700) agent.onTurn({ steps: [], turn: false, interrupted: true });
+    } else if (agent.command === 'opencode') { if (agent.turn) agent.onTurn({ steps: [], turn: false, interrupted: true }); }
+    else if (agent.template?.provider === 'claude' && agent.turn && Date.now() - (agent.lastOutput || 0) > 700) agent.onTurn({ steps: [], turn: false, interrupted: true });
   }, 1500);
   return true;
 }
@@ -966,8 +1027,11 @@ ipcMain.handle('info', () => ({ workspace, needsFolder, demo, mock: isMock(works
 ipcMain.handle('operations:list', () => listOperations());
 ipcMain.handle('operations:delete', (_e, id) => { if (!/^[\w-]+$/.test(id)) throw new Error('Invalid operation'); if (operation?.id === id) { stopAgents(); operation = null; } fs.rmSync(path.join(operationsDir(), id + '.json'), { force: true }); void fs.promises.rm(path.join(operationsDir(), id), { recursive: true, force: true, maxRetries: 20, retryDelay: 250 }).catch(() => {}); return listOperations(); });
 ipcMain.handle('operations:resume', async (_e, id) => {
-  const op = listOperations().find(o => o.id === id); if (!op) throw new Error('Operation not found');
-  finishOperation(); stopAgents();
+  // The page was only loaded again (Ctrl+R): the operation and its agents are running, the page just needs to see them.
+  // Restarting them killed whatever they were doing.
+  const attached = operation?.id === id && operation.agents.some(a => processes.has(a.name));
+  const op = attached ? operation : listOperations().find(o => o.id === id); if (!op) throw new Error('Operation not found');
+  if (!attached) { finishOperation(); stopAgents(); }
   let log = null; try { log = await fs.promises.readFile(logPath()); } catch {}
   const messages = log ? (op.segments || []).flatMap(s => log.subarray(s.start, s.end ?? log.length).toString('utf8').split('\n').map(parseMessage).filter(Boolean)) : [];
   const byId = new Map(messages.map(m => [m.id, m]));
@@ -984,6 +1048,7 @@ ipcMain.handle('operations:resume', async (_e, id) => {
       }
     } catch {}
   }
+  if (attached) return { operation: op, messages, notes: [], starting: op.agents.filter(a => processes.get(a.name)?.starting).map(a => a.name) };
   if (op.segments?.length && op.segments.at(-1).end == null) op.segments.at(-1).end = logSize();
   op.segments ||= []; op.segments.push({ start: logSize(), end: null });
   operation = op; saveOperation();
@@ -994,7 +1059,7 @@ ipcMain.handle('operations:resume', async (_e, id) => {
     await new Promise(r => setImmediate(r));
   }
   saveOperation();
-  return { operation: op, messages, notes: [...failed, ...op.agents.filter(a => !a.stopped && a.provider !== 'claude' && !(a.provider === 'codex' && a.sessionId) && !processes.get(a.name)?.args?.includes('--conversation')).map(a => ({ name: a.name, text: `${a.name}: started a fresh ${a.provider} session; prior conversation is shown in chat.` }))] };
+  return { operation: op, messages, notes: [...failed, ...op.agents.filter(a => !a.stopped && a.provider !== 'claude' && !(a.provider === 'codex' && a.sessionId) && !['--conversation', '--session'].some(f => processes.get(a.name)?.args?.includes(f))).map(a => ({ name: a.name, text: `${a.name}: started a fresh ${a.provider} session; prior conversation is shown in chat.` }))] };
 });
 ipcMain.handle('chats:list', (_e, name) => chats(name).filter(c => name === 'boss' || c.id === operation?.agents.find(a => a.name === name)?.chatId).map(c => ({ ...c, active: c.id === operation?.agents.find(a => a.name === name)?.chatId })));
 ipcMain.handle('chats:switch', (_e, name, id) => switchChat(name, id));
@@ -1885,6 +1950,8 @@ function isWorking(name) { const a = processes.get(name); if (!a) return false; 
   // Only after a real turn started (transcript) or a message went in since the last turn ended: the same spinner
   // and a screen without a prompt also show while agy loads and signs in, which read as working on every start.
   if (p === 'antigravity') return activity.antigravityWorking(a, Date.now());
+  // OpenCode (and custom AI): its database says when a turn runs; a message just handed over counts until it shows there.
+  if (a.command === 'opencode' && a.tracksTurns) return !!a.turn || ((a.deliveredAt || 0) > (a.turnEndAt || 0) && Date.now() - a.deliveredAt < 8000);
   return !!a.ready && !a.atPrompt; }
 ipcMain.handle('boss:change', (_e, template, source) => {
   const saved = operation?.agents.find(a => a.name === 'boss');
@@ -1954,6 +2021,7 @@ function keepsChat(name, saved) {
   const p = saved.template.provider, agent = processes.get(name);
   if (demo || (agent && !agent.hadTurn && !agent.turn && !agent.deliveredAt && !agent.args?.includes('--conversation'))) return true;
   if (p === 'claude' || p === 'codex') return !!saved.sessionId;
+  if (p === 'opencode' || p === 'local' || p.startsWith('local:')) return !!saved.sessionId && activity.opencodeHas(saved.sessionId);
   return p === 'antigravity' && !!saved.sessionId && fs.existsSync(activity.agyFile(saved.sessionId, agent?.accountDir));
 }
 ipcMain.handle('agent:keeps-chat', (_e, name) => { const saved = operation?.agents.find(a => a.name === name); return !!saved && keepsChat(name, saved); });

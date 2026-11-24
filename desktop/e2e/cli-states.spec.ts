@@ -109,6 +109,15 @@ test('claude: a lost turn end and its own Bash menu', async () => {
     console.log('lost end noticed after', Math.round((Date.now() - t0) / 1000), 's');
     expect(await working(t.page)).toBe(false);
     await expect(t.page.locator('.trail.is-live')).toHaveCount(0);
+    // What Claude 2.1.331 hands its status line command, shown as the context ring.
+    fs.mkdirSync(path.join(t.ws, '.dispatch', 'status'), { recursive: true });
+    fs.copyFileSync(path.resolve('e2e/fixtures/claude-status.json'), path.join(t.ws, '.dispatch', 'status', 'boss.json'));
+    await expect(t.page.locator('.ctx-ring')).toHaveText('58%', { timeout: 8000 });
+    await t.page.locator('.ctx-ring').click();
+    await expect(t.page.locator('.ctx-panel')).toContainText('578,627');
+    await expect(t.page.locator('.ctx-panel')).toContainText('5-hour limit');
+    await t.page.waitForTimeout(700); await t.page.screenshot({ path: path.join(shots, 'context-claude.png') });
+    await t.page.keyboard.press('Escape');
     await type(t.page, 'CASE-BASH');
     const card = t.page.locator('.question-card');
     await expect(card).toContainText('rm -f /d/zz-probe.txt', { timeout: 20000 });

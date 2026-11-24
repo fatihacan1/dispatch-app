@@ -467,6 +467,19 @@ func main() {
 			}
 		}
 		fatal(sc.Err())
+	case "statusline":
+		// Claude Code's status line command: keeps what Claude reports (context window, limits, cost) for the app to show.
+		data, err := io.ReadAll(io.LimitReader(os.Stdin, 1<<20))
+		agent := envName("DISPATCH_AGENT", "MYARMY_AGENT")
+		if err == nil && len(data) > 0 && agent != "" && !strings.ContainsAny(agent, "/\\.:") {
+			dir := filepath.Join(b.Root, "status")
+			if os.MkdirAll(dir, 0o755) == nil {
+				tmp := filepath.Join(dir, agent+".tmp")
+				if os.WriteFile(tmp, data, 0o644) == nil {
+					_ = os.Rename(tmp, filepath.Join(dir, agent+".json"))
+				}
+			}
+		}
 	case "tasks":
 		// The task board of the current operation (kept by the app in tasks.json): open cards, one per line.
 		fatal(printTasks(filepath.Join(b.Root, "tasks.json"), len(args) > 1 && args[1] == "--all", time.Now(), os.Stdout))
