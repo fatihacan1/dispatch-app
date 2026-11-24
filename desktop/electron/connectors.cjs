@@ -146,7 +146,9 @@ async function discover(url, wantAuth = false) {
   const meta = await getJson(`${a.origin}/.well-known/oauth-authorization-server${p}`) || await getJson(`${a.origin}/.well-known/openid-configuration${p}`) || (p && await getJson(`${a.origin}${p}/.well-known/openid-configuration`)) || (p && await getJson(`${a.origin}/.well-known/oauth-authorization-server`));
   if (!meta?.authorization_endpoint || !meta?.token_endpoint) throw new Error(`${u.host} needs a sign-in Dispatch cannot start (no OAuth metadata). Use a token instead.`);
   if (!meta.registration_endpoint) throw new Error(`${u.host} only signs in apps it approved in advance, so Dispatch cannot connect to it by itself.`);
-  const scope = /scope="([^"]+)"/.exec(www)?.[1] || (prm?.scopes_supported || []).join(' ');
+  let scope = /scope="([^"]+)"/.exec(www)?.[1] || (prm?.scopes_supported || []).join(' ');
+  // Servers that know offline_access give a refresh token only to those who ask for it.
+  if ((meta.scopes_supported || []).includes('offline_access') && !scope.split(' ').includes('offline_access')) scope = `${scope} offline_access`.trim();
   return { auth: 'oauth', meta, scope, resource: prm?.resource || url };
 }
 
@@ -159,7 +161,8 @@ const landing = (ok, text) => `<!doctype html><meta charset="utf-8"><title>Dispa
  */
 function create({ file, vault, open, notify = () => {} }) {
   const read = () => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return { connections: {} }; } };
-  const write = data => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(data, null, 2)); notify(); };
+  // In one piece: a file caught half written read as "no connections".
+  const write = data => { fs.mkdirSync(path.dirname(file), { recursive: true }); const tmp = `${file}.${process.pid}.tmp`; fs.writeFileSync(tmp, JSON.stringify(data, null, 2)); try { fs.renameSync(tmp, file); } catch { fs.writeFileSync(file, JSON.stringify(data, null, 2)); fs.rmSync(tmp, { force: true }); } notify(); };
   const update = (id, patch) => { const d = read(); if (!d.connections[id]) return null; d.connections[id] = { ...d.connections[id], ...patch }; write(d); return d.connections[id]; };
   const secrets = c => { try { return c.secret ? JSON.parse(vault.open(c.secret)) : {}; } catch { return {}; } };
   const seal = obj => vault.seal(JSON.stringify(obj));
@@ -171,44 +174,84 @@ function create({ file, vault, open, notify = () => {} }) {
   const publicView = c => ({ id: c.id, name: c.name, url: c.url || '', auth: c.auth, icon: c.icon || '', custom: !!c.custom, status: c.status, tools: c.tools ?? null, account: c.account || '', addedAt: c.addedAt, error: c.error || '' });
   const list = () => Object.values(read().connections).map(publicView);
 
+  // The server said the sign-in itself is over. Anything else (no network, the laptop just woke up, a server error, a
+  // bot check) passes: the connection stays and is tried again. Before, one such moment dropped it for good.
+  const OVER = ['invalid_grant', 'invalid_client', 'unauthorized_client'];
   async function refresh(id) {
     if (refreshing.has(id)) return refreshing.get(id);
     const run = (async () => {
       const c = read().connections[id]; const s = secrets(c);
-      if (!s.refresh_token) throw new Error('no refresh token');
+      if (!s.refresh_token) throw Object.assign(new Error('The server gave no refresh token, so the sign-in ends with the access token.'), { over: true });
       const body = new URLSearchParams({ grant_type: 'refresh_token', refresh_token: s.refresh_token, client_id: s.client_id });
       if (s.client_secret) body.set('client_secret', s.client_secret);
       if (c.resource) body.set('resource', c.resource);
-      const r = await fetch(s.token_endpoint, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' }, body, signal: timeout() });
+      const r = await fetch(s.token_endpoint, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' }, body, signal: timeout(30000) });
       const t = await r.json().catch(() => ({}));
-      if (!r.ok || !t.access_token) throw new Error(t.error_description || t.error || `refresh failed (${r.status})`);
-      const next = { ...s, access_token: t.access_token, refresh_token: t.refresh_token || s.refresh_token, expires_at: t.expires_in ? Date.now() + t.expires_in * 1000 : 0 };
+      if (!r.ok || !t.access_token) {
+        if (OVER.includes(t.error)) {
+          // Refresh tokens work once. Another Dispatch (second window, dev build) may have used this one a moment ago and
+          // saved its successor: that one is good.
+          for (const wait of [0, 1500]) {
+            if (wait) await new Promise(res => setTimeout(res, wait));
+            const now = secrets(read().connections[id] || {});
+            if (now.access_token && now.refresh_token !== s.refresh_token) return now.access_token;
+          }
+        }
+        throw Object.assign(new Error(t.error_description || t.error || `refresh failed (${r.status})`), { over: OVER.includes(t.error) });
+      }
+      const next = { ...s, access_token: t.access_token, refresh_token: t.refresh_token || s.refresh_token, expires_at: t.expires_in ? Date.now() + t.expires_in * 1000 : 0, refreshed_at: Date.now() };
       update(id, { secret: seal(next), status: 'connected', error: '' });
       return next.access_token;
     })().finally(() => refreshing.delete(id));
     refreshing.set(id, run);
     return run;
   }
-  /** A valid access token, refreshed a minute before it expires. */
-  async function token(id, force = false) {
+  /** A valid access token, refreshed two minutes before it expires. rejected: the token the server just answered 401 to. */
+  async function token(id, rejected = null) {
     const c = read().connections[id]; if (!c) return '';
     const s = secrets(c);
     if (c.auth === 'token') return s.access_token || '';
     if (c.auth !== 'oauth') return '';
-    if (force || (s.expires_at && s.expires_at - 60000 < Date.now())) {
-      try { return await refresh(id); } catch (e) { update(id, { status: 'expired', error: String(e.message || e) }); return ''; }
+    // Several calls fail together when a token ends: the first one renews it, the others take the new one.
+    if (rejected !== null && s.access_token && s.access_token !== rejected) return s.access_token;
+    if (rejected !== null || (s.expires_at && s.expires_at - 120000 < Date.now())) {
+      try { return await refresh(id); }
+      catch (e) {
+        if (e.over) { update(id, { status: 'expired', error: String(e.message || e) }); return ''; }
+        if (rejected === null && s.expires_at > Date.now()) return s.access_token; // still good for now
+        throw e;
+      }
     }
     return s.access_token || '';
+  }
+  // Renewed ahead of time, also while no agent uses it: a refresh token left alone for long is dropped by many servers.
+  const triedAt = new Map();
+  async function keepAlive() {
+    for (const c of Object.values(read().connections)) {
+      try {
+        if (c.auth === 'oauth') {
+          const s = secrets(c); if (!s.refresh_token) continue;
+          const last = s.refreshed_at || c.addedAt || 0, soon = s.expires_at ? s.expires_at - 10 * 60000 < Date.now() : false;
+          if (c.status === 'expired' && Date.now() - (triedAt.get(c.id) || 0) < 60 * 60000) continue;
+          if (soon || c.status === 'expired' || Date.now() - last > 24 * 60 * 60000) {
+            triedAt.set(c.id, Date.now());
+            const was = c.status;
+            await refresh(c.id);
+            if (was !== 'connected') await check(c.id);
+          } else if (c.status === 'error') await check(c.id);
+        } else if (c.status === 'error' && c.auth !== 'local' && !/^https?:\/\/(127\.0\.0\.1|localhost)[:/]/i.test(c.url || '')) await check(c.id);
+      } catch (e) { if (e.over) update(c.id, { status: 'expired', error: String(e.message || e) }); }
+    }
   }
 
   /** Calls initialize + tools/list through the upstream to confirm the connection and count tools. */
   async function check(id) {
     const c = read().connections[id]; if (!c || c.auth === 'local') return c;
-    const call = async (msg, session, retry = true) => {
-      const t = await token(id);
+    const call = async (msg, session, retry = true, rejected = null) => {
+      const t = await token(id, rejected);
       const headers = { 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2025-06-18', ...(t ? { authorization: `Bearer ${t}` } : {}), ...(session ? { 'mcp-session-id': session } : {}) };
       const r = await fetch(c.url, { method: 'POST', headers, body: JSON.stringify(msg), signal: timeout(20000) });
-      if (r.status === 401 && retry && c.auth === 'oauth') { await token(id, true); return call(msg, session, false); }
+      if (r.status === 401 && retry && c.auth === 'oauth') { try { await r.body?.cancel(); } catch {} return call(msg, session, false, t); }
       return r;
     };
     try {
@@ -256,7 +299,7 @@ function create({ file, vault, open, notify = () => {} }) {
       const r = await fetch(meta.token_endpoint, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' }, body, signal: timeout() });
       const t = await r.json().catch(() => ({}));
       if (!r.ok || !t.access_token) throw new Error(`Sign-in failed: ${t.error_description || t.error || r.status}`);
-      return { client_id: client.client_id, client_secret: client.client_secret || '', token_endpoint: meta.token_endpoint, access_token: t.access_token, refresh_token: t.refresh_token || '', expires_at: t.expires_in ? Date.now() + t.expires_in * 1000 : 0 };
+      return { client_id: client.client_id, client_secret: client.client_secret || '', token_endpoint: meta.token_endpoint, access_token: t.access_token, refresh_token: t.refresh_token || '', expires_at: t.expires_in ? Date.now() + t.expires_in * 1000 : 0, refreshed_at: Date.now() };
     } finally { srv.close(); }
   }
 
@@ -310,15 +353,16 @@ function create({ file, vault, open, notify = () => {} }) {
     const chunks = []; for await (const ch of req) chunks.push(ch);
     const body = chunks.length ? Buffer.concat(chunks) : undefined;
     const ac = new AbortController(); res.on('close', () => ac.abort());
-    const send = async force => {
-      const t = await token(c.id, force);
+    let used = '';
+    const send = async rejected => {
+      const t = used = await token(c.id, rejected);
       const headers = {}; for (const h of PASS) if (req.headers[h]) headers[h] = req.headers[h];
       if (t) headers.authorization = `Bearer ${t}`;
       return fetch(c.url, { method: req.method, headers, body: ['GET', 'HEAD'].includes(req.method) ? undefined : body, signal: ac.signal });
     };
     try {
-      let r = await send(false);
-      if (r.status === 401 && c.auth === 'oauth') { try { await r.body?.cancel(); } catch {} r = await send(true); }
+      let r = await send(null);
+      if (r.status === 401 && c.auth === 'oauth') { try { await r.body?.cancel(); } catch {} r = await send(used); }
       if (r.status === 401) {
         try { await r.body?.cancel(); } catch {}
         update(c.id, { status: 'expired', error: 'Sign-in expired' });
@@ -337,8 +381,22 @@ function create({ file, vault, open, notify = () => {} }) {
   });
   const ready = new Promise(res => server.listen(0, '127.0.0.1', () => { proxy.url = `http://127.0.0.1:${server.address().port}/${proxy.token}`; res(); }));
   server.unref?.();
+  const timers = [setTimeout(() => void keepAlive(), 15000), setInterval(() => void keepAlive(), 5 * 60000)]; timers.forEach(t => t.unref?.());
 
-  return { catalog: () => ({ groups: GROUPS, items: CATALOG.map(({ command: _c, args: _a, ...x }) => x) }), list, pending: () => [...pending.keys()], connect, cancel, remove, check, forAgents, ready, token, close: () => server.close() };
+  return { catalog: () => ({ groups: GROUPS, items: CATALOG.map(({ command: _c, args: _a, ...x }) => x) }), list, pending: () => [...pending.keys()], connect, cancel, remove, check, forAgents, ready, token, keepAlive, close: () => { clearTimeout(timers[0]); clearInterval(timers[1]); server.close(); } };
 }
 
-module.exports = { CATALOG, GROUPS, create, discover, readRpc, slug };
+// One hub for the whole app. Every project tab had its own: two of them renewed the same one-time refresh token at once,
+// the server refused the second (some end the whole sign-in then) and the connection dropped by itself.
+const hubs = new Map();
+function shared({ file, vault, open, notify = () => {} }) {
+  const key = path.resolve(file).toLowerCase();
+  let h = hubs.get(key);
+  if (!h) { const listeners = new Set(); h = { listeners, hub: create({ file, vault, open, notify: () => { for (const f of listeners) try { f(); } catch {} } }) }; hubs.set(key, h); }
+  h.listeners.add(notify);
+  return { ...h.hub, close: () => h.listeners.delete(notify) };
+}
+/** After sleep: tokens may have run out meanwhile. */
+const wake = () => { for (const { hub } of hubs.values()) void hub.keepAlive(); };
+
+module.exports = { CATALOG, GROUPS, create, shared, wake, discover, readRpc, slug };

@@ -1658,7 +1658,7 @@ const serverStore = () => serversLib.create(path.join(globalDir(), 'servers.json
 const vpnStore = () => vpnsLib.create(path.join(globalDir(), 'vpns.json'), serverVault, { dataDir: globalDir() });
 const serverPassword = id => { const st = serverStore(), s = st.get(id); return s ? st.password(s) : ''; };
 // ── MCP connectors (electron/connectors.cjs): browser sign-in, tokens sealed, served to agents on a loopback proxy ──
-const connectorHub = require('./connectors.cjs').create({ file: path.join(globalDir(), 'connectors.json'), vault: serverVault, open: url => shell.openExternal(url), notify: () => notify('connectors-changed', null) });
+const connectorHub = require('./connectors.cjs').shared({ file: path.join(globalDir(), 'connectors.json'), vault: serverVault, open: url => shell.openExternal(url), notify: () => notify('connectors-changed', null) });
 const connectorError = e => { throw new Error(String(e?.message || e)); };
 ipcMain.handle('connectors:catalog', () => connectorHub.catalog());
 ipcMain.handle('connectors:list', () => ({ connections: connectorHub.list(), pending: connectorHub.pending() }));
@@ -2144,6 +2144,7 @@ function dispose() {
   for (const s of shells.values()) try { s.terminal.kill(); } catch {}
   for (const i of intervals) clearInterval(i);
   try { serversBridge.server?.close(); } catch {}
+  try { connectorHub.close(); } catch {}
 }
 // What the tab strip shows: agents running, someone needs the user, someone is working.
 function status() {
