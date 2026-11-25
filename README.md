@@ -30,7 +30,7 @@
 
 Installers will be published under [Releases](https://github.com/fatihacan1/dispatch-app/releases), and Dispatch will update itself from there. Until the first release, build it from source (below).
 
-You also need at least one agent CLI, for example [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [Codex](https://github.com/openai/codex). The Providers page shows what is installed and can install, update and sign in to them for you.
+You also need at least one agent CLI, for example [Claude Code](https://code.claude.com/docs/en/overview) or [Codex](https://github.com/openai/codex). The Providers page shows what is installed and can install, update and sign in to them for you.
 
 Windows is the main platform today. macOS and Linux builds are not tested yet; help is welcome.
 
