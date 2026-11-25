@@ -97,7 +97,11 @@ const CATALOG = Object.freeze([
   { id: 'hootsuite', name: 'Hootsuite', group: 'business', desc: 'Social posts, streams and engagement in Hootsuite.', url: 'https://mcp.hootsuite.com/mcp', auth: 'oauth' },
   { id: 'klaviyo', name: 'Klaviyo', domain: 'klaviyo.com', group: 'business', desc: 'Campaigns, flows, profiles and segments in Klaviyo.', url: 'https://mcp.klaviyo.com/mcp', auth: 'oauth' },
   { id: 'kit', name: 'Kit', domain: 'kit.com', group: 'business', desc: 'Subscribers, tags, sequences and broadcasts in Kit (ConvertKit).', url: 'https://app.kit.com/mcp', auth: 'oauth' },
-  { id: 'producthunt', name: 'Product Hunt', domain: 'producthunt.com', group: 'business', desc: 'Discover launches, prepare your own launch and read its results.', url: 'https://mcp.producthunt.com/mcp', auth: 'oauth' },
+  { id: 'producthunt', name: 'Product Hunt', domain: 'producthunt.com', group: 'launch', desc: 'Discover launches, prepare your own launch and read its results.', url: 'https://mcp.producthunt.com/mcp', auth: 'oauth' },
+  { id: 'uneed', name: 'Uneed', domain: 'uneed.best', group: 'launch', desc: 'Curated tool directory: products, launches, reviews, deals and alternatives.', url: 'https://mcp.uneed.best/mcp', auth: 'none' },
+  { id: 'microlaunch', name: 'MicroLaunch', domain: 'microlaunch.net', group: 'launch', desc: 'Indie maker launches: top launches, categories, products and deals.', url: 'https://mcp.microlaunch.net/mcp', auth: 'none' },
+  { id: 'taaft', name: "There's An AI For That", domain: 'theresanaiforthat.com', group: 'launch', desc: 'AI tools, models, tasks, papers and news from the AI directory.', url: 'https://theresanaiforthat.com/mcp/', auth: 'none' },
+  { id: 'dispatch-social', name: 'Dispatch Social', group: 'launch', desc: 'Your own social accounts and launch directories through the local Social tool. Every post waits for your approval.', url: 'http://127.0.0.1:3220/mcp', auth: 'none', hint: 'Dispatch Social runs on this computer: start it first (github.com/fatihacan1/dispatch-social, npm run social, port 3220), then try again.' },
   { id: 'mailchimp', name: 'Mailchimp', group: 'business', desc: 'Audiences, campaigns and templates in Mailchimp.', url: 'https://mcp.mailchimp.com/mcp', auth: 'oauth' },
   { id: 'alpaca', name: 'Alpaca', domain: 'alpaca.markets', group: 'business', desc: 'Stock and crypto market data and assets.', url: 'https://mcp.alpaca.markets/mcp', auth: 'none' },
   { id: 'coingecko', name: 'CoinGecko', domain: 'coingecko.com', group: 'business', desc: 'Crypto prices, market caps, coins and trends.', url: 'https://mcp.api.coingecko.com/mcp', auth: 'none' },
@@ -114,6 +118,7 @@ const GROUPS = Object.freeze([
   { id: 'media', name: 'Media and creative', desc: 'Video, 3D, images, audio and publishing.' },
   { id: 'life', name: 'Lifestyle and everyday', desc: 'Travel, fitness, maps and weather.' },
   { id: 'business', name: 'Payments, marketing and finance', desc: 'Commerce, social, banking and workflows across apps.' },
+  { id: 'launch', name: 'Product launch', desc: 'Launch directories and maker communities: research, prepare and follow a launch.' },
 ]);
 
 const slug = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 40) || 'mcp';
