@@ -102,10 +102,14 @@ function menuKind(menu) {
 function agyState(lines) {
   if (parseMenu(lines)) return 'menu';
   const l = lines.map(x => x.trimEnd());
-  let b = l.length - 1; while (b >= 0 && !RULE.test(l[b])) b--;
-  let a = b - 1; while (a >= 0 && !RULE.test(l[a])) a--;
+  const ruleAbove = i => { let r = i - 1; while (r >= 0 && !RULE.test(l[r])) r--; return r; };
+  let b = ruleAbove(l.length), a = ruleAbove(b);
+  const foot = b;
+  // With commands running in the background agy (1.5.17) lists them under the box, closed by a rule of its own:
+  // a server left running made an agent read as still loading, so it showed as idle however hard it worked.
+  if (a >= 0 && !/^\s*>/.test(l[a + 1] || '') && b - a < 14) { b = a; a = ruleAbove(b); }
   if (a < 0 || !/^\s*>/.test(l[a + 1] || '')) return 'loading';
-  const footer = l.slice(b + 1).join(' ').toLowerCase();
+  const footer = l.slice(foot + 1).join(' ').toLowerCase();
   if (/esc to (?:cancel|interrupt)/.test(footer)) return 'busy';
   if (/\? for shortcuts/.test(footer)) return 'idle';
   if (l.slice(Math.max(0, a - 3), a).some(x => /^\s*[⠁-⣿]\s/.test(x))) return 'busy';

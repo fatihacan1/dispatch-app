@@ -38,6 +38,19 @@ function mediaInfo(file, roots) {
   } catch { return null; }
 }
 
+// The Files panel shows more types than a chat message, up to 2 GB (streamed), only from the open project folder.
+const MORE_TYPES = { '.bmp': 'image/bmp', '.ico': 'image/x-icon', '.avif': 'image/avif', '.ogv': 'video/ogg', '.mkv': 'video/x-matroska', '.opus': 'audio/ogg', '.oga': 'audio/ogg', '.aac': 'audio/aac' };
+function workspaceMedia(file, workspace) {
+  if (typeof file !== 'string' || !file.trim() || !workspace) return null;
+  const full = real(path.resolve(file)); if (!full || !under(workspace, full)) return null;
+  const mime = mediaMime(full) || MORE_TYPES[path.extname(full).toLowerCase()]; if (!mime) return null;
+  try {
+    const st = fs.statSync(full);
+    if (!st.isFile() || st.size > 2 * 1024 * 1024 * 1024) return null;
+    return { path: full, kind: mime.split('/')[0], mime, size: st.size, mtime: st.mtimeMs };
+  } catch { return null; }
+}
+
 /** The resolved real path when `file` is an allowed media file under one of `roots`, else null. */
 function allowedMedia(file, roots) {
   return mediaInfo(file, roots)?.path || null;
@@ -74,4 +87,4 @@ function parseRange(header, size) {
   return { start, end };
 }
 
-module.exports = { allowedImage, allowedMedia, imageData, mediaInfo, mediaKind, mediaMime, parseRange, MAX, MAX_MEDIA };
+module.exports = { allowedImage, allowedMedia, imageData, mediaInfo, mediaKind, mediaMime, workspaceMedia, parseRange, MAX, MAX_MEDIA };

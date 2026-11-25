@@ -4,7 +4,7 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 // events arrive over Server-Sent Events (see electron/remote.cjs). Otherwise everything is plain IPC.
 const target = ipcRenderer.sendSync('remote:target');
 const LOCAL = /^(remote:|overlay:|tray:)/;
-const LOCAL_EVENTS = new Set(['tabs', 'tab-shown', 'window-fullscreen', 'voice-toggle', 'voice-result', 'voice-live', 'tray-nav', 'pack-open', 'overlay-start', 'overlay-stop', 'win-moving']);
+const LOCAL_EVENTS = new Set(['tabs', 'tab-shown', 'window-fullscreen', 'voice-toggle', 'voice-result', 'voice-live', 'tray-nav', 'pack-open', 'overlay-start', 'overlay-stop', 'win-moving', 'zoom']);
 const clientId = crypto.randomUUID();
 const listeners = new Map(), stateFns = new Set();
 let state = target ? 'connecting' : 'local', error = '', base = '', events = null, dialogFn = null, sendChain = Promise.resolve();
@@ -87,6 +87,7 @@ contextBridge.exposeInMainWorld('army', {
   update: { status: () => invoke('update:status'), check: () => invoke('update:check'), install: () => invoke('update:install') },
   telegram: { status: () => invoke('telegram:status'), setToken: t => invoke('telegram:set-token', t), link: () => invoke('telegram:link'), unlink: () => invoke('telegram:unlink'), disconnect: () => invoke('telegram:disconnect'), test: () => invoke('telegram:test'), botfather: () => invoke('telegram:botfather'), clipboardToken: () => invoke('telegram:clipboard-token'), owner: () => invoke('telegram:owner'), setOwner: name => invoke('telegram:set-owner', name) },
   voice: { status: () => invoke('voice:status'), warm: () => invoke('voice:warm'), transcribe: wav => invoke('voice:transcribe', wav), overlayDone: text => send('overlay:done', text), overlayLive: text => send('overlay:live', text), overlayClose: () => send('overlay:close'), overlayReady: () => send('overlay:ready'), capture: on => ipcRenderer.invoke('voice:capture', !!on) },
+  zoom: { get: () => ipcRenderer.invoke('zoom:get'), step: dir => ipcRenderer.invoke('zoom:step', dir) },
   ui: { get: () => invoke('ui:get'), set: patch => invoke('ui:set', patch) },
   devMock: () => invoke('dev:mock'), devUnmock: () => invoke('dev:unmock'),
   mcpStatus: () => invoke('mcp:status'),
@@ -108,7 +109,7 @@ contextBridge.exposeInMainWorld('army', {
   setModel: (name, model) => invoke('agent:set-model', name, model),
   gitChanges: () => invoke('git:changes'),
   shells: { choices: () => invoke('terminal:shells'), list: () => invoke('shell:list'), open: cwd => invoke('shell:open', cwd), close: name => invoke('shell:close', name), rename: (name, title) => invoke('shell:rename', name, title) },
-  files: { list: rel => invoke('files:list', rel), read: rel => invoke('files:read', rel), write: (rel, text) => invoke('files:write', rel, text), import: (dir, items) => invoke('files:import', dir, items), head: rel => invoke('files:head', rel), lint: (rel, text) => invoke('files:lint', rel, text), lsp: { open: (lang, rel, text) => invoke('lsp:open', lang, rel, text), change: (lang, rel, version, text) => invoke('lsp:change', lang, rel, version, text), close: (lang, rel) => invoke('lsp:close', lang, rel), request: (lang, method, rel, position) => invoke('lsp:request', lang, method, rel, position) }, all: () => invoke('files:all'), search: (q, opts) => invoke('files:search', q, opts), watch: on => invoke('files:watch', on), reveal: rel => invoke('files:reveal', rel), context: (rel, isDir) => invoke('files:context', rel, isDir), act: (action, rels) => invoke('files:act', action, rels) },
+  files: { list: rel => invoke('files:list', rel), read: rel => invoke('files:read', rel), media: rel => invoke('files:media', rel), write: (rel, text) => invoke('files:write', rel, text), import: (dir, items) => invoke('files:import', dir, items), head: rel => invoke('files:head', rel), lint: (rel, text) => invoke('files:lint', rel, text), lsp: { open: (lang, rel, text) => invoke('lsp:open', lang, rel, text), change: (lang, rel, version, text) => invoke('lsp:change', lang, rel, version, text), close: (lang, rel) => invoke('lsp:close', lang, rel), request: (lang, method, rel, position) => invoke('lsp:request', lang, method, rel, position) }, all: () => invoke('files:all'), search: (q, opts) => invoke('files:search', q, opts), watch: on => invoke('files:watch', on), reveal: rel => invoke('files:reveal', rel), context: (rel, isDir) => invoke('files:context', rel, isDir), act: (action, rels) => invoke('files:act', action, rels) },
   setEffort: (name, effort) => invoke('agent:set-effort', name, effort),
   context: { list: () => invoke('context:list'), compact: name => invoke('context:compact', name) },
   interrupt: name => invoke('agent:interrupt', name), keepsChat: name => invoke('agent:keeps-chat', name),

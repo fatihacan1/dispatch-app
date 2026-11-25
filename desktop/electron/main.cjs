@@ -89,8 +89,31 @@ function setWindowTheme(id) {
   const bg = ok ? '#00000000' : light ? '#f4f4f2' : '#0d0e10';
   try { win.setBackgroundColor(bg); } catch {}
   for (const t of tabs) try { t.view.setBackgroundColor(bg); } catch {}
-  if (process.platform !== 'darwin') try { win.setTitleBarOverlay({ color: ok ? '#00000000' : light ? '#ffffff' : '#131417', symbolColor: light ? '#55585f' : '#a3a6ad', height: 43 }); } catch {}
+  if (process.platform !== 'darwin') try { win.setTitleBarOverlay({ color: ok ? '#00000000' : light ? '#ffffff' : '#131417', symbolColor: light ? '#55585f' : '#a3a6ad', height: barHeight() }); } catch {}
   broadcast('material', ok);
+}
+// ── Zoom: the whole window, every tab, like VS Code. Kept in ui.json. The title bar buttons follow the bar's height. ──
+const ZOOMS = [0.7, 0.8, 0.9, 1, 1.1, 1.2, 1.3, 1.5, 1.75, 2];
+let zoom = null;
+const zoomNow = () => zoom ??= ZOOMS.includes(readUi().zoom) ? readUi().zoom : 1;
+const barHeight = () => Math.round(44 * zoomNow()) - 1;
+const placeButtons = () => { if (process.platform === 'darwin') try { win.setWindowButtonPosition({ x: 14, y: Math.max(4, Math.round((44 * zoomNow() - 12) / 2)) }); } catch {} };
+function setZoom(next) {
+  if (next === zoomNow()) return next;
+  zoom = next;
+  try { fs.mkdirSync(globalDir(), { recursive: true }); fs.writeFileSync(path.join(globalDir(), 'ui.json'), JSON.stringify({ ...readUi(), zoom }, null, 2)); } catch {}
+  for (const t of tabs) try { t.view.webContents.setZoomFactor(zoom); } catch {}
+  if (win && !win.isDestroyed()) { if (process.platform === 'darwin') placeButtons(); else try { win.setTitleBarOverlay({ height: barHeight() }); } catch {} }
+  broadcast('zoom', zoom);
+  return zoom;
+}
+const stepZoom = dir => setZoom(!dir ? 1 : ZOOMS[Math.max(0, Math.min(ZOOMS.length - 1, ZOOMS.indexOf(zoomNow()) + (dir < 0 ? -1 : 1)))]);
+// Read by character, so it follows the keyboard layout. On Turkish keyboards + needs Shift and 4, so the * key next to - zooms in too.
+function zoomKey(input) {
+  if (input.type !== 'keyDown' || input.alt || !(process.platform === 'darwin' ? input.meta && !input.control : input.control && !input.meta)) return null;
+  if (input.key === '+' || input.key === '=' || (input.key === '*' && input.code === 'Minus')) return 1;
+  if (input.key === '-' || input.key === '_') return -1;
+  return input.key === '0' && !input.shift ? 0 : null;
 }
 function updateTitle() { if (win && !win.isDestroyed() && active) win.setTitle(`${tabName(active)} · Dispatch`); }
 function layout() {
@@ -115,12 +138,13 @@ function windowMoves() {
 }
 function rendererUrl(view, hash) {
   if (process.env.VITE_DEV_SERVER_URL) return view.webContents.loadURL(process.env.VITE_DEV_SERVER_URL + (hash ? '#' + hash : ''));
-  return view.webContents.loadFile(path.join(__dirname, '../dist/index.html'), hash ? { hash } : undefined);
+  return view.webContents.loadFile(path.join(__dirname, '../dist/index.html'), hash ? { hash, query: { window: hash } } : undefined); // Own query: zoom is kept per address, the small voice window must not grow with the tabs.
 }
 // Tabs restored at start load their page one after another, not all at once (each is a full app): the window is usable sooner.
 function loadTab(tab) { if (tab.loaded) return; tab.loaded = true; void rendererUrl(tab.view); }
 function createTab(folder, { defer = false } = {}) {
-  const view = new WebContentsView({ webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } });
+  const view = new WebContentsView({ webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, backgroundThrottling: false, zoomFactor: zoomNow() } });
+  view.webContents.on('before-input-event', (e, input) => { const dir = zoomKey(input); if (dir !== null) { e.preventDefault(); stepZoom(dir); } });
   view.setBackgroundColor(materialOn ? '#00000000' : readUi().theme === 'light' ? '#f4f4f2' : '#0d0e10');
   const tab = { id: ++tabSeq, view };
   const host = {
@@ -141,7 +165,7 @@ function createTab(folder, { defer = false } = {}) {
   tab.engine.init(folder);
   tabs.push(tab);
   win.contentView.addChildView(view);
-  view.webContents.on('did-finish-load', () => { if (win && !win.isDestroyed()) sendTo(tab, 'window-fullscreen', win.isFullScreen()); });
+  view.webContents.on('did-finish-load', () => { try { view.webContents.setZoomFactor(zoomNow()); } catch {} if (win && !win.isDestroyed()) sendTo(tab, 'window-fullscreen', win.isFullScreen()); });
   view.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:\/\//.test(url)) void shell.openExternal(url); return { action: 'deny' }; });
   // The preload asks remote:target synchronously on load: attach before the first page starts loading.
   if (tabs.length === 1) remote.attach({ webContents: view.webContents }, globalDir(), require('electron'));
@@ -194,6 +218,8 @@ function chatFolder() {
   }
 }
 ipcMain.handle('tabs:open-blank', e => { const caller = tabFor(e); if (!caller?.engine.needsFolder() && tabs.length >= MAX_TABS) throw new Error(`Up to ${MAX_TABS} projects can be open. Close a tab first.`); return openTab(chatFolder(), caller); });
+ipcMain.handle('zoom:get', () => zoomNow());
+ipcMain.handle('zoom:step', (_e, dir) => stepZoom(Number(dir) || 0));
 ipcMain.handle('tabs:list', () => tabsState());
 ipcMain.handle('tabs:open', (e, folder) => openTab(folder ? String(folder) : '', tabFor(e)));
 ipcMain.handle('tabs:switch', (_e, id) => { activate(tabs.find(t => t.id === id)); return true; });
@@ -408,13 +434,15 @@ pendingPack = packFromArgv(process.argv);
 app.whenReady().then(() => {
   // Stream local chat video/audio over dispatch-media:// with byte-range support and strict root/type checks.
   protocol.handle('dispatch-media', request => {
-    let filePath = '';
+    let filePath = '', from = '';
     try {
-      const u = new URL(request.url);
-      if (u.hostname === 'local') filePath = u.searchParams.get('path') || '';
+      const u = new URL(request.url); from = u.hostname;
+      if (from === 'local' || from === 'workspace') filePath = u.searchParams.get('path') || '';
     } catch {}
-    const roots = tabs.flatMap(t => { try { return t.engine?.chatMediaRoots?.() || []; } catch { return []; } });
-    const info = chatImage.mediaInfo(filePath, roots);
+    let info = null;
+    // local: media in a chat (project .dispatch and ComfyUI folders). workspace: a file opened in the Files panel of an open project.
+    if (from === 'workspace') for (const t of tabs) { if (!info && !t.engine.needsFolder()) info = chatImage.workspaceMedia(filePath, t.engine.workspace()); }
+    else info = chatImage.mediaInfo(filePath, tabs.flatMap(t => { try { return t.engine?.chatMediaRoots?.() || []; } catch { return []; } }));
     if (!info) return new Response('Not found', { status: 404 });
     const rangeHeader = request.headers.get('range');
     if (rangeHeader) {
@@ -453,7 +481,7 @@ app.whenReady().then(() => {
   const hidden = !!process.env.DISPATCH_TEST_HIDDEN;
   win = new BaseWindow({ show: !hidden, focusable: !hidden, title: 'Dispatch', icon: iconPath(), width: 1280, height: 800, minWidth: 800, minHeight: 560, backgroundColor: '#0d0e10', titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden', ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 14, y: 16 } } : { titleBarOverlay: { color: '#131417', symbolColor: '#a3a6ad', height: 43 } }) });
   win.on('resize', layout); win.on('move', windowMoves);
-  setWindowTheme(readUi().theme);
+  setWindowTheme(readUi().theme); placeButtons();
   win.on('enter-full-screen', () => broadcast('window-fullscreen', true));
   win.on('leave-full-screen', () => broadcast('window-fullscreen', false));
   win.on('focus', () => updater.focus());

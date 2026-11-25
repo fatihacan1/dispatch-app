@@ -12,6 +12,8 @@ const TR: Record<string, string> = {
   // Settings
   "General": "Genel", "Workspace": "Çalışma alanı", "Change": "Değiştir", "Language": "Dil", "Keyboard shortcuts": "Klavye kısayolları",
   "Interface language. Chats and agent replies are not translated.": "Arayüz dili. Sohbetler ve ajan yanıtları çevrilmez.",
+  "Zoom": "Yakınlaştırma", "Zoom in": "Yakınlaştır", "Zoom out": "Uzaklaştır", "Zoom level": "Yakınlaştırma düzeyi", "Zoom in, out, back to 100%": "Yakınlaştır, uzaklaştır, %100'e dön",
+  "Size of everything in the window: chat, menus, editor and terminals. Ctrl + and Ctrl - anywhere, Ctrl 0 for 100%.": "Penceredeki her şeyin boyutu: sohbet, menüler, editör ve terminaller. Her yerde Ctrl + ve Ctrl -, %100 için Ctrl 0.",
   "Voice": "Ses", "Other computers": "Diğer bilgisayarlar", "Connect to a computer": "Bir bilgisayara bağlan",
   // Common actions
   "Save": "Kaydet", "Cancel": "İptal", "Close": "Kapat", "Remove": "Kaldır", "Delete": "Sil", "Edit": "Düzenle", "Add": "Ekle",

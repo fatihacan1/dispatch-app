@@ -23,6 +23,8 @@ const SERVERS = { go: { command: goplsPath, args: ['serve'] } };
 
 function create(notify) {
   const servers = new Map(); // `${lang}|${workspace}` -> Promise<server>
+  const docs = new Map();    // same key -> Map(rel -> { version, text }): a restarted server gets its open files back
+  const docsOf = key => docs.get(key) || docs.set(key, new Map()).get(key);
   function start(lang, workspace) {
     const key = `${lang}|${workspace}`; if (servers.has(key)) return servers.get(key);
     const spec = SERVERS[lang]; if (!spec) return Promise.reject(new Error(`No language server for ${lang}.`));
@@ -46,21 +48,24 @@ function create(notify) {
         }
       });
       const request = (method, params) => new Promise((resolve, reject) => { const id = next++; pending.set(id, { resolve, reject }); send({ id, method, params }); setTimeout(() => { if (pending.delete(id)) reject(new Error('timeout')); }, 20000); });
+      child.on('error', () => {}); child.stdin.on('error', () => {});
       child.on('exit', () => { servers.delete(key); for (const { reject } of pending.values()) reject(new Error('Language server stopped.')); });
       await request('initialize', { processId: process.pid, rootUri: pathToFileURL(workspace).href, workspaceFolders: [{ uri: pathToFileURL(workspace).href, name: path.basename(workspace) }],
         capabilities: { textDocument: { completion: { completionItem: { snippetSupport: true, documentationFormat: ['markdown', 'plaintext'] } }, hover: { contentFormat: ['markdown', 'plaintext'] }, signatureHelp: {}, publishDiagnostics: {}, synchronization: { didSave: true } }, workspace: { configuration: true } } });
       send({ method: 'initialized', params: {} });
-      return { child, request, notify: (method, params) => send({ method, params }), uri: rel => pathToFileURL(path.join(workspace, rel)).href };
+      const uri = rel => pathToFileURL(path.join(workspace, rel)).href;
+      for (const [rel, d] of docsOf(key)) send({ method: 'textDocument/didOpen', params: { textDocument: { uri: uri(rel), languageId: lang, version: d.version, text: d.text } } });
+      return { child, request, notify: (method, params) => send({ method, params }), uri };
     })();
     servers.set(key, p); p.catch(() => servers.delete(key));
     return p;
   }
   return {
-    async open(lang, workspace, rel, text) { const s = await start(lang, workspace); s.notify('textDocument/didOpen', { textDocument: { uri: s.uri(rel), languageId: lang, version: 1, text } }); return true; },
-    async change(lang, workspace, rel, version, text) { const s = await start(lang, workspace); s.notify('textDocument/didChange', { textDocument: { uri: s.uri(rel), version }, contentChanges: [{ text }] }); return true; },
-    async close(lang, workspace, rel) { const s = await start(lang, workspace); s.notify('textDocument/didClose', { textDocument: { uri: s.uri(rel) } }); return true; },
+    async open(lang, workspace, rel, text) { const s = await start(lang, workspace); docsOf(`${lang}|${workspace}`).set(rel, { version: 1, text }); s.notify('textDocument/didOpen', { textDocument: { uri: s.uri(rel), languageId: lang, version: 1, text } }); return true; },
+    async change(lang, workspace, rel, version, text) { const s = await start(lang, workspace); docsOf(`${lang}|${workspace}`).set(rel, { version, text }); s.notify('textDocument/didChange', { textDocument: { uri: s.uri(rel), version }, contentChanges: [{ text }] }); return true; },
+    async close(lang, workspace, rel) { const key = `${lang}|${workspace}`; docsOf(key).delete(rel); if (!servers.has(key)) return true; const s = await start(lang, workspace); s.notify('textDocument/didClose', { textDocument: { uri: s.uri(rel) } }); return true; },
     async request(lang, workspace, method, rel, position) { const s = await start(lang, workspace); return s.request(method, { textDocument: { uri: s.uri(rel) }, position }); },
-    stopAll() { for (const p of servers.values()) p.then(s => s.child.kill()).catch(() => {}); servers.clear(); },
+    stopAll() { for (const p of servers.values()) p.then(s => s.child.kill()).catch(() => {}); servers.clear(); docs.clear(); },
   };
 }
 

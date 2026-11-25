@@ -1881,6 +1881,13 @@ ipcMain.handle('git:changes', () => workspace ? gitLib.changes(workspace) : []);
 const filesLib = require('./files.cjs');
 ipcMain.handle('files:list', (_e, rel) => filesLib.list(workspace, rel));
 ipcMain.handle('files:read', (_e, rel) => filesLib.read(workspace, rel));
+// Image, video or audio opened in the Files panel: streamed here, sent as data to another computer (up to 20 MB).
+ipcMain.handle('files:media', (e, rel) => {
+  const info = chatImage.workspaceMedia(filesLib.resolve(workspace, String(rel)), workspace); if (!info) return null;
+  const out = { kind: info.kind, size: info.size };
+  if (!e?.remote) return { ...out, url: `dispatch-media://workspace?path=${encodeURIComponent(info.path)}&v=${Math.round(info.mtime)}` };
+  return info.size > 20 * 1024 * 1024 ? null : { ...out, url: `data:${info.mime};base64,${fs.readFileSync(info.path).toString('base64')}` };
+});
 ipcMain.handle('files:write', (_e, rel, text) => filesLib.write(workspace, rel, text));
 // Files dropped on the tree (like VS Code): copied into the folder under the drop, existing names get " copy".
 ipcMain.handle('files:import', (_e, dir, items) => {

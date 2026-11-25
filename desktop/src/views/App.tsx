@@ -256,7 +256,9 @@ export function App() {
   const [messages, setMessages] = useState<Timed[]>([]);
   const [text, setText] = useState("");
   const links = findLinks(text);
-  const mirror = useRef<HTMLDivElement>(null);
+  const composerBox = useRef<HTMLDivElement>(null);
+  // Text put at the end by code (a pasted path, dictation) is brought into view too; typing scrolls by itself.
+  useLayoutEffect(() => { const t = textArea.current, b = composerBox.current; if (t && b && t.selectionEnd === t.value.length) b.scrollTop = b.scrollHeight; }, [text]);
   const [attachments, setAttachments] = useState<File[]>([]);
   const [draggingFiles, setDraggingFiles] = useState(false);
   const [sending, setSending] = useState(false);
@@ -456,6 +458,10 @@ export function App() {
   // Settings > Appearance (stored in ~/.dispatch/ui.json): menu icons and Files panel behaviour.
   const [prefs, setPrefs] = useState<{ navIcons?: "mono" | "color"; ideEditorOnFile?: boolean; ideTreeToggle?: boolean }>({});
   const setPref = (patch: Partial<typeof prefs>) => { setPrefs(p => ({ ...p, ...patch })); void window.army.ui?.set(patch).catch(() => {}); };
+  // Zoom of the whole window (Ctrl + / Ctrl - / Ctrl 0, like VS Code). The main process applies it to every tab.
+  const [zoom, setZoom] = useState(1);
+  useEffect(() => { void window.army.zoom?.get().then(setZoom).catch(() => {}); return window.army.on("zoom", (z: number) => setZoom(z)); }, []);
+  useEffect(() => { document.documentElement.style.setProperty("--zoom", String(zoom)); }, [zoom]);
   const [ideCompact, setIdeCompact] = useState(false);
   useEffect(() => {
     const uiApi = window.army.ui;
@@ -1047,6 +1053,8 @@ export function App() {
               <section className="settings-group">
                 <h2 className="label">Appearance</h2>
                 <ThemeSettings />
+                {window.army.zoom && <div className="setting-row"><div><b>Zoom</b><p>Size of everything in the window: chat, menus, editor and terminals. Ctrl + and Ctrl - anywhere, Ctrl 0 for 100%.</p></div>
+                  <div className="zoom-set"><Button className="secondary" aria-label="Zoom out" onClick={() => void window.army.zoom!.step(-1)}>-</Button><output aria-label="Zoom level">{Math.round(zoom * 100)}%</output><Button className="secondary" aria-label="Zoom in" onClick={() => void window.army.zoom!.step(1)}>+</Button><Button className="ghost" disabled={zoom === 1} onClick={() => void window.army.zoom!.step(0)}>Reset</Button></div></div>}
                 <div className="setting-row"><div><b>Menu icons</b><p>{prefs.navIcons === "color" ? <>Colored icons from Fluent UI System Icons by Microsoft (MIT license, <a href="https://github.com/microsoft/fluentui-system-icons" target="_blank" rel="noreferrer">github.com/microsoft/fluentui-system-icons</a>).</> : "Icons in the left menu. Colored icons are an open-source set by Microsoft, credited here once you pick them."}</p></div>
                   <select aria-label="Menu icons" value={prefs.navIcons || "mono"} onChange={e => setPref({ navIcons: e.target.value as "mono" | "color" })}><option value="mono">Monochrome</option><option value="color">Colored (Fluent)</option></select></div>
                 <label className="setting-row"><div><b>Open the editor with the first file</b><p>With no file open, Files shows only the tree in a narrow panel. Off: the editor area is always there.</p></div>
@@ -1060,7 +1068,7 @@ export function App() {
               <TerminalSettings workspace={workspace} />
               <section className="settings-group">
                 <h2 className="label">Keyboard shortcuts</h2>
-                {[["Search agents and views", "Ctrl K"], ["Switch chat and terminal", "Ctrl T"], ["Overview", "Ctrl O"], ["Toggle side panel", "Ctrl B"], ["Files and editor", "Ctrl E"], ["Quick open file (editor open)", "Ctrl P"], ["Search in files (editor open)", "Ctrl Shift F"], ["Terminal in this folder", "Ctrl `"], ["Voice typing (works from any app)", "Ctrl Alt Space"], ["Jump to agent 1-9", "Ctrl 1-9"], ["Save template", "Ctrl S"]].map(([label, keys]) => <div className="setting-row compact" key={label}><span>{label}</span><kbd>{keys}</kbd></div>)}
+                {[["Search agents and views", "Ctrl K"], ["Switch chat and terminal", "Ctrl T"], ["Overview", "Ctrl O"], ["Toggle side panel", "Ctrl B"], ["Files and editor", "Ctrl E"], ["Quick open file (editor open)", "Ctrl P"], ["Search in files (editor open)", "Ctrl Shift F"], ["Terminal in this folder", "Ctrl `"], ["Zoom in, out, back to 100%", "Ctrl + / Ctrl - / Ctrl 0"], ["Voice typing (works from any app)", "Ctrl Alt Space"], ["Jump to agent 1-9", "Ctrl 1-9"], ["Save template", "Ctrl S"]].map(([label, keys]) => <div className="setting-row compact" key={label}><span>{label}</span><kbd>{keys}</kbd></div>)}
               </section>
             </div>
           )}
@@ -1130,9 +1138,9 @@ export function App() {
                 {mention && !archive && <MentionMenu items={mentionList} index={Math.min(mention.index, Math.max(0, mentionList.length - 1))} query={mention.query} loading={mentionAll.loading} pick={pickMention} hover={i => setMention(v => v && { ...v, index: i })} />}
                 {attachments.length > 0 && <AttachmentList files={attachments} remove={file => setAttachments(v => v.filter(x => x !== file))} />}
                 {links.length > 0 && <div className="link-list">{links.map(u => <a key={u} className="link-chip" href={u} target="_blank" rel="noreferrer" title={u}><LinkIcon aria-hidden="true" /><span>{linkLabel(u)}</span></a>)}</div>}
-                <div className={"composer-input" + (links.length ? " has-links" : "")}>
-                {links.length > 0 && <div className="composer-mirror" ref={mirror} aria-hidden="true">{splitLinks(text).map((part, i) => part.link ? <span key={i} className="composer-link">{part.text}</span> : part.text)}{"\n"}</div>}
-                <textarea ref={textArea} onScroll={e => { if (mirror.current) mirror.current.scrollTop = e.currentTarget.scrollTop; }}
+                <div ref={composerBox} className={"composer-input" + (links.length ? " has-links" : "")}>
+                {links.length > 0 && <div className="composer-mirror" aria-hidden="true">{splitLinks(text).map((part, i) => part.link ? <span key={i} className="composer-link">{part.text}</span> : part.text)}{"\n"}</div>}
+                <textarea ref={textArea}
                   aria-label="Message" disabled={!!archive || sending} value={text} placeholder={voice === "on" ? "Listening… speak, then Enter to send" : `Message ${selected}…`}
                   onPaste={e => { if (e.clipboardData.files.length) { e.preventDefault(); addFiles(e.clipboardData.files); } }}
                   onChange={e => { if (dict.current) { vBase.current = e.target.value; vPos.current = e.target.selectionStart; vPartial.current = ""; } setText(e.target.value); findMention(e.target.value, e.target.selectionStart); }}

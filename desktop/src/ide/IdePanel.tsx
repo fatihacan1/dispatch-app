@@ -7,7 +7,8 @@ import { TreeMenu, DeleteDialog, type MenuItem } from "./TreeMenu";
 const MAC = typeof navigator !== "undefined" && /Mac/i.test(navigator.platform);
 
 type Entry = { name: string; path: string; dir: boolean; ignored?: boolean };
-type Tab = { path: string; model: monaco.editor.ITextModel | null; dirty: boolean; diff: boolean; note?: string; saved: string };
+type Tab = { path: string; model: monaco.editor.ITextModel | null; dirty: boolean; diff: boolean; note?: string; saved: string; media?: Media };
+type Media = { kind: "image" | "video" | "audio"; url: string; size: number };
 export type OpenRequest = { path: string; diff?: boolean; line?: number; nonce: number };
 type GitFile = { path: string; status?: string };
 
@@ -18,25 +19,33 @@ const relOf = (uri: monaco.Uri) => uri.path.replace(/^\/ws\//, "");
 const lspPos = (p: monaco.Position) => ({ line: p.lineNumber - 1, character: p.column - 1 });
 const KIND: Record<number, monaco.languages.CompletionItemKind> = { 2: 0, 3: 1, 4: 2, 5: 3, 6: 4, 7: 5, 8: 7, 9: 8, 10: 9, 13: 15, 14: 17, 21: 14, 22: 6, 25: 24 } as any;
 const mdText = (c: any) => typeof c === "string" ? c : c?.value || "";
+// Edits reach gopls in batches, 200 ms after the last key. A question about the text has to send them first: asked
+// right after a "." gopls still had the text without it and answered with nothing, so no list ever opened.
+const goUnsent = new Map<string, () => Promise<unknown>>();
+const goAsk = (method: string, model: monaco.editor.ITextModel, position: monaco.Position) => {
+  const rel = relOf(model.uri); void goUnsent.get(rel)?.();
+  return window.army.files.lsp.request("go", "textDocument/" + method, rel, lspPos(position)).catch(() => null);
+};
+const goRange = (r: any) => new monaco.Range(r.start.line + 1, r.start.character + 1, r.end.line + 1, r.end.character + 1);
 let goReady = false;
 function registerGo() {
   if (goReady) return; goReady = true;
   monaco.languages.registerCompletionItemProvider("go", { triggerCharacters: ["."], async provideCompletionItems(model, position) {
-    const res = await window.army.files.lsp.request("go", "textDocument/completion", relOf(model.uri), lspPos(position)).catch(() => null);
+    const res = await goAsk("completion", model, position);
     const items: any[] = Array.isArray(res) ? res : res?.items || [];
     const word = model.getWordUntilPosition(position);
     const range = new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn);
-    return { suggestions: items.map(it => ({ label: it.label, kind: KIND[it.kind] ?? monaco.languages.CompletionItemKind.Text, detail: it.detail, documentation: it.documentation ? { value: mdText(it.documentation) } : undefined,
-      insertText: (it.textEdit?.newText ?? it.insertText ?? it.label), insertTextRules: it.insertTextFormat === 2 ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet : undefined, sortText: it.sortText, filterText: it.filterText, range })) };
+    return { incomplete: !!res?.isIncomplete, suggestions: items.map(it => ({ label: it.label, kind: KIND[it.kind] ?? monaco.languages.CompletionItemKind.Text, detail: it.detail, documentation: it.documentation ? { value: mdText(it.documentation) } : undefined,
+      insertText: (it.textEdit?.newText ?? it.insertText ?? it.label), insertTextRules: it.insertTextFormat === 2 ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet : undefined, sortText: it.sortText, filterText: it.filterText, range, additionalTextEdits: it.additionalTextEdits?.map((x: any) => ({ range: goRange(x.range), text: x.newText })) })) };
   } });
   monaco.languages.registerHoverProvider("go", { async provideHover(model, position) {
-    const res = await window.army.files.lsp.request("go", "textDocument/hover", relOf(model.uri), lspPos(position)).catch(() => null);
+    const res = await goAsk("hover", model, position);
     if (!res?.contents) return null;
     const parts = Array.isArray(res.contents) ? res.contents : [res.contents];
     return { contents: parts.map((c: any) => ({ value: typeof c === "string" ? c : c.language ? "```" + c.language + "\n" + c.value + "\n```" : c.value })) };
   } });
   monaco.languages.registerSignatureHelpProvider("go", { signatureHelpTriggerCharacters: ["(", ","], async provideSignatureHelp(model, position) {
-    const res = await window.army.files.lsp.request("go", "textDocument/signatureHelp", relOf(model.uri), lspPos(position)).catch(() => null);
+    const res = await goAsk("signatureHelp", model, position);
     if (!res?.signatures?.length) return null;
     return { value: { signatures: res.signatures.map((s: any) => ({ label: s.label, documentation: s.documentation ? { value: mdText(s.documentation) } : undefined, parameters: (s.parameters || []).map((p: any) => ({ label: p.label, documentation: p.documentation ? { value: mdText(p.documentation) } : undefined })) })), activeSignature: res.activeSignature || 0, activeParameter: res.activeParameter || 0 }, dispose() {} };
   } });
@@ -46,6 +55,18 @@ function registerGo() {
   });
 }
 const parent = (p: string) => p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
+
+const sizeText = (n: number) => n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+/** Image, video or audio file in the editor area. An image fits the panel; a click shows it in its real size. */
+function MediaView({ media, name, onDims }: { media: Media; name: string; onDims: (text: string) => void }) {
+  const [actual, setActual] = useState(false), [failed, setFailed] = useState(false);
+  if (failed) return <div className="ide-media"><p>{name} cannot be shown here. Right-click it in the tree and choose Open with default app.</p></div>;
+  return <div className={"ide-media" + (actual ? " actual" : "")}>
+    {media.kind === "image" ? <img src={media.url} alt={name} title={actual ? "Fit to the panel" : "Show in real size"} draggable={false} onError={() => setFailed(true)} onLoad={e => onDims(`${e.currentTarget.naturalWidth} × ${e.currentTarget.naturalHeight}`)} onClick={() => setActual(v => !v)} />
+      : media.kind === "video" ? <video src={media.url} controls preload="metadata" onError={() => setFailed(true)} onLoadedMetadata={e => onDims(`${e.currentTarget.videoWidth} × ${e.currentTarget.videoHeight}`)} />
+      : <audio src={media.url} controls preload="metadata" onError={() => setFailed(true)} />}
+  </div>;
+}
 
 // editorOnFile (Settings > Appearance): with no file open the panel is only the tree, the editor appears with the first file.
 // treeToggle: a button that folds the tree away so the editor gets the whole panel.
@@ -166,9 +187,11 @@ export function IdePanel({ workspace, open, request, gitFiles, terminal, termina
       if (next !== existing) setTabs(ts => ts.map(t => t.path === rel ? next : t));
       setActive(rel); await showTab(next, opts.line); return;
     }
-    const file = await window.army.files.read(rel).catch(e => ({ error: String(e) } as any));
+    const media = await window.army.files.media?.(rel).catch(() => null);
+    const file = media ? {} as any : await window.army.files.read(rel).catch(e => ({ error: String(e) } as any));
     let tab: Tab;
-    if (file.text === undefined) {
+    if (media) tab = { path: rel, model: null, dirty: false, diff: false, saved: "", media };
+    else if (file.text === undefined) {
       const note = file.binary ? "Binary file, not shown." : file.tooLarge ? `File is too large to open here (${Math.round((file.size || 0) / 1048576)} MB).` : "Could not open this file.";
       tab = { path: rel, model: null, dirty: false, diff: false, note, saved: "" };
     } else {
@@ -177,9 +200,12 @@ export function IdePanel({ workspace, open, request, gitFiles, terminal, termina
       model.onDidChangeContent(() => setTabs(ts => ts.map(t => t.path === rel ? { ...t, dirty: model.getValue() !== t.saved } : t)));
       if (/\.go$/i.test(rel)) {
         registerGo(); let version = 1, timer = 0;
-        void window.army.files.lsp.open("go", rel, model.getValue()).catch(() => {});
-        model.onDidChangeContent(() => { window.clearTimeout(timer); timer = window.setTimeout(() => void window.army.files.lsp.change("go", rel, ++version, model.getValue()).catch(() => {}), 200); });
-        model.onWillDispose(() => void window.army.files.lsp.close("go", rel).catch(() => {}));
+        // Without Go (or gopls) say why there are no suggestions instead of staying silent.
+        void window.army.files.lsp.open("go", rel, model.getValue()).catch(e => setTabs(ts => ts.map(t => t.path === rel ? { ...t, note: "Go suggestions are off: " + String(e).replace(/^Error: Error invoking remote method '[^']+': (Error: )?/, "") } : t)));
+        const flush = async () => { if (!timer) return; window.clearTimeout(timer); timer = 0; await window.army.files.lsp.change("go", rel, ++version, model.getValue()).catch(() => {}); };
+        goUnsent.set(rel, flush);
+        model.onDidChangeContent(() => { window.clearTimeout(timer); timer = window.setTimeout(() => void flush(), 200); });
+        model.onWillDispose(() => { window.clearTimeout(timer); timer = 0; goUnsent.delete(rel); void window.army.files.lsp.close("go", rel).catch(() => {}); });
       }
       // Python: Ruff checks the text as it is typed (half a second after the last key), problems show as squiggles.
       if (/\.pyi?$/i.test(rel)) {
@@ -218,7 +244,13 @@ export function IdePanel({ workspace, open, request, gitFiles, terminal, termina
     for (const c of batch) if (c.kind !== "change") dirs.add(parent(c.path));
     for (const d of dirs) if (children[d] || d === "") void loadDir(d);
     for (const c of batch) {
-      const tab = tabsRef.current.find(t => t.path === c.path); if (!tab?.model || tab.dirty) continue;
+      const tab = tabsRef.current.find(t => t.path === c.path);
+      // An image or video an agent wrote again: show the new one.
+      if (tab?.media) {
+        const media = c.kind === "unlink" ? null : await window.army.files.media?.(c.path).catch(() => null);
+        setTabs(ts => ts.map(t => t.path === c.path ? media ? { ...t, media, note: undefined } : { ...t, note: "Deleted on disk." } : t)); continue;
+      }
+      if (!tab?.model || tab.dirty) continue;
       if (c.kind === "unlink") { setTabs(ts => ts.map(t => t.path === c.path ? { ...t, note: "Deleted on disk." } : t)); continue; }
       const file = await window.army.files.read(c.path).catch(() => null);
       if (!file || file.text === undefined || file.text === tab.model.getValue()) continue;
@@ -348,6 +380,7 @@ export function IdePanel({ workspace, open, request, gitFiles, terminal, termina
   const activeTab = tabs.find(t => t.path === active);
   const rootName = workspace.split(/[\\/]/).pop() || workspace;
   const compact = !!editorOnFile && tabs.length === 0 && !terminalOpen;
+  const [mediaDims, setMediaDims] = useState<Record<string, string>>({});
   const [treeHidden, setTreeHidden] = useState(false);
   const hideTree = !!treeToggle && treeHidden && !compact;
   useEffect(() => { onCompact?.(compact); }, [compact]);
@@ -398,8 +431,9 @@ export function IdePanel({ workspace, open, request, gitFiles, terminal, termina
         {toggleTerminal && <button type="button" className={"icon-button" + (terminalOpen ? " on" : "")} aria-pressed={!!terminalOpen} title="Terminal (Ctrl `)" aria-label="Toggle terminal" onClick={toggleTerminal}><CommandLineIcon /></button>}
         {activeTab?.model && <button type="button" className={"icon-button" + (activeTab.diff ? " on" : "")} aria-pressed={activeTab.diff} title={activeTab.diff ? "Back to editor" : "Compare with last commit"} aria-label="Toggle diff" onClick={() => void openFile(activeTab.path, { diff: !activeTab.diff })}><ArrowsRightLeftIcon /></button>}
       </div>
-      {activeTab && <div className="ide-path"><span>{activeTab.path.split("/").join(" / ")}</span>{activeTab.diff && <span className="tag">HEAD ↔ working tree</span>}{activeTab.note && <span className="ide-note">{activeTab.note}</span>}</div>}
+      {activeTab && <div className="ide-path"><span>{activeTab.path.split("/").join(" / ")}</span>{activeTab.media && <span>{[mediaDims[activeTab.media.url], sizeText(activeTab.media.size)].filter(Boolean).join(" · ")}</span>}{activeTab.diff && <span className="tag">HEAD ↔ working tree</span>}{activeTab.note && <span className="ide-note">{activeTab.note}</span>}</div>}
       <div className="ide-editor" ref={host}>
+        {activeTab?.media && <MediaView key={activeTab.media.url} media={activeTab.media} name={base(activeTab.path)} onDims={d => setMediaDims(m => ({ ...m, [activeTab.media!.url]: d }))} />}
         {!activeTab && <div className="ide-blank"><p>Open a file from the tree</p><p className="ide-keys">{[["Ctrl P", "quick open"], ["Ctrl Shift F", "search"], ["Ctrl S", "save"], ["Ctrl `", "terminal"]].map(([k, l]) => <span key={k}><kbd>{k}</kbd> {l}</span>)}</p></div>}
       </div>
       {terminalOpen && terminal}

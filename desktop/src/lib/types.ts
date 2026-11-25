@@ -59,12 +59,14 @@ declare global {
         overlayReady(): void;
         capture(on: boolean): Promise<boolean>;
       };
+      zoom?: { get(): Promise<number>; step(dir: -1 | 0 | 1): Promise<number> };
       ui: { get(): Promise<Record<string, any>>; set(patch: Record<string, any>): Promise<Record<string, any>> };
       files: {
         list(rel?: string): Promise<{ name: string; path: string; dir: boolean; ignored?: boolean }[]>;
         read(rel: string): Promise<{ text?: string; mtime?: number; binary?: boolean; tooLarge?: boolean; size?: number }>;
         write(rel: string, text: string): Promise<number>;
         head(rel: string): Promise<string | null>;
+        media?(rel: string): Promise<{ kind: "image" | "video" | "audio"; url: string; size: number } | null>;
         lsp: { open(lang: string, rel: string, text: string): Promise<boolean>; change(lang: string, rel: string, version: number, text: string): Promise<boolean>; close(lang: string, rel: string): Promise<boolean>; request(lang: string, method: string, rel: string, position: { line: number; character: number }): Promise<any> };
         lint(rel: string, text: string): Promise<{ line: number; col: number; endLine: number; endCol: number; message: string; severity: string }[]>;
         all(): Promise<string[]>;

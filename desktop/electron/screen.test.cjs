@@ -69,3 +69,10 @@ test('headless screen puts partial redraws together', async () => {
   const s = screen.create(40, 6); await new Promise(r => s.write('\x1b[2;1HAllow\x1b[2;7Haccess?\x1b[4;1H  2. No\x1b[3;1H> 1. Yes', r));
   assert.deepStrictEqual(screen.parseMenu(s.lines()).options, ['Yes', 'No']); s.dispose();
 });
+
+test('agy with commands running in the background: the strip under the box does not hide it', () => {
+  const strip = (text, footer, above = '') => [...box(text, '', above).slice(0, -1), '  ● [14:29:05] node server.js running', '  ● [14:30:11] npm run dev running', R, footer + '   auto · Gemini 4 Hydrogen · low · 2 task(s) · /tasks'];
+  assert.strictEqual(screen.agyState(strip('', 'esc to cancel', '⢿  Running command... 5s')), 'busy');
+  assert.strictEqual(screen.agyState(strip('', '? for shortcuts')), 'idle');
+  assert.strictEqual(screen.agyState(strip('half a message', '')), 'typing');
+});

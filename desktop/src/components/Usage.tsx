@@ -12,14 +12,14 @@ export function UsageChips({ open }: { open: (provider: string) => void }) {
   const [tip, setTip] = useState<{ id: string; x: number; y: number } | null>(null);
   const items = Object.values(usage).filter(u => u.windows.length).map(u => ({ ...u, windows: u.windows.map(w => live(w, now)) }));
   if (!items.length) return null;
-  const show = (id: string, el: HTMLElement) => { const r = el.getBoundingClientRect(); setTip({ id, x: Math.max(8, Math.min(r.left, window.innerWidth - 268)), y: r.bottom + 6 }); };
+  const show = (id: string, el: HTMLElement) => { const r = el.getBoundingClientRect(); setTip({ id, x: Math.max(8, Math.min(r.left, window.innerWidth - 348)), y: r.bottom + 6 }); };
   const shown = tip && items.find(u => u.provider === tip.id);
   return <div className="usage-bar" role="group" aria-label="Usage limits" onMouseLeave={() => setTip(null)}>
     {items.map(u => {
       // Same number as the tooltip: % used of the tightest window.
       const w = tightest(u)!; const left = remaining(w), used = Math.round(w.usedPercent);
       return <button type="button" key={u.provider} className={`usage-chip ${levelOf(left)}${u.stale ? " stale" : ""}`} data-provider={u.provider}
-        aria-label={`${NAMES[u.provider] || u.provider}: ${used}% used, ${w.label}. Open in Providers`} title={`${w.label}: ${used}% used`}
+        aria-label={`${NAMES[u.provider] || u.provider}: ${used}% used, ${w.label}. Open in Providers`}
         onMouseEnter={e => show(u.provider, e.currentTarget)} onFocus={e => show(u.provider, e.currentTarget)} onBlur={() => setTip(null)} onClick={() => open(u.provider)}>
         <ProviderIcon className="usage-icon" provider={u.provider} alt="" /><span>{used}%</span>
       </button>;
@@ -27,11 +27,12 @@ export function UsageChips({ open }: { open: (provider: string) => void }) {
     {/* Rendered on <body>: a panel with backdrop-filter (Frosted Glass) becomes the containing block of position:fixed
         children, which pushed the tooltip off screen and clipped it. */}
     {tip && shown && createPortal(<div className="usage-tip" role="tooltip" style={{ left: tip.x, top: tip.y }}>
-      <div className="usage-tip-title"><b>{NAMES[shown.provider] || shown.provider}</b>{shown.plan && <span className="tag">{shown.plan}</span>}</div>
-      {shown.windows.map(w => <div className="usage-tip-row" key={w.id}>
-        <span>{w.label}</span><b>{w.usedPercent}% used</b>
-        <small>{w.resetsAt ? `resets in ${resetIn(w.resetsAt, now)}` : "no reset time"}</small>
-      </div>)}
+      <div className="usage-tip-title"><ProviderIcon className="usage-icon" provider={shown.provider} alt="" /><b>{NAMES[shown.provider] || shown.provider}</b><span className="grow" />{shown.plan && <small>{shown.plan}</small>}</div>
+      {shown.windows.map(w => { const left = remaining(w), level = levelOf(left); return <div className={`usage-tip-row ${level}`} key={w.id}>
+        <span>{w.label}</span><b>{Math.round(w.usedPercent)}% used</b>
+        <div className={`usage-meter ${level}`}><i style={{ width: `${Math.min(100, w.usedPercent)}%` }} /></div>
+        <small>{left}% left</small><small>{w.resetsAt ? `resets in ${resetIn(w.resetsAt, now)} · ${resetClock(w.resetsAt, now)}` : "no reset time"}</small>
+      </div>; })}
       {shown.stale && <small className="usage-warn">Last reading kept: {shown.error}</small>}
     </div>, document.body)}
   </div>;
