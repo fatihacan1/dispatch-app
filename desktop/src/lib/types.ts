@@ -67,7 +67,7 @@ declare global {
         write(rel: string, text: string): Promise<number>;
         head(rel: string): Promise<string | null>;
         media?(rel: string): Promise<{ kind: "image" | "video" | "audio"; url: string; size: number } | null>;
-        lsp: { open(lang: string, rel: string, text: string): Promise<boolean>; change(lang: string, rel: string, version: number, text: string): Promise<boolean>; close(lang: string, rel: string): Promise<boolean>; request(lang: string, method: string, rel: string, position: { line: number; character: number }): Promise<any> };
+        lsp: { open(lang: string, rel: string, text: string): Promise<boolean>; change(lang: string, rel: string, version: number, text: string): Promise<boolean>; close(lang: string, rel: string): Promise<boolean>; request(lang: string, method: string, rel: string, position: { line: number; character: number }): Promise<any>; resolve(lang: string, rel: string, item: any): Promise<any>; cOptions?(rel: string): Promise<{ value: string; using: string; options: { id: string; label: string }[] }>; cChoose(rel: string, value: string): Promise<boolean> };
         lint(rel: string, text: string): Promise<{ line: number; col: number; endLine: number; endCol: number; message: string; severity: string }[]>;
         all(): Promise<string[]>;
         search(query: string, opts?: { caseSensitive?: boolean }): Promise<{ path: string; line: number; col: number; text: string }[]>;

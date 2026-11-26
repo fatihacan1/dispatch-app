@@ -435,6 +435,8 @@ function deliver(agent) {
     // It now owes whoever wrote a reply; the watchdog below speaks up if it goes quiet without one.
     if (item.msg.from !== 'dispatch') agent.owes = { to: item.msg.from, at: Date.now() };
     const wasIdle = !agent.turn, pastedAt = Date.now();
+    // Out of quota, Claude asks what to do (wait, upgrade). A message typed into that list was lost: close it first.
+    if (limitMenu(agent)) { agent.submitting = false; agent.inFlight = null; agent.setup = item.setup; agent.queue.unshift(item); try { agent.terminal.write('\x1b'); } catch {} agent.timer = setTimeout(() => deliver(agent), 1200); return; }
     try { agent.terminal.write(`\x1b[200~${text}\x1b[201~`); } catch {}
     // Press Enter only after the CLI has taken the whole paste in (its echo went quiet). A fixed 200 ms was too
     // early for long messages: the Enter landed inside the paste and the text sat in the prompt, never sent.
@@ -445,7 +447,7 @@ function deliver(agent) {
       try { agent.terminal.write('\r'); } catch {}
       agent.submitting = false; agent.inFlight = null; agent.deliveredAt = Date.now();
       try { fs.unlinkSync(item.file); } catch {}
-      if (agent.command === 'agy') confirmAgy(agent, item, pastedAt, 0); else confirmSubmit(agent, pastedAt, wasIdle, 0);
+      if (agent.command === 'agy') confirmAgy(agent, item, pastedAt, 0); else confirmSubmit(agent, pastedAt, wasIdle, 0, item);
       if (agent.queue.length) deliver(agent);
     };
     agent.timer = setTimeout(submit, 350);
@@ -455,14 +457,21 @@ function deliver(agent) {
 function plainPrompt(agent) { const l = agent.view.lines(); return l.some(x => /^ *>/.test(x)) && !/navigate|toggle|confirm|\[(?:next|done)\]|terms of/i.test(l.join(" ")); }
 // Claude and Codex record every turn they start. If none started a few seconds after Enter, the text is still
 // sitting in the prompt: press Enter again (an empty prompt ignores it).
-function confirmSubmit(agent, pastedAt, wasIdle, tries) {
-  if (demo || !wasIdle || !agent.tracksTurns || tries >= 3) return;
+function confirmSubmit(agent, pastedAt, wasIdle, tries, item) {
+  if (demo || !wasIdle || !agent.tracksTurns || tries >= 4) return;
   setTimeout(() => {
     if (![...processes.values()].includes(agent) || agent.blocked || agent.submitting || (agent.turnAt || 0) >= pastedAt) return;
-    try { agent.terminal.write('\r'); } catch {}
-    confirmSubmit(agent, pastedAt, wasIdle, tries + 1);
+    // Three more Enters and still no turn: a list that was open swallowed it. Not on the screen any more means it is
+    // gone, so it goes in once more.
+    if (tries === 3) {
+      if (!item || item.retried || !agent.view || agent.view.lines().join('').includes(item.msg.id)) return;
+      item.retried = true; agent.queue.unshift(item); if (item.setup) agent.setup = item.setup; deliver(agent); return;
+    }
+    if (limitMenu(agent)) { try { agent.terminal.write('\x1b'); } catch {} } else try { agent.terminal.write('\r'); } catch {}
+    confirmSubmit(agent, pastedAt, wasIdle, tries + 1, item);
   }, 4000);
 }
+function limitMenu(agent) { return !demo && agent.command === 'claude' && !!agent.view && screenLib.isLimitMenu(screenLib.parseMenu(agent.view.lines())); }
 // Antigravity: its screen tells. Text still in the prompt box: press Enter again. Box empty and no turn ever started:
 // the paste was swallowed while it came up, so the message goes in once more.
 function confirmAgy(agent, item, pastedAt, tries) {
@@ -561,6 +570,9 @@ ipcMain.handle('context:compact', (_e, name) => {
   const agent = processes.get(name), p = agent?.template?.provider;
   if (!agent || !['claude', 'codex'].includes(p)) throw new Error('This provider cannot compact its conversation from here.');
   if (isWorking(name) || agent.blocked || !agent.ready) throw new Error(`${name} is busy. Compact when it is idle.`);
+  emitMessage({ from: 'you', to: name, text: '/compact' });
+  agent.turn = true; agent.turnKnown = true; agent.turnAt = Date.now(); agent.compacting = true; agent.atPrompt = false;
+  notify('activity', { name, steps: [{ kind: 'thinking', text: 'Compacting conversation…' }], turn: true });
   agent.terminal.write('/compact'); setTimeout(() => { try { agent.terminal.write('\r'); } catch {} }, 400);
   return true;
 });
@@ -697,7 +709,7 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
     if (e.answered && agent.question && e.answered.includes(agent.question.id)) clearQuestion(name, agent);
     let dropLastText = false;
     if (e.turn === false) {
-      agent.turn = false; agent.turnKnown = true; agent.hadTurn = true; agent.turnEndAt = Date.now(); clearQuestion(name, agent);
+      agent.turn = false; agent.compacting = false; agent.turnKnown = true; agent.hadTurn = true; agent.turnEndAt = Date.now(); clearQuestion(name, agent);
       // The reply the agent wrote in its terminal is the chat message, formatting intact. The boss always talks to
       // the user; another agent does when the user was the one who wrote to it.
       const forYou = name === 'boss' || ['you', 'user'].includes(agent.lastFrom);
@@ -830,7 +842,7 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
         }
       }
     }
-    const codexState = [...data.matchAll(/\x1b\]7501;state=(idle|working|done):app=codex/g)].at(-1); if (codexState) { agent.codexStateKnown = true; agent.atPrompt = codexState[1] !== 'working'; if (codexState[1] === 'working') agent.turnAt = Date.now(); if (shouldClearAttention(agent.attention, { codexState: codexState[1] })) clearAttention(name, agent); } else if (provider !== 'codex') agent.atPrompt = /(?:^|[\r\n])\s*[>\u276f$]\s*$/.test(agent.output.slice(-4000).replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')); if (agent.queue.length && (provider !== 'codex' || agent.atPrompt)) deliver(agent);
+    const codexState = [...data.matchAll(/\x1b\]7501;state=(idle|working|done):app=codex/g)].at(-1); if (codexState) { agent.codexStateKnown = true; agent.atPrompt = codexState[1] !== 'working'; if (codexState[1] === 'working') agent.turnAt = Date.now(); if (agent.compacting && codexState[1] !== 'working') { agent.compacting = false; agent.onTurn?.({ steps: [], turn: false }); } if (shouldClearAttention(agent.attention, { codexState: codexState[1] })) clearAttention(name, agent); } else if (provider !== 'codex') agent.atPrompt = /(?:^|[\r\n])\s*[>\u276f$]\s*$/.test(agent.output.slice(-4000).replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')); if (agent.queue.length && (provider !== 'codex' || agent.atPrompt)) deliver(agent);
   };
   terminal.onExit(() => {
     agent.stopActivity?.(); clearQuestion(name, agent); clearTimeout(agent.scanTimer); agent.view.dispose();
@@ -907,6 +919,7 @@ function settle(name, agent) {
     if (agent.starting && !agent.sawBox && !agent.startTold && now - agent.startedAt > 25000 && now - (agent.lastOutput || 0) > 4000 && /navigate|toggle|confirm|\[(?:next|done)\]/i.test(agent.view.lines().join(' '))) { agent.startTold = true; emitMessage({ from: 'dispatch', to: 'you', text: `${name} (Antigravity) is at a start screen that needs you. Open its Terminal tab and finish it there; messages wait until then.` }); }
     if (agent.starting && now - agent.startedAt > 60000) { agent.starting = false; notify('starting', { name, on: false }); }
   }
+  if (provider === 'claude' && agent.compacting && agent.turn && now - (agent.lastOutput || 0) > 3000 && now - (agent.turnAt || 0) > 2000 && /(?:^|[\r\n])\s*[❯>]\s*$/m.test(agent.view.lines().slice(-5).join('\n'))) { agent.compacting = false; agent.onTurn({ steps: [], turn: false }); return; }
   // Claude redraws its spinner and timer all through a turn. A screen that stands still for 20 s with no tool running
   // means the turn is over although its transcript never said so: the chat sat on "Thinking" for good.
   if (provider === 'claude' && agent.turn && !(agent.toolsOpen > 0) && now - (agent.lastOutput || 0) > 20000 && now - (agent.eventAt || 0) > 20000) agent.onTurn({ steps: [], turn: false, final: agent.lastText || '' });
@@ -1907,10 +1920,13 @@ ipcMain.handle('files:import', (_e, dir, items) => {
   return out.length;
 });
 ipcMain.handle('files:head', (_e, rel) => filesLib.head(workspace, rel));
-let lspHub = null; const lsp = () => lspHub ||= require('./lsp.cjs').create(d => notify('lsp-diagnostics', d));
+let lspHub = null; const lsp = () => lspHub ||= require('./lsp.cjs').create(d => notify('lsp-diagnostics', d), s => notify('lsp-status', { lang: s.lang, text: s.text }));
 process.on('exit', () => lspHub?.stopAll());
 ipcMain.handle('lsp:open', (_e, lang, rel, text) => lsp().open(String(lang), workspace, String(rel), String(text ?? '')));
 ipcMain.handle('lsp:change', (_e, lang, rel, version, text) => lsp().change(String(lang), workspace, String(rel), Number(version) || 1, String(text ?? '')));
+ipcMain.handle('lsp:resolve', (_e, lang, rel, item) => lsp().resolve(String(lang), workspace, String(rel), item));
+ipcMain.handle('lsp:c-options', (_e, rel) => lsp().cOptions(workspace, String(rel)));
+ipcMain.handle('lsp:c-choose', (_e, rel, value) => lsp().cChoose(workspace, String(rel), String(value)));
 ipcMain.handle('lsp:close', (_e, lang, rel) => lsp().close(String(lang), workspace, String(rel)));
 ipcMain.handle('lsp:request', (_e, lang, method, rel, position) => { if (!/^textDocument\/(completion|hover|signatureHelp)$/.test(method)) throw new Error('Not allowed'); return lsp().request(String(lang), workspace, method, String(rel), position); });
 ipcMain.handle('files:lint', (_e, rel, text) => require('./lint.cjs').lint(workspace, String(rel), String(text ?? '')).catch(() => []));

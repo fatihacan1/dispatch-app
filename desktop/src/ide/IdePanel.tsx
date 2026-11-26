@@ -3,6 +3,7 @@ import { ChevronDoubleLeftIcon, ChevronDoubleRightIcon, ChevronRightIcon, Magnif
 import { FileIcon } from "../components/FileIcon";
 import { monaco, applyTheme } from "./monaco";
 import { TreeMenu, DeleteDialog, type MenuItem } from "./TreeMenu";
+import { ask as dialogs } from "../components/ask";
 
 const MAC = typeof navigator !== "undefined" && /Mac/i.test(navigator.platform);
 
@@ -14,45 +15,69 @@ type GitFile = { path: string; status?: string };
 
 const uriFor = (rel: string) => monaco.Uri.from({ scheme: "file", path: "/ws/" + rel });
 const base = (p: string) => p.split("/").pop() || p;
-// Go: gopls behind the main process gives suggestions, hovers, signature help and problems. Registered once.
+// Language servers behind the main process give suggestions, hovers, signature help and problems.
 const relOf = (uri: monaco.Uri) => uri.path.replace(/^\/ws\//, "");
 const lspPos = (p: monaco.Position) => ({ line: p.lineNumber - 1, character: p.column - 1 });
+const extOf = (rel: string) => /\.([^./]+)$/.exec(rel)?.[1].toLowerCase() || "";
+/** Which server a file goes to ("" = none). */
+const LANG: Record<string, string> = { go: "go", rs: "rust", cs: "csharp", c: "cpp", h: "cpp", cc: "cpp", cpp: "cpp", cxx: "cpp", hh: "cpp", hpp: "cpp", hxx: "cpp", ino: "cpp", ts: "typescript", tsx: "typescript", mts: "typescript", cts: "typescript", js: "typescript", jsx: "typescript", mjs: "typescript", cjs: "typescript" };
+const langOf = (rel: string) => LANG[extOf(rel)] || "";
+const LANG_NAME: Record<string, string> = { go: "Go", rust: "Rust", csharp: "C#", cpp: "C and C++", typescript: "TypeScript and JavaScript" };
+const TRIGGERS: Record<string, string[]> = { go: ["."], rust: [".", ":"], csharp: [".", ":"], cpp: [".", ">", ":", "<", "\"", "/"], typescript: [".", "\"", "'", "/", "@", "<"], javascript: [".", "\"", "'", "/", "@", "<"], c: [".", ">", "<", "\"", "/"] };
 const KIND: Record<number, monaco.languages.CompletionItemKind> = { 2: 0, 3: 1, 4: 2, 5: 3, 6: 4, 7: 5, 8: 7, 9: 8, 10: 9, 13: 15, 14: 17, 21: 14, 22: 6, 25: 24 } as any;
 const mdText = (c: any) => typeof c === "string" ? c : c?.value || "";
-// Edits reach gopls in batches, 200 ms after the last key. A question about the text has to send them first: asked
-// right after a "." gopls still had the text without it and answered with nothing, so no list ever opened.
-const goUnsent = new Map<string, () => Promise<unknown>>();
-const goAsk = (method: string, model: monaco.editor.ITextModel, position: monaco.Position) => {
-  const rel = relOf(model.uri); void goUnsent.get(rel)?.();
-  return window.army.files.lsp.request("go", "textDocument/" + method, rel, lspPos(position)).catch(() => null);
+// Edits reach the server in batches, 200 ms after the last key. A question about the text has to send them first: asked
+// right after a "." it still had the text without it and answered with nothing, so no list ever opened.
+const unsent = new Map<string, () => Promise<unknown>>();
+const serving = new Set<string>(); // files a server has open; others keep what the editor itself knows
+const ask = (method: string, model: monaco.editor.ITextModel, position: monaco.Position) => {
+  const rel = relOf(model.uri); if (!serving.has(rel)) return Promise.resolve(null); void unsent.get(rel)?.();
+  return window.army.files.lsp.request(langOf(rel), "textDocument/" + method, rel, lspPos(position)).catch(() => null);
 };
-const goRange = (r: any) => new monaco.Range(r.start.line + 1, r.start.character + 1, r.end.line + 1, r.end.character + 1);
-let goReady = false;
-function registerGo() {
-  if (goReady) return; goReady = true;
-  monaco.languages.registerCompletionItemProvider("go", { triggerCharacters: ["."], async provideCompletionItems(model, position) {
-    const res = await goAsk("completion", model, position);
+const toRange = (r: any) => new monaco.Range(r.start.line + 1, r.start.character + 1, r.end.line + 1, r.end.character + 1);
+const extraEdits = (edits: any[] | undefined) => edits?.map(x => ({ range: toRange(x.range), text: x.newText }));
+const parts = (contents: any): { value: string }[] => (Array.isArray(contents) ? contents : [contents]).map((c: any) => ({ value: typeof c === "string" ? c : c.language ? "```" + c.language + "\n" + c.value + "\n```" : c.value }));
+const registered = new Set<string>();
+function registerServer(id: string) {
+  if (!registered.size) window.army.on("lsp-diagnostics", (d: { lang: string; rel: string; diagnostics: any[] }) => {
+    const model = monaco.editor.getModel(uriFor(d.rel)); if (!model) return;
+    monaco.editor.setModelMarkers(model, "lsp", d.diagnostics.map(x => ({ startLineNumber: x.range.start.line + 1, startColumn: x.range.start.character + 1, endLineNumber: x.range.end.line + 1, endColumn: x.range.end.character + 1, message: x.message, severity: x.severity === 1 ? monaco.MarkerSeverity.Error : x.severity === 2 ? monaco.MarkerSeverity.Warning : x.severity === 4 ? monaco.MarkerSeverity.Hint : monaco.MarkerSeverity.Info, source: x.source || d.lang })));
+  });
+  if (registered.has(id)) return; registered.add(id);
+  monaco.languages.registerCompletionItemProvider(id, { triggerCharacters: TRIGGERS[id] || ["."], async provideCompletionItems(model, position) {
+    const res = await ask("completion", model, position);
     const items: any[] = Array.isArray(res) ? res : res?.items || [];
     const word = model.getWordUntilPosition(position);
     const range = new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn);
-    return { incomplete: !!res?.isIncomplete, suggestions: items.map(it => ({ label: it.label, kind: KIND[it.kind] ?? monaco.languages.CompletionItemKind.Text, detail: it.detail, documentation: it.documentation ? { value: mdText(it.documentation) } : undefined,
-      insertText: (it.textEdit?.newText ?? it.insertText ?? it.label), insertTextRules: it.insertTextFormat === 2 ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet : undefined, sortText: it.sortText, filterText: it.filterText, range, additionalTextEdits: it.additionalTextEdits?.map((x: any) => ({ range: goRange(x.range), text: x.newText })) })) };
+    return { incomplete: !!res?.isIncomplete, suggestions: items.map(it => {
+      // A server may replace more than the word ("<vec" in an include, ".foo" turned into "?.foo"): only on this line.
+      const edit = it.textEdit?.range || it.textEdit?.insert, own = edit && edit.start.line === edit.end.line && edit.start.line === position.lineNumber - 1 && edit.start.character <= position.column - 1 ? new monaco.Range(position.lineNumber, edit.start.character + 1, position.lineNumber, Math.max(position.column, edit.end.character + 1)) : range;
+      // clangd marks a name that also adds an include with a dot or a space before it.
+      const label = String(it.label).replace(/^[\s\u2022]+/, "");
+      return { label, kind: KIND[it.kind] ?? monaco.languages.CompletionItemKind.Text, detail: it.detail, documentation: it.documentation ? { value: mdText(it.documentation) } : undefined,
+        insertText: (it.textEdit?.newText ?? it.insertText ?? label), insertTextRules: it.insertTextFormat === 2 ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet : undefined, sortText: it.sortText, filterText: it.filterText, preselect: it.preselect, range: own, additionalTextEdits: extraEdits(it.additionalTextEdits), lsp: { rel: relOf(model.uri), item: it } };
+    }) };
+  }, async resolveCompletionItem(item: any) {
+    const { rel, item: raw } = item.lsp || {}; if (!rel || raw.data === undefined) return item;
+    const r = await window.army.files.lsp.resolve(langOf(rel), rel, raw).catch(() => null); if (!r) return item;
+    return { ...item, detail: r.detail || item.detail, documentation: r.documentation ? { value: mdText(r.documentation) } : item.documentation, additionalTextEdits: extraEdits(r.additionalTextEdits) || item.additionalTextEdits };
   } });
-  monaco.languages.registerHoverProvider("go", { async provideHover(model, position) {
-    const res = await goAsk("hover", model, position);
-    if (!res?.contents) return null;
-    const parts = Array.isArray(res.contents) ? res.contents : [res.contents];
-    return { contents: parts.map((c: any) => ({ value: typeof c === "string" ? c : c.language ? "```" + c.language + "\n" + c.value + "\n```" : c.value })) };
+  monaco.languages.registerHoverProvider(id, { async provideHover(model, position) {
+    const res = await ask("hover", model, position);
+    return res?.contents ? { contents: parts(res.contents) } : null;
   } });
-  monaco.languages.registerSignatureHelpProvider("go", { signatureHelpTriggerCharacters: ["(", ","], async provideSignatureHelp(model, position) {
-    const res = await goAsk("signatureHelp", model, position);
+  monaco.languages.registerSignatureHelpProvider(id, { signatureHelpTriggerCharacters: ["(", ","], async provideSignatureHelp(model, position) {
+    const res = await ask("signatureHelp", model, position);
     if (!res?.signatures?.length) return null;
     return { value: { signatures: res.signatures.map((s: any) => ({ label: s.label, documentation: s.documentation ? { value: mdText(s.documentation) } : undefined, parameters: (s.parameters || []).map((p: any) => ({ label: p.label, documentation: p.documentation ? { value: mdText(p.documentation) } : undefined })) })), activeSignature: res.activeSignature || 0, activeParameter: res.activeParameter || 0 }, dispose() {} };
   } });
-  window.army.on("lsp-diagnostics", (d: { rel: string; diagnostics: any[] }) => {
-    const model = monaco.editor.getModel(uriFor(d.rel)); if (!model) return;
-    monaco.editor.setModelMarkers(model, "gopls", d.diagnostics.map(x => ({ startLineNumber: x.range.start.line + 1, startColumn: x.range.start.character + 1, endLineNumber: x.range.end.line + 1, endColumn: x.range.end.character + 1, message: x.message, severity: x.severity === 1 ? monaco.MarkerSeverity.Error : x.severity === 2 ? monaco.MarkerSeverity.Warning : monaco.MarkerSeverity.Info, source: "gopls" })));
-  });
+}
+// The TypeScript server knows the project's packages; the editor's own checker does not, so it steps back once it runs.
+let ownTs = true;
+function tsToServer() {
+  if (!ownTs) return; ownTs = false;
+  const off = { completionItems: false, hovers: false, signatureHelp: false, diagnostics: false };
+  for (const d of [monaco.typescript.typescriptDefaults, monaco.typescript.javascriptDefaults]) d.setModeConfiguration({ ...d.modeConfiguration, ...off });
 }
 const parent = (p: string) => p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
 
@@ -77,6 +102,7 @@ export function IdePanel({ workspace, open, request, gitFiles, terminal, termina
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const anchor = useRef<string | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; paths: string[] } | null>(null);
+  const [tabMenu, setTabMenu] = useState<{ x: number; y: number; path: string } | null>(null);
   const [confirmDel, setConfirmDel] = useState<string[] | null>(null);
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [active, setActive] = useState<string | null>(null);
@@ -198,14 +224,16 @@ export function IdePanel({ workspace, open, request, gitFiles, terminal, termina
       const model = monaco.editor.getModel(uriFor(rel)) || monaco.editor.createModel(file.text, undefined, uriFor(rel));
       tab = { path: rel, model, dirty: false, diff: !!opts.diff, saved: file.text };
       model.onDidChangeContent(() => setTabs(ts => ts.map(t => t.path === rel ? { ...t, dirty: model.getValue() !== t.saved } : t)));
-      if (/\.go$/i.test(rel)) {
-        registerGo(); let version = 1, timer = 0;
-        // Without Go (or gopls) say why there are no suggestions instead of staying silent.
-        void window.army.files.lsp.open("go", rel, model.getValue()).catch(e => setTabs(ts => ts.map(t => t.path === rel ? { ...t, note: "Go suggestions are off: " + String(e).replace(/^Error: Error invoking remote method '[^']+': (Error: )?/, "") } : t)));
-        const flush = async () => { if (!timer) return; window.clearTimeout(timer); timer = 0; await window.army.files.lsp.change("go", rel, ++version, model.getValue()).catch(() => {}); };
-        goUnsent.set(rel, flush);
+      const lang = langOf(rel);
+      if (lang) {
+        registerServer(model.getLanguageId()); let version = 1, timer = 0;
+        // Without the server say why there are no suggestions instead of staying silent.
+        void window.army.files.lsp.open(lang, rel, model.getValue()).then(() => { if (model.isDisposed()) return; serving.add(rel); if (lang === "typescript") tsToServer(); if (version === 1 && model.getValue() !== file.text) void flush(true); })
+          .catch(e => { const why = String(e).replace(/^Error: Error invoking remote method '[^']+': (Error: )?/, ""); if (/are off for this project|Replaced/.test(why)) return; setTabs(ts => ts.map(t => t.path === rel ? { ...t, note: lang === "typescript" ? undefined : `${LANG_NAME[lang]} suggestions are off: ${why}` } : t)); });
+        const flush = async (now = false) => { if (!timer && !now) return; window.clearTimeout(timer); timer = 0; await window.army.files.lsp.change(lang, rel, ++version, model.getValue()).catch(() => {}); };
+        unsent.set(rel, flush);
         model.onDidChangeContent(() => { window.clearTimeout(timer); timer = window.setTimeout(() => void flush(), 200); });
-        model.onWillDispose(() => { window.clearTimeout(timer); timer = 0; goUnsent.delete(rel); void window.army.files.lsp.close("go", rel).catch(() => {}); });
+        model.onWillDispose(() => { window.clearTimeout(timer); timer = 0; unsent.delete(rel); serving.delete(rel); void window.army.files.lsp.close(lang, rel).catch(() => {}); });
       }
       // Python: Ruff checks the text as it is typed (half a second after the last key), problems show as squiggles.
       if (/\.pyi?$/i.test(rel)) {
@@ -225,14 +253,52 @@ export function IdePanel({ workspace, open, request, gitFiles, terminal, termina
     await showTab(tab, opts.line);
   }, [showTab, loadDir, children]);
 
-  const closeTab = (rel: string) => {
-    const i = tabsRef.current.findIndex(t => t.path === rel); if (i < 0) return;
-    const tab = tabsRef.current[i];
-    const rest = tabsRef.current.filter(t => t.path !== rel);
-    if (active === rel) { const next = rest[i] || rest[i - 1]; setActive(next?.path || null); void showTab(next); }
-    if (diffEditor.current && tab.model && diffEditor.current.getModel()?.modified === tab.model) diffEditor.current.setModel(null);
-    tab.model?.dispose(); originals.current.get(rel)?.dispose(); originals.current.delete(rel); views.current.delete(rel);
+  const closeTabs = async (paths: string[], force = false) => {
+    const list = tabsRef.current.filter(t => paths.includes(t.path));
+    if (!list.length) return;
+    if (!force) {
+      const dirty = list.filter(t => t.dirty);
+      if (dirty.length) {
+        const title = dirty.length === 1 ? `Discard unsaved changes in ${base(dirty[0].path)}?` : `Discard unsaved changes in ${dirty.length} files?`;
+        if (!(await dialogs.confirm(title, { description: "Your edits will be lost.", action: "Discard", danger: true }))) return;
+      }
+    }
+    const closing = new Set(list.map(t => t.path));
+    const cur = tabsRef.current;
+    const activeIdx = activeRef.current ? cur.findIndex(t => t.path === activeRef.current) : -1;
+    const rest = cur.filter(t => !closing.has(t.path));
+    if (activeRef.current && closing.has(activeRef.current)) {
+      const next = cur.slice(activeIdx + 1).find(t => !closing.has(t.path)) || rest[rest.length - 1];
+      setActive(next?.path || null);
+      void showTab(next);
+    }
+    for (const tab of list) {
+      if (diffEditor.current && tab.model && diffEditor.current.getModel()?.modified === tab.model) diffEditor.current.setModel(null);
+      tab.model?.dispose();
+      originals.current.get(tab.path)?.dispose();
+      originals.current.delete(tab.path);
+      views.current.delete(tab.path);
+    }
     setTabs(rest);
+  };
+
+  const closeTab = (rel: string, force = false) => { void closeTabs([rel], force); };
+
+  const tabMenuItems = (path: string): MenuItem[] => {
+    const cur = tabsRef.current;
+    const idx = cur.findIndex(t => t.path === path);
+    const right = idx >= 0 ? cur.slice(idx + 1).map(t => t.path) : [];
+    const others = cur.filter(t => t.path !== path).map(t => t.path);
+    const saved = cur.filter(t => !t.dirty).map(t => t.path);
+    const all = cur.map(t => t.path);
+    return [
+      { label: "Close", action: () => void closeTabs([path]) },
+      { label: "Close Others", action: () => void closeTabs(others) },
+      { label: "Close to the Right", action: () => void closeTabs(right) },
+      "sep",
+      { label: "Close Saved", action: () => void closeTabs(saved, true) },
+      { label: "Close All", action: () => void closeTabs(all) },
+    ];
   };
 
   // Requests from outside (Changed files in the side panel).
@@ -307,7 +373,7 @@ export function IdePanel({ workspace, open, request, gitFiles, terminal, termina
     setConfirmDel(null);
     const failed = await window.army.files.act("trash", paths).catch(() => paths);
     const done = paths.filter(p => !failed.includes(p));
-    for (const t of tabs) if (done.some(p => t.path === p || t.path.startsWith(p + "/"))) closeTab(t.path);
+    for (const t of tabs) if (done.some(p => t.path === p || t.path.startsWith(p + "/"))) closeTab(t.path, true);
     for (const d of new Set(done.map(parent))) void loadDir(d);
     setPicked(new Set());
   };
@@ -378,6 +444,20 @@ export function IdePanel({ workspace, open, request, gitFiles, terminal, termina
   };
 
   const activeTab = tabs.find(t => t.path === active);
+  // C and C++: where the include folders and flags come from, like the picker in VS Code's status bar.
+  const [cSource, setCSource] = useState<{ rel: string; value: string; using: string; options: { id: string; label: string }[] } | null>(null);
+  const [lspNote, setLspNote] = useState<Record<string, string>>({});
+  const cRel = activeTab?.model && langOf(activeTab.path) === "cpp" ? activeTab.path : "";
+  useEffect(() => { let on = true; setCSource(null); if (cRel) void window.army.files.lsp.cOptions?.(cRel).then(o => { if (on) setCSource({ rel: cRel, ...o }); }).catch(() => {}); return () => { on = false; }; }, [cRel, workspace]);
+  useEffect(() => window.army.on("lsp-status", (s: { lang: string; text: string }) => setLspNote(n => ({ ...n, [s.lang]: s.text }))), []);
+  const chooseC = async (value: string) => {
+    if (!cSource) return; const rel = cSource.rel; setCSource({ ...cSource, value });
+    const tell = (note?: string) => setTabs(ts => ts.map(t => t.path === rel ? { ...t, note } : t));
+    tell();
+    try { await window.army.files.lsp.cChoose(rel, value); serving.add(rel); } catch (e) { tell("C and C++ suggestions are off: " + String(e).replace(/^Error: Error invoking remote method '[^']+': (Error: )?/, "")); }
+    const o = await window.army.files.lsp.cOptions?.(rel).catch(() => null); if (o) setCSource(c => c?.rel === rel ? { rel, ...o } : c);
+  };
+  const busyNote = activeTab?.model ? lspNote[langOf(activeTab.path)] : "";
   const rootName = workspace.split(/[\\/]/).pop() || workspace;
   const compact = !!editorOnFile && tabs.length === 0 && !terminalOpen;
   const [mediaDims, setMediaDims] = useState<Record<string, string>>({});
@@ -421,17 +501,20 @@ export function IdePanel({ workspace, open, request, gitFiles, terminal, termina
       <div className="ide-tabs" role="tablist" aria-label="Open files">
         {hideTree && <button type="button" className="icon-button" title="Show the file tree" aria-label="Show the file tree" onClick={() => setTreeHidden(false)}><ChevronDoubleRightIcon /></button>}
         {tabs.map(t => <div key={t.path} role="tab" aria-selected={t.path === active} className={"ide-tab" + (t.path === active ? " active" : "")} title={t.path}
-          onMouseDown={e => { if (e.button === 1) { e.preventDefault(); closeTab(t.path); } }} onClick={() => { setActive(t.path); void showTab(t); }}>
+          onMouseDown={e => { if (e.button === 1) { e.preventDefault(); closeTab(t.path); } }}
+          onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setTabMenu({ x: e.clientX, y: e.clientY, path: t.path }); }}
+          onClick={() => { setActive(t.path); void showTab(t); }}>
           <span>{base(t.path)}</span>
           {t.dirty ? <span className="ide-dirty" aria-label="Unsaved" /> : null}
           <button type="button" className="ide-tab-x" aria-label={`Close ${base(t.path)}`} onClick={e => { e.stopPropagation(); closeTab(t.path); }}><XMarkIcon /></button>
         </div>)}
+        {tabs.length > 0 && tabMenu && <TreeMenu x={tabMenu.x} y={tabMenu.y} items={tabMenuItems(tabMenu.path)} onClose={() => setTabMenu(null)} />}
         <span className="grow" />
         {closeButton}
         {toggleTerminal && <button type="button" className={"icon-button" + (terminalOpen ? " on" : "")} aria-pressed={!!terminalOpen} title="Terminal (Ctrl `)" aria-label="Toggle terminal" onClick={toggleTerminal}><CommandLineIcon /></button>}
         {activeTab?.model && <button type="button" className={"icon-button" + (activeTab.diff ? " on" : "")} aria-pressed={activeTab.diff} title={activeTab.diff ? "Back to editor" : "Compare with last commit"} aria-label="Toggle diff" onClick={() => void openFile(activeTab.path, { diff: !activeTab.diff })}><ArrowsRightLeftIcon /></button>}
       </div>
-      {activeTab && <div className="ide-path"><span>{activeTab.path.split("/").join(" / ")}</span>{activeTab.media && <span>{[mediaDims[activeTab.media.url], sizeText(activeTab.media.size)].filter(Boolean).join(" · ")}</span>}{activeTab.diff && <span className="tag">HEAD ↔ working tree</span>}{activeTab.note && <span className="ide-note">{activeTab.note}</span>}</div>}
+      {activeTab && <div className="ide-path"><span>{activeTab.path.split("/").join(" / ")}</span>{activeTab.media && <span>{[mediaDims[activeTab.media.url], sizeText(activeTab.media.size)].filter(Boolean).join(" · ")}</span>}{activeTab.diff && <span className="tag">HEAD ↔ working tree</span>}{(busyNote || activeTab.note) && <span className="ide-note" title={busyNote || activeTab.note}>{busyNote || activeTab.note}</span>}{cSource && <><span className="grow" /><select className="ide-source" aria-label="Project settings for C and C++" title="Where include folders and compiler flags come from" value={cSource.value} onChange={e => void chooseC(e.target.value)}>{cSource.options.map(o => <option key={o.id} value={o.id}>{o.id === "auto" && cSource.using !== "auto" ? `Automatic: ${(cSource.options.find(x => x.id === cSource.using)?.label || cSource.using)}` : o.label}</option>)}</select></>}</div>}
       <div className="ide-editor" ref={host}>
         {activeTab?.media && <MediaView key={activeTab.media.url} media={activeTab.media} name={base(activeTab.path)} onDims={d => setMediaDims(m => ({ ...m, [activeTab.media!.url]: d }))} />}
         {!activeTab && <div className="ide-blank"><p>Open a file from the tree</p><p className="ide-keys">{[["Ctrl P", "quick open"], ["Ctrl Shift F", "search"], ["Ctrl S", "save"], ["Ctrl `", "terminal"]].map(([k, l]) => <span key={k}><kbd>{k}</kbd> {l}</span>)}</p></div>}

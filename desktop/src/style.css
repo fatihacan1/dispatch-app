@@ -356,6 +356,11 @@ main.main { grid-area: main; overflow: hidden; display: flex; flex-direction: co
 .msg-fold-body > div { overflow: hidden; min-height: 0; }
 .msg-fold-body.open { grid-template-rows: 1fr; opacity: 1; }
 .msg-fold-body.open > div { padding-top: 8px; }
+/* Long user messages: collapse over ~12 lines with a Gemini-style Show more / Show less toggle */
+.msg-user-body { overflow: hidden; transition: max-height 260ms var(--ease-out); }
+.msg-show-more { display: inline-block; margin-top: 4px; padding: 0; border: 0; background: none; font: inherit; font-size: var(--text-sm); font-weight: 500; color: var(--link-blue); cursor: pointer; }
+.msg-show-more:hover { text-decoration: underline; }
+@media (prefers-reduced-motion: reduce) { .msg-user-body { transition: none; } }
 @media (prefers-reduced-motion: reduce) { .msg-fold-body, .msg-fold svg { transition: none; } }
 /* A question an agent asks (Claude AskUserQuestion), answered from the chat */
 .question-card { width: calc(100% - 112px); max-width: 860px; margin: 6px 0 10px max(88px, calc((100% - var(--chat-w)) / 2 + 88px)); padding: 14px 16px; border: var(--border-strong); border-radius: var(--radius-lg); background: var(--surface); display: flex; flex-direction: column; gap: 14px; animation: enter var(--dur) var(--ease-out); }
@@ -797,6 +802,7 @@ main.main { grid-area: main; overflow: hidden; display: flex; flex-direction: co
 .ide-path { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 14px; color: var(--text-3); font: var(--text-xs) var(--font-mono); border-bottom: var(--border); flex: none; overflow: hidden; white-space: nowrap; }
 .ide-path > span:first-child { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .ide-note { color: var(--text-2); font-family: var(--font-ui); }
+.ide-source { flex: none; height: 20px; max-width: 260px; padding: 0 6px; background: var(--surface); color: var(--text-2); border: var(--border); border-radius: 4px; font: var(--text-xs) var(--font-ui); }
 .ide-editor { position: relative; flex: 1; min-height: 0; }
 .ide-editor > .ide-edit, .ide-editor > .ide-diff { position: absolute; inset: 0; }
 .ide-editor .hidden { display: none !important; }

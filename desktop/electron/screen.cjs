@@ -97,6 +97,9 @@ function menuKind(menu) {
   return menu.numbered && menu.question ? 'Question' : null;
 }
 
+// Claude out of quota: "What do you want to do?  1. Stop and wait for limit to reset  2. Upgrade your plan".
+const isLimitMenu = menu => !!menu && menu.options.some(o => /wait for (?:the |your )?(?:limit|usage|quota)|wait (?:until|for) .*reset/i.test(o));
+
 // Antigravity's screen: its prompt box is two rules with ">" between, its state stands in the footer under them.
 //   'loading' no prompt box yet (starting, signing in) · 'menu' · 'busy' "esc to cancel" · 'typing' text in the box · 'idle'
 function agyState(lines) {
@@ -125,4 +128,4 @@ function shownMode(provider, lines) {
 // Keys that pick option `to` in an open menu.
 const menuKeys = (menu, to) => (to > menu.selected ? '\x1b[B' : '\x1b[A').repeat(Math.abs(to - menu.selected)) + '\r';
 
-module.exports = { create, parseMenu, menuKind, menuKeys, agyState, shownMode };
+module.exports = { create, parseMenu, menuKind, menuKeys, isLimitMenu, agyState, shownMode };

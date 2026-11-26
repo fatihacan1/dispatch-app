@@ -42,7 +42,7 @@ const CATALOG = Object.freeze([
   { id: 'sentry', name: 'Sentry', group: 'build', desc: 'Errors, issues and performance data from your projects.', url: 'https://mcp.sentry.dev/mcp', auth: 'oauth' },
   { id: 'semgrep', name: 'Semgrep', domain: 'semgrep.dev', group: 'build', desc: 'Code security scans, findings and rules.', url: 'https://mcp.semgrep.ai/mcp', auth: 'oauth' },
   { id: 'buildkite', name: 'Buildkite', group: 'build', desc: 'Pipelines, builds, jobs and logs.', url: 'https://mcp.buildkite.com/mcp', auth: 'oauth' },
-  { id: 'cloudflare', name: 'Cloudflare', group: 'build', desc: 'Workers, KV, R2 and D1 in your account.', url: 'https://bindings.mcp.cloudflare.com/mcp', auth: 'oauth' },
+  { id: 'cloudflare', name: 'Cloudflare', group: 'build', desc: 'Workers, KV, R2, D1, DNS and account APIs in Cloudflare.', url: 'https://mcp.cloudflare.com/mcp', auth: 'oauth' },
   { id: 'resend', name: 'Resend', group: 'build', desc: 'Send emails and inspect domains and audiences.', url: 'https://mcp.resend.com/mcp', auth: 'oauth' },
   { id: 'postman', name: 'Postman', group: 'build', desc: 'Workspaces, collections and API environments.', url: 'https://mcp.postman.com/mcp', auth: 'oauth' },
   { id: 'context7', name: 'Context7', domain: 'context7.com', group: 'build', desc: 'Up-to-date docs and code examples for any library.', url: 'https://mcp.context7.com/mcp', auth: 'none' },

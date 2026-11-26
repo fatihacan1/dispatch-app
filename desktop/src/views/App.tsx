@@ -90,8 +90,43 @@ function MessageBody({ message }: { message: Message }) {
 }
 // Traffic between agents (orders, reports) stays out of the way: one sentence until clicked. Talk with you is always open.
 const collapsible = (m: Message) => m.from !== "you" && m.to !== "you" && m.to !== "user" && m.text.length > 220;
+const USER_COLLAPSE_PX = 252;
+function UserMessageBody({ message }: { message: Message }) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [fullHeight, setFullHeight] = useState(0);
+  const [expanded, setExpanded] = useState(false);
+  useEffect(() => { setExpanded(false); }, [message.id]);
+  useLayoutEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const measure = () => setFullHeight(el.scrollHeight);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [message.id, message.text]);
+  const tooTall = fullHeight > USER_COLLAPSE_PX + 12;
+  // Opened to read: folds again once the user clicks elsewhere or scrolls it out of view.
+  useEffect(() => {
+    if (!expanded) return;
+    const onDown = (e: MouseEvent) => { if (!wrapRef.current?.contains(e.target as Node)) setExpanded(false); };
+    document.addEventListener("mousedown", onDown);
+    const el = wrapRef.current;
+    const io = el ? new IntersectionObserver(entries => { if (entries[0] && !entries[0].isIntersecting) setExpanded(false); }, { threshold: 0 }) : null;
+    if (el && io) io.observe(el);
+    return () => { document.removeEventListener("mousedown", onDown); io?.disconnect(); };
+  }, [expanded]);
+  return <div ref={wrapRef} className="msg-user-wrap">
+    <div ref={bodyRef} className="msg-user-body" style={tooTall ? { maxHeight: expanded ? `${fullHeight}px` : `${USER_COLLAPSE_PX}px` } : undefined}>
+      <MessageBody message={message} />
+    </div>
+    {tooTall && <button type="button" className="msg-show-more" aria-expanded={expanded} onClick={() => setExpanded(v => !v)}>{expanded ? "Show less" : "Show more"}</button>}
+  </div>;
+}
 function ChatMessage({ message, children }: { message: Message; children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
+  if (message.from === "you") return <>{children}<UserMessageBody message={message} /></>;
   if (!collapsible(message)) return <>{children}<MessageBody message={message} /></>;
   return <>
     {children}
@@ -661,14 +696,21 @@ export function App() {
       const upload = files.filter(f => !window.army.pathFor(f));
       const saved = upload.length ? await window.army.saveAttachments(await Promise.all(upload.map(async file => ({ name: file.name, data: await file.arrayBuffer() })))) : [];
       const paths = files.map(f => window.army.pathFor(f) || saved[upload.indexOf(f)]);
+      const isCompact = !files.length && body.trim() === "/compact" && !demo;
       const content = [body.trim(), paths.length ? `Attachments (open these files):\n${paths.map(path => `- ${path}`).join("\n")}` : ""].filter(Boolean).join("\n\n");
       const outgoing: Timed = { id: `pending-${crypto.randomUUID()}`, from: "you", to: selected, text: content, time: Date.now() };
       setMessages(v => [...v, outgoing]);
       try {
-        await window.army.send(outgoing.to, outgoing.text);
-        if (spoken === undefined) { setText(""); setAttachments([]); }
-        // Show the agent as thinking straight away; its transcript takes over within a second or two.
-        if (!demo && !stopped[outgoing.to] && (["claude", "codex", "antigravity", "opencode", "local"].includes(agentProvider(outgoing.to)) || agentProvider(outgoing.to).startsWith("local:"))) setTrail(t => t[outgoing.to]?.live ? t : { ...t, [outgoing.to]: { steps: [], live: true, since: Date.now() } });
+        if (isCompact) {
+          await window.army.context.compact(outgoing.to);
+          if (spoken === undefined) { setText(""); setAttachments([]); }
+          if (!stopped[outgoing.to]) setTrail(t => t[outgoing.to]?.live ? t : { ...t, [outgoing.to]: { steps: [{ kind: "thinking", text: "Compacting conversation…" }], live: true, since: Date.now() } });
+        } else {
+          await window.army.send(outgoing.to, outgoing.text);
+          if (spoken === undefined) { setText(""); setAttachments([]); }
+          // Show the agent as thinking straight away; its transcript takes over within a second or two.
+          if (!demo && !stopped[outgoing.to] && (["claude", "codex", "antigravity", "opencode", "local"].includes(agentProvider(outgoing.to)) || agentProvider(outgoing.to).startsWith("local:"))) setTrail(t => t[outgoing.to]?.live ? t : { ...t, [outgoing.to]: { steps: [], live: true, since: Date.now() } });
+        }
       }
       catch (e) { setMessages(v => v.filter(m => m.id !== outgoing.id)); throw e; }
     } catch (e) { setError(String(e)); }

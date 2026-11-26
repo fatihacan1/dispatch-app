@@ -29,7 +29,8 @@ function parseClaude(o) {
   const out = { steps: [] };
   const c = o.message?.content;
   // Sub-agent lines, skill bodies and slash commands (/model, /effort) are not turns of this agent.
-  if (o.isSidechain || o.isMeta) return out;
+  if (o.isSidechain || o.isMeta || o.isCompactSummary) return out;
+  if (o.type === 'system' && o.subtype === 'compact_boundary') { out.turn = false; return out; }
   if (o.type === 'user') {
     // The tool result of a question: it was answered (here, in the terminal, or cancelled).
     if (Array.isArray(c)) { const ids = c.filter(x => x.type === 'tool_result' && x.tool_use_id).map(x => String(x.tool_use_id)); if (ids.length) out.answered = ids; }
