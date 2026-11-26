@@ -51,7 +51,7 @@ function attentionFrom(text, opts) {
   // The CLIs' trust questions only: "trust" and "folder" anywhere (an agent working on this very code) held its queue.
   if (/trust (?:the files in )?this (?:folder|workspace|directory|project)\?|yes, i trust this folder|accessing\s*workspace.*safety\s*check/.test(t)) return 'Trust folder';
   // Claude's AskUserQuestion menu (and its "review your answers" step): the agent waits for a choice.
-  if ((/chat about this/.test(t) && /enter to select/.test(t) && /arrow keys to navigate/.test(t)) || /ready to submit your answers\?/.test(t)) return 'Question';
+  if ((/chat about this/.test(t) && /enter to select/.test(t) && /arrow keys to navigate/.test(t)) || /ready to submit your answers\?|review your answers[\s\S]*submit answers/.test(t)) return 'Question';
   // MCP elicitation form from a plugin/server while a tool call is waiting for user input.
   if (pluginQuestionPrompt(t)) return 'Plugin question';
   // A real login screen, not an agent that merely writes about logins while it works on auth code.

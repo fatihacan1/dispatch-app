@@ -249,7 +249,7 @@ async function answerQuestion(name, answers, via = '') {
     agent.promptBuffer = '';
     for (const keys of groups) { for (const k of keys) { agent.terminal.write(k); await sleep(k.length > 4 ? 300 : 140); } await sleep(500); }
     // Several questions, or several choices, end on a "Review your answers" step; its first row submits.
-    for (let i = 0; i < 16; i++) { if (/ready to submit your answers\?/.test(normalize(String(agent.promptBuffer || '').slice(-3000)))) { agent.terminal.write('\r'); break; } await sleep(150); }
+    for (let i = 0; i < 16; i++) { if (/ready to submit your answers\?|review your answers[\s\S]*submit answers/.test(normalize(String(agent.promptBuffer || '').slice(-3000)))) { agent.terminal.write('\r'); break; } await sleep(150); }
   } finally { agent.answering = false; }
   agent.promptBuffer = ''; agent.awaitingAnswer = true;
   const said = q.questions.map((x, i) => { const a = answers[i] || {}; const picked = (a.picks || []).map(p => x.options[p]?.label).filter(Boolean); if (a.other) picked.push(String(a.other).trim()); return `${q.questions.length > 1 ? `${x.header || x.question}: ` : ''}${picked.join(', ')}`; }).join('\n');
@@ -709,7 +709,8 @@ function startAgent(name, template, enlistedBy, saved, resumeSession = true) {
     if (e.answered && agent.question && e.answered.includes(agent.question.id)) clearQuestion(name, agent);
     let dropLastText = false;
     if (e.turn === false) {
-      agent.turn = false; agent.compacting = false; agent.turnKnown = true; agent.hadTurn = true; agent.turnEndAt = Date.now(); clearQuestion(name, agent);
+      agent.turn = false; agent.compacting = false; agent.turnKnown = true; agent.hadTurn = true; agent.turnEndAt = Date.now();
+      if (agent.question?.kind) clearQuestion(name, agent);
       // The reply the agent wrote in its terminal is the chat message, formatting intact. The boss always talks to
       // the user; another agent does when the user was the one who wrote to it.
       const forYou = name === 'boss' || ['you', 'user'].includes(agent.lastFrom);

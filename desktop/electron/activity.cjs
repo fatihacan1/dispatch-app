@@ -16,7 +16,9 @@ function toolLabel(name, input) {
 
 // Claude's AskUserQuestion: the questions and options it shows in its terminal, so the chat can show them too.
 function askFrom(b) {
-  const qs = Array.isArray(b.input?.questions) ? b.input.questions : [];
+  let input = b.input;
+  if (typeof input === 'string') { try { input = JSON.parse(input); } catch { input = null; } }
+  const qs = Array.isArray(input?.questions) ? input.questions : [];
   const questions = qs.map(q => ({
     question: String(q?.question || '').trim(), header: String(q?.header || '').trim(), multiSelect: !!q?.multiSelect,
     options: (Array.isArray(q?.options) ? q.options : []).map(o => ({ label: String(o?.label ?? o ?? '').trim(), description: String(o?.description || '').trim() })).filter(o => o.label),
@@ -55,7 +57,7 @@ function parseClaude(o) {
     // What the agent says between tool calls; the closing text of a turn is the reply itself, not a step.
     else if (b.type === 'text' && !done && String(b.text || '').trim()) out.steps.push({ kind: 'text', text: String(b.text).trim().slice(0, 4000) });
   }
-  if (done) { out.turn = false; out.final = c.filter(b => b.type === 'text').map(b => b.text).join('\n\n').trim(); }
+  if (done && !out.ask) { out.turn = false; out.final = c.filter(b => b.type === 'text').map(b => b.text).join('\n\n').trim(); }
   return out;
 }
 function parseCodex(o) {

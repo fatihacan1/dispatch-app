@@ -29,6 +29,11 @@ test('claude: AskUserQuestion becomes a question the chat can answer, its tool r
  assert.deepEqual(ask.ask.questions[0].options[0], { label: 'Red', description: 'warm' }); assert.equal(ask.ask.questions[1].multiSelect, true);
  assert.match(ask.steps[0].text, /^Asks you · Pick a color/);
  assert.deepEqual(parseClaude({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'answered' }] } }).answered, ['toolu_1']);
+ // Multi-question AskUserQuestion with end_turn or stringified input still keeps the ask open (never marks turn=false).
+ const endAsk = parseClaude(line([{ type: 'tool_use', id: 'toolu_2', name: 'AskUserQuestion', input: JSON.stringify({ questions: [{ question: 'Resend?', header: 'Resend', multiSelect: false, options: [{ label: 'A' }, { label: 'B' }] }, { question: 'Once $19?', header: 'Once $19', multiSelect: false, options: [{ label: 'C' }, { label: 'D' }] }, { question: 'Paddle?', header: 'Paddle', multiSelect: false, options: [{ label: 'E' }, { label: 'F' }] }] }) }], 'end_turn'));
+ assert.equal(endAsk.turn, undefined);
+ assert.equal(endAsk.ask.id, 'toolu_2');
+ assert.equal(endAsk.ask.questions.length, 3);
 });
 test('question keys: a number per single choice, toggles then Submit for several, own text in "Type something"', () => {
  const { questionKeys } = require('./activity.cjs');
